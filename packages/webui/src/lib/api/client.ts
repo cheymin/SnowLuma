@@ -37,6 +37,27 @@ function extractErrorMessage(payload: ErrorPayload, fallback: string): string {
   return payload.message || payload.error || fallback;
 }
 
+// #194: seed the bearer token from a `?token=…` URL query param so an operator
+// can bookmark / share a one-click auto-login link instead of typing the
+// password every visit. The token is consumed once and IMMEDIATELY stripped
+// from the URL (via replaceState) — a credential left in the address bar leaks
+// through browser history, server access logs, and the Referer header. It's
+// still validated server-side by the normal /api/status check, so a stale or
+// forged value just falls through to the login page.
+function consumeUrlToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const token = url.searchParams.get('token');
+    if (!token) return null;
+    url.searchParams.delete('token');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    return token;
+  } catch {
+    return null;
+  }
+}
+
 class HttpApiClient implements ApiClient {
   private tokenStore: TokenStore;
   private currentToken: string | null;
@@ -56,7 +77,12 @@ class HttpApiClient implements ApiClient {
 
   constructor(opts: CreateApiClientOptions = {}) {
     this.tokenStore = opts.tokenStore ?? localStorageTokenStore(DEFAULT_TOKEN_KEY);
-    this.currentToken = this.tokenStore.load();
+    // A `?token=…` link wins over any previously stored token, and is persisted
+    // so a later reload (URL now stripped) stays signed in. Validation happens
+    // in the normal status() gate, so an invalid link just shows the login page.
+    const urlToken = consumeUrlToken();
+    this.currentToken = urlToken ?? this.tokenStore.load();
+    if (urlToken) this.tokenStore.save(urlToken);
     this.onUnauthorized = opts.onUnauthorized;
 
     this.processes = {
