@@ -840,6 +840,7 @@ export const ACTIONS: CatalogAction[] = [
     "name": "create_group_file_folder",
     "aliases": [],
     "summary": "创建群文件夹",
+    "returns": "{ result: { retCode, retMsg }, groupItem: { folderInfo: { folderId, folderName, folderPath, createTime, modifyTime, createUin, modifyUin } } }",
     "readOnly": false,
     "params": [
       {

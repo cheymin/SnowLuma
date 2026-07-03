@@ -623,7 +623,7 @@ export class GroupFileApi {
 
   // ─────────────── folders ───────────────
 
-  createFolder(groupId: number, name: string, parentId = '/'): Promise<void> {
+  createFolder(groupId: number, name: string, parentId = '/'): Promise<CreateGroupFolder.Result> {
     return CreateGroupFolder.invoke(this.ctx, {
       groupId, parentId: normalizeDirectory(parentId), folderName: name,
     });

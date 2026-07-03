@@ -183,10 +183,25 @@ export interface OidbGroupFileFolderReq {
   delete?: pb<2, OidbGroupFileDeleteFolderReq>;
   rename?: pb<3, OidbGroupFileRenameFolderReq>;
 }
+// The create (0x6D7_0) response also carries the new folder's info at field 4
+// — the source of folderId (#195). delete/rename responses leave it empty.
+// Tags confirmed against a live create response (bot creating a folder in a
+// test group): modifyUin is field 9, NOT 7 as Lagrange's
+// OidbSvcTrpcTcp0x6D7_0ResponseFolderInfo has it.
+export interface OidbGroupFileFolderInfoResp {
+  folderId?:   pb<1, string>;
+  folderPath?: pb<2, string>;
+  folderName?: pb<3, string>;
+  createTime?: pb<4, uint_32>;
+  modifyTime?: pb<5, uint_32>;
+  createUin?:  pb<6, uint_32>;
+  modifyUin?:  pb<9, uint_32>;
+}
 export interface OidbGroupFileFolderRetResp {
   retcode?:       pb<1, uint_32>;
   retMsg?:        pb<2, string>;
   clientWording?: pb<3, string>;
+  folderInfo?:    pb<4, OidbGroupFileFolderInfoResp>;
 }
 export interface OidbGroupFileFolderResp {
   create?: pb<1, OidbGroupFileFolderRetResp>;
