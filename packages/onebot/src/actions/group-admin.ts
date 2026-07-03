@@ -54,9 +54,13 @@ export const actions = [
 
   groupAction({
     name: 'set_group_search',
-    summary: '允许群被搜索',
+    summary: '设置群被搜索方式（群指纹 / 群号搜索开关）',
+    params: {
+      no_finger_open: f.int({ min: 0 }).optional(),
+      no_code_finger_open: f.int({ min: 0 }).optional(),
+    },
     run: async (p, ctx) => {
-      await ctx.bridge.apis.groupAdmin.setSearch(p.group_id);
+      await ctx.bridge.apis.groupAdmin.setSearch(p.group_id, p.no_finger_open, p.no_code_finger_open);
       return okResponse();
     },
   }),

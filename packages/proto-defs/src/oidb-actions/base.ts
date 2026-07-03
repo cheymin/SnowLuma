@@ -31,9 +31,29 @@ export interface Oidb0x89a_0AddOption {
   settings?: pb<2, Oidb0x89a_0AddOptionSettings>;
   field12?:  pb<12, uint_32>;
 }
+// The `settings` payload is the GroupDetailInfo "modify" sub-message carrying
+// only the fields being changed (the NT GroupDetailFilter is client-side — it
+// just gates which fields the encoder emits, like modify-group-ext-info). This
+// is a DIFFERENT message domain from the 0x88D_0 group-detail GET: mute/
+// shutUpTime is tag 17 here (Lagrange/MuteAll) but a string in the GET, so the
+// tags do NOT match the GET's groupInfo. Tags RE'd empirically on a live group
+// (bot as admin) by sweeping this sub-message tag-by-tag and reading the effect
+// back through the 0x88D_0 GET (82/83), then confirming against the client's
+// 3-state "被搜索方式" dropdown (私密 / 群号 / 群号+关键词):
+//   noFingerOpen  (关键词/群指纹搜索) = tag 35  → GET 82
+//   noCodeFingerOpen (群号搜索 / 总开关) = tag 36  → GET 83
+// Value 0 = that mode open/enabled, 1 = disabled ("no…Open"); keyword search
+// additionally requires code search on. Matches NapCat modifyGroupDetailInfoV2.
+export interface Oidb0x89a_0SearchSettings {
+  // pb_optional (explicit presence): a value of 0 (mode enabled) MUST be sent,
+  // so these can't use plain pb<> — proto3 would drop the zero and the request
+  // would silently no-op. undefined is still elided (field left unchanged).
+  noFingerOpen?:     pb_optional<35, uint_32>;
+  noCodeFingerOpen?: pb_optional<36, uint_32>;
+}
 export interface Oidb0x89a_0Search {
   groupUin?: pb<1, uint_64>;
-  settings?: pb<2, bytes>;
+  settings?: pb<2, Oidb0x89a_0SearchSettings>;
   field12?:  pb<12, uint_32>;
 }
 export interface OidbKickMember {

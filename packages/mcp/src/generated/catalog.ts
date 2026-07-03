@@ -8413,7 +8413,7 @@ export const ACTIONS: CatalogAction[] = [
   {
     "name": "set_group_search",
     "aliases": [],
-    "summary": "允许群被搜索",
+    "summary": "设置群被搜索方式（群指纹 / 群号搜索开关）",
     "readOnly": false,
     "params": [
       {
@@ -8426,6 +8426,24 @@ export const ACTIONS: CatalogAction[] = [
           "minimum": 1
         },
         "desc": "群号"
+      },
+      {
+        "name": "no_finger_open",
+        "type": "int",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      {
+        "name": "no_code_finger_open",
+        "type": "int",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     ],
     "invariants": [],
@@ -8437,6 +8455,14 @@ export const ACTIONS: CatalogAction[] = [
           "minimum": 1,
           "description": "群号",
           "x-role": "group_id"
+        },
+        "no_finger_open": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "no_code_finger_open": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
