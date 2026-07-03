@@ -889,13 +889,16 @@ function AccountWidget({ config }: { config: AccountConfig }) {
 
 // ─────────────── recent alerts ───────────────
 
+// Same WCAG-tuned log-level text tokens as the logs page (see index.css / the
+// levelClass note there): the raw accent colors fail AA as small text on the
+// light canvas.
 const ALERT_LEVEL_CLASS: Record<LogLevel, string> = {
-  trace: 'text-muted-foreground/60',
+  trace: 'text-muted-foreground/90',
   debug: 'text-muted-foreground',
-  info: 'text-primary',
-  success: 'text-success',
-  warn: 'text-warning',
-  error: 'text-destructive',
+  info: 'text-log-info',
+  success: 'text-log-success',
+  warn: 'text-log-warn',
+  error: 'text-log-error',
 };
 
 function RecentAlertsCard({ config }: { config: AlertsConfig }) {

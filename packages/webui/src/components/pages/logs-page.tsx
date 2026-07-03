@@ -13,13 +13,17 @@ import { useApi } from '@/lib/api';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useLayout } from '@/contexts/LayoutContext';
 
+// Dedicated log-level text tokens (see index.css): the app accent colors are
+// too light as small text on the light canvas (WCAG AA fails), so these hit
+// >=4.5:1 in light mode while keeping the bright values in dark. trace stays the
+// faintest level (dimmer than debug) but at /90 it now also clears AA.
 const levelClass: Record<LogLevel, string> = {
-  trace: 'text-muted-foreground/60',
+  trace: 'text-muted-foreground/90',
   debug: 'text-muted-foreground',
-  info: 'text-primary',
-  success: 'text-success',
-  warn: 'text-warning',
-  error: 'text-destructive',
+  info: 'text-log-info',
+  success: 'text-log-success',
+  warn: 'text-log-warn',
+  error: 'text-log-error',
 };
 
 const LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'success', 'warn', 'error'];
