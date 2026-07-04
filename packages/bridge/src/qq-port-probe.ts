@@ -1,5 +1,6 @@
 import { exec } from 'child_process';
 import net from 'net';
+import http from 'http';
 import https from 'https';
 import { promisify } from 'util';
 
@@ -126,51 +127,61 @@ interface PtloginUin {
   nickname?: string;
 }
 
-async function fetchPtlogin(port: number): Promise<PtloginUin[]> {
+/**
+ * One `pt_get_uins` call. Returns the parsed account array (possibly empty —
+ * an EMPTY array is a real answer: "0 accounts", NOT an error) or `null` when
+ * the port could not be reached / the body was not a usable pt_get_uins
+ * response (connect refused, timeout, unparseable). Callers MUST distinguish
+ * the two: `[]` feeds the logged-in/out decision, `null` means "network
+ * problem, no answer" and should fall through to the deep-link fallback.
+ */
+async function fetchPtlogin(port: number, useHttps: boolean): Promise<PtloginUin[] | null> {
   return new Promise((resolve) => {
-    const url = `https://127.0.0.1:${port}/pt_get_uins?callback=ptui_getuins_CB&pt_local_tk=0`;
+    const protocol = useHttps ? 'https' : 'http';
+    const url = `${protocol}://127.0.0.1:${port}/pt_get_uins?callback=ptui_getuins_CB&pt_local_tk=0`;
 
-    const req = https.get(
-      url,
-      {
-        headers: {
-          Host: 'localhost.ptlogin2.qq.com',
-          Referer: 'https://xui.ptlogin2.qq.com/',
-          Cookie: 'pt_local_token=0',
-        },
-        rejectUnauthorized: false, // 忽略本地自签证书报错
-        timeout: CONNECTION_TIMEOUT_MS,
-      },
-      (res) => {
-        let text = '';
-        res.on('data', (chunk) => { text += chunk.toString(); });
-        res.on('end', () => {
-          try {
-            // 100% 复刻 Python 切片逻辑：获取两个方括号中间的字符串，再包装成数组
-            const inner = text.split('[')[1].split(']')[0];
-            const data = JSON.parse('[' + inner + ']') as PtloginUin[];
-            resolve(data);
-          } catch {
-            resolve([]);
-          }
-        });
-      }
-    );
+    const headers = {
+      Host: 'localhost.ptlogin2.qq.com',
+      Referer: 'https://xui.ptlogin2.qq.com/',
+      Cookie: 'pt_local_token=0',
+    };
 
-    req.on('error', () => resolve([]));
+    const handleResponse = (res: http.IncomingMessage) => {
+      let text = '';
+      res.on('data', (chunk) => { text += chunk.toString(); });
+      res.on('end', () => {
+        try {
+          const inner = text.split('[')[1].split(']')[0];
+          const data = JSON.parse('[' + inner + ']') as PtloginUin[];
+          resolve(data);
+        } catch {
+          resolve(null);
+        }
+      });
+    };
+
+    const req = useHttps
+      ? https.get(url, { headers, timeout: CONNECTION_TIMEOUT_MS, rejectUnauthorized: false }, handleResponse)
+      : http.get(url, { headers, timeout: CONNECTION_TIMEOUT_MS }, handleResponse);
+
+    req.on('error', () => resolve(null));
     req.on('timeout', () => {
       req.destroy();
-      resolve([]);
+      resolve(null);
     });
   });
 }
 
 async function tryPtloginMethod(port: number): Promise<QqPortLoginInfo | 'fallback'> {
-  // 抽象的 QQNT
-  const res1 = await fetchPtlogin(port);
-  const res2 = await fetchPtlogin(port);
+  const useHttps = port % 2 !== 0;
 
-  const target = res1.length < res2.length ? res1 : res2;
+  const res1 = await fetchPtlogin(port, useHttps);
+  const res2 = await fetchPtlogin(port, useHttps);
+
+  if (res1 === null && res2 === null) return 'fallback';
+
+  const usable = [res1, res2].filter((r): r is PtloginUin[] => r !== null);
+  const target = usable.reduce((a, b) => (a.length <= b.length ? a : b));
 
   if (target.length === 1) {
     const account = target[0];
@@ -182,8 +193,6 @@ async function tryPtloginMethod(port: number): Promise<QqPortLoginInfo | 'fallba
     };
   }
 
-  // Any non-1 result — the 2+0 alternation, both-2, both-empty, etc. — is
-  // inconclusive; hand off to the deep-link / process-count fallback.
   return 'fallback';
 }
 
@@ -250,12 +259,21 @@ export async function probeQqLoginInfo(pid: number): Promise<QqPortLoginInfo | n
     }
     return null;
   }
+  const ODD_PT_PORTS = [4301, 4303, 4305, 4307, 4309];
+  const EVEN_PT_PORTS = [4302, 4304, 4306, 4308, 4310];
 
-  const PT_PORTS = [4301, 4303, 4305, 4307, 4309];
-  const matchedPtPorts = ports.filter(p => PT_PORTS.includes(p));
+  const matchedOddPorts = ports.filter(p => ODD_PT_PORTS.includes(p));
+  const matchedEvenPorts = ports.filter(p => EVEN_PT_PORTS.includes(p));
 
-  if (matchedPtPorts.length > 0) {
-    for (const port of matchedPtPorts) {
+  let ptPortsToTry: number[] = [];
+  if (matchedOddPorts.length > 0) {
+    ptPortsToTry = matchedOddPorts;
+  } else if (matchedEvenPorts.length > 0) {
+    ptPortsToTry = matchedEvenPorts;
+  }
+
+  if (ptPortsToTry.length > 0) {
+    for (const port of ptPortsToTry) {
       const ptResult = await tryPtloginMethod(port);
       if (ptResult !== 'fallback') {
         return ptResult;

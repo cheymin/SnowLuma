@@ -308,11 +308,86 @@ export function mapMsgList(data: RawMsgListResponse): QzoneMsgListResult {
   };
 }
 
+interface MsgListRoute {
+  url: string;
+  headers: Record<string, string>;
+}
+
+/** Legacy route (default): h5.qzone.qq.com → taotao.qzone.qq.com. */
+function legacyMsgListRoute(
+  cookieObject: Record<string, string>,
+  targetUin: string,
+  pos: number,
+  num: number,
+  bkn: string,
+): MsgListRoute {
+  const url = `https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_msglist_v6?${new URLSearchParams(
+    {
+      uin: targetUin,
+      ftype: '0',
+      sort: '0',
+      pos: String(pos),
+      num: String(num),
+      replynum: '100',
+      g_tk: bkn,
+      callback: '_preloadCallback',
+      code_version: '1',
+      format: 'jsonp',
+      need_private_comment: '1',
+    },
+  ).toString()}`;
+  return { url, headers: { Cookie: cookieToString(cookieObject) } };
+}
+
+/**
+ * Fallback route: user.qzone.qq.com → taotao.qq.com (NOT taotao.qzone.qq.com).
+ * Live captures show this pair is not subject to the `-10000` rate-limit the
+ * legacy route can hit.
+ */
+function userMsgListRoute(
+  cookieObject: Record<string, string>,
+  targetUin: string,
+  pos: number,
+  num: number,
+  bkn: string,
+): MsgListRoute {
+  const url = `https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6?${new URLSearchParams(
+    {
+      uin: targetUin,
+      ftype: '0',
+      sort: '0',
+      pos: String(pos),
+      num: String(num),
+      g_tk: bkn,
+      code_version: '1',
+      format: 'json',
+    },
+  ).toString()}`;
+  return {
+    url,
+    headers: {
+      Cookie: cookieToString(cookieObject),
+      Referer: `https://user.qzone.qq.com/${targetUin}`,
+    },
+  };
+}
+
+async function requestMsgList(
+  route: MsgListRoute,
+  targetUin: string,
+): Promise<{ data: RawMsgListResponse; text: string }> {
+  const text = await RequestUtil.HttpGetText(route.url, 'GET', '', route.headers);
+  log.trace('getQzoneMsgList raw body (uin=%s): %s', targetUin, text);
+  return { data: parseQzoneJson<RawMsgListResponse>(text), text };
+}
+
 /**
  * Fetch a 说说 (Qzone emotion/feed) list via the taotao.qzone.qq.com web
  * API, proxied through h5.qzone.qq.com — the same cookie/g_tk plumbing the
  * group-album helper uses. Defaults to the bot's own space; `targetUin`
- * can name any space the bot may view.
+ * can name any space the bot may view. On a `-10000` rate-limit from that
+ * route, retries once via the user.qzone.qq.com route (see
+ * {@link userMsgListRoute}).
  *
  * Errors PROPAGATE: a transport failure, a non-zero `code` (Qzone's own
  * error envelope, e.g. auth/permission), or a missing `msglist` (the body
@@ -333,27 +408,20 @@ export async function getQzoneMsgList(
   }
 
   const bkn = getBknFromCookie(cookieObject);
-  const url = `https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_msglist_v6?${new URLSearchParams(
-    {
-      uin: targetUin,
-      ftype: '0',
-      sort: '0',
-      pos: String(pos),
-      num: String(num),
-      replynum: '100',
-      g_tk: bkn,
-      callback: '_preloadCallback',
-      code_version: '1',
-      format: 'jsonp',
-      need_private_comment: '1',
-    },
-  ).toString()}`;
+  let { data, text } = await requestMsgList(
+    legacyMsgListRoute(cookieObject, targetUin, pos, num, bkn),
+    targetUin,
+  );
 
-  const text = await RequestUtil.HttpGetText(url, 'GET', '', {
-    Cookie: cookieToString(cookieObject),
-  });
-  log.trace('getQzoneMsgList raw body (uin=%s): %s', targetUin, text);
-  const data = parseQzoneJson<RawMsgListResponse>(text);
+  // -10000「使用人数过多」is route-specific to the legacy gateway; retry once
+  // via the user.qzone.qq.com route, which live captures show is not limited.
+  if (data.code === -10000) {
+    log.warn('getQzoneMsgList: legacy route rate-limited (uin=%s), retrying via user.qzone route', targetUin);
+    ({ data, text } = await requestMsgList(
+      userMsgListRoute(cookieObject, targetUin, pos, num, bkn),
+      targetUin,
+    ));
+  }
 
   if (typeof data.code === 'number' && data.code !== 0) {
     log.warn('getQzoneMsgList: non-zero code (uin=%s) code=%d msg=%s', targetUin, data.code, data.message);
