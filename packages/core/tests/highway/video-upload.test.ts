@@ -10,6 +10,12 @@
 // always provides bytes), and the video-specific OIDB fields.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { promises as fsp } from 'fs';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { pathToFileURL } from 'url';
+import { computeHashes } from '@snowluma/protocol/highway/utils';
 
 vi.mock('@snowluma/protocol/highway/pipeline', () => ({
   runNtv2Upload: vi.fn(async () => ({ msgInfo: { msgInfoBody: [], extBizInfo: {} } })),
@@ -156,5 +162,71 @@ describe('video-upload', () => {
     await uploadVideoMsgInfo({} as any, true, 12345, FINGERPRINT);
     const args = vi.mocked(pipeline.finalizeMediaMsgInfo).mock.calls[0]!;
     expect(args[1]).toBeUndefined();
+  });
+});
+
+describe('video-upload — streaming path (real on-disk source)', () => {
+  beforeEach(() => { vi.mocked(pipeline.runNtv2Upload).mockClear(); });
+
+  it('stages + stream-hashes the source and PUTs via fileSource, never buffering bytes', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sl-vidstream-'));
+    const file = path.join(dir, 'clip.mp4');
+    const data = Buffer.alloc(3 * 1024 * 1024 + 77); // multi-1MiB-block + tail
+    for (let i = 0; i < data.length; i++) data[i] = (i * 37 + 5) & 0xff;
+    fs.writeFileSync(file, data);
+    try {
+      const bridge = { identity: { uin: '10001' } } as any;
+      await uploadVideoMsgInfo(bridge, true, 12345, { type: 'video', url: pathToFileURL(file).href } as any);
+
+      const args = vi.mocked(pipeline.runNtv2Upload).mock.calls.at(-1)![0];
+      const main = args.uploads[0]!;
+      // Main file streams from disk — fileSource set, no in-memory bytes.
+      expect(main.fileSource).toBeDefined();
+      expect(main.fileSource!.fileSize).toBe(data.length);
+      expect(main.bytes.length).toBe(0);
+      // The OIDB fileInfo carries the STREAMED hashes/size — must equal the
+      // buffered hash of the same bytes (byte-identical guarantee end-to-end).
+      const fi = (args.uploadInfo[0] as any).fileInfo;
+      expect(fi.fileSize).toBe(data.length);
+      expect(fi.fileHash).toBe(computeHashes(data).md5Hex);
+      expect(fi.fileSha1).toBe(computeHashes(data).sha1Hex);
+      // The staged temp is a copy/hardlink under the stage dir (NOT the source)
+      // and is cleaned up after the send.
+      expect(main.fileSource!.filePath).not.toBe(file);
+      expect(fs.existsSync(main.fileSource!.filePath)).toBe(false);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans up the staged temp even when the upload throws', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sl-vidfail-'));
+    const file = path.join(dir, 'clip.mp4');
+    fs.writeFileSync(file, Buffer.alloc(2048, 7));
+    try {
+      vi.mocked(pipeline.runNtv2Upload).mockRejectedValueOnce(new Error('upload boom'));
+      await expect(
+        uploadVideoMsgInfo({ identity: { uin: '1' } } as any, true, 12345, { type: 'video', url: pathToFileURL(file).href } as any),
+      ).rejects.toThrow(/upload boom/);
+      // The staged temp created in loadVideo must be removed by the finally.
+      const args = vi.mocked(pipeline.runNtv2Upload).mock.calls.at(-1)![0];
+      const stagedPath = args.uploads[0]!.fileSource!.filePath;
+      expect(fs.existsSync(stagedPath)).toBe(false);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an empty video source (0 bytes)', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sl-vidempty-'));
+    const file = path.join(dir, 'empty.mp4');
+    fs.writeFileSync(file, new Uint8Array(0));
+    try {
+      await expect(
+        uploadVideoMsgInfo({ identity: { uin: '1' } } as any, true, 12345, { type: 'video', url: pathToFileURL(file).href } as any),
+      ).rejects.toThrow(/empty/);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
   });
 });

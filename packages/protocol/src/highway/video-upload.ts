@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { promises as fsp } from 'fs';
 import { createLogger } from '@snowluma/common/logger';
 import type { BridgeContext } from '../bridge-context';
 import type { MessageElement } from '../events';
@@ -18,6 +17,8 @@ import {
   loadBinarySource,
   resolveLocalFilePath,
 } from './utils';
+import { stageSourceToDisk } from './stage';
+import { hashFileStreaming } from './hash-file';
 import { Sha1Stream } from './sha1-stream';
 
 const moduleLog = createLogger('Highway.Video');
@@ -61,15 +62,18 @@ const FALLBACK_THUMB = Buffer.from(
 );
 
 interface VideoPayload {
-  /** Video bytes. Empty when forwarding from cached fingerprints. */
+  /** Main-file bytes. Empty on the normal path (streamed from `fileSource`)
+   *  and when forwarding from cached fingerprints (fastOnly). */
   bytes: Uint8Array;
+  /** Normal path: the staged video streams from this disk file instead of
+   *  buffering `bytes`. Absent for the fingerprint fast path. */
+  fileSource?: { filePath: string; fileSize: number };
   md5: Uint8Array;
   sha1: Uint8Array;
   sha1Blocks: Uint8Array[];
   md5Hex: string;
   sha1Hex: string;
   fileName: string;
-  filePath: string;
   fileSize: number;
   width: number;
   height: number;
@@ -81,7 +85,12 @@ interface VideoPayload {
    *  always present (FALLBACK_THUMB at worst) so its sub-file uploads
    *  normally regardless. */
   fastOnly: boolean;
-  cleanups: Array<() => void>;
+  /** Baseline stat of the staged file captured before hashing; re-checked
+   *  before the upload to fail cleanly if the source was mutated mid-send.
+   *  Absent for the fingerprint fast path. */
+  guard?: { size: number; mtimeMs: number };
+  /** Release the staged temp (hardlink / download). Best-effort, idempotent. */
+  cleanup: () => Promise<void>;
 }
 
 function makeFallbackThumb(): ThumbPayload {
@@ -107,7 +116,6 @@ function videoPayloadFromFingerprint(element: MessageElement): VideoPayload {
     md5Hex: element.md5Hex ?? '',
     sha1Hex: element.sha1Hex ?? '',
     fileName: element.fileName || `${element.md5Hex ?? 'video'}.mp4`,
-    filePath: '',
     fileSize: element.fileSize ?? 0,
     width: element.width ?? 0,
     height: element.height ?? 0,
@@ -115,7 +123,7 @@ function videoPayloadFromFingerprint(element: MessageElement): VideoPayload {
     videoFormat: element.videoFormat ?? 0,
     thumb: makeFallbackThumb(),
     fastOnly: true,
-    cleanups: [],
+    cleanup: async () => { /* nothing staged */ },
   };
 }
 
@@ -154,54 +162,7 @@ export function computeVideoSha1Blocks(bytes: Uint8Array): Uint8Array[] {
   return blocks;
 }
 
-// ─────────────── source staging + thumb extraction ───────────────
-
-function defaultVideoTempDir(): string {
-  return path.join(os.tmpdir(), 'snowluma-video');
-}
-
-function sourceExtension(fileName: string, source: string): string {
-  const fromName = path.extname(fileName);
-  if (fromName) return fromName;
-
-  const local = resolveLocalFilePath(source);
-  const fromSource = local ? path.extname(local) : '';
-  return fromSource || '.mp4';
-}
-
-async function stageVideoSource(element: MessageElement, tempDir: string, cleanups: Array<() => void>): Promise<{
-  bytes: Uint8Array;
-  filePath: string;
-  fileName: string;
-}> {
-  const source = element.url || element.fileId || '';
-  if (!source) throw new Error('video source is empty');
-
-  const local = resolveLocalFilePath(source);
-  if (local && fs.existsSync(local)) {
-    const stat = fs.statSync(local);
-    if (stat.size > MAX_VIDEO_SIZE) {
-      throw new Error(`video file too large: ${(stat.size / (1024 * 1024)).toFixed(2)} MB > ${MAX_VIDEO_SIZE / (1024 * 1024)} MB`);
-    }
-    return {
-      bytes: new Uint8Array(fs.readFileSync(local)),
-      filePath: local,
-      fileName: element.fileName || path.basename(local),
-    };
-  }
-
-  const loaded = await loadBinarySource(source, 'video', MAX_VIDEO_SIZE);
-  const fileName = element.fileName || loaded.fileName || '';
-  const stagedPath = path.join(tempDir, `snowluma-video-in-${crypto.randomUUID()}${sourceExtension(fileName, source)}`);
-  fs.writeFileSync(stagedPath, Buffer.from(loaded.bytes));
-  cleanups.push(() => { try { fs.unlinkSync(stagedPath); } catch { /* ignore */ } });
-
-  return {
-    bytes: loaded.bytes,
-    filePath: stagedPath,
-    fileName,
-  };
-}
+// ─────────────── thumb extraction ───────────────
 
 async function loadThumb(element: MessageElement, videoPath: string): Promise<{
   thumb: ThumbPayload;
@@ -270,42 +231,44 @@ async function loadVideo(element: MessageElement): Promise<VideoPayload> {
     return videoPayloadFromFingerprint(element);
   }
 
-  const tempDir = defaultVideoTempDir();
-  const cleanups: Array<() => void> = [];
-  fs.mkdirSync(tempDir, { recursive: true });
+  const source = element.url || element.fileId || '';
+  if (!source) throw new Error('video source is empty');
 
+  // Stage onto a local disk path (hardlink / streamed download) and hash it in
+  // one streaming pass — the video is never fully buffered in RAM. maxBytes =
+  // MAX_VIDEO_SIZE; oversize sources throw here and the OneBot layer re-routes
+  // them to the file pipeline (matches the message-actions size fallback).
+  const staged = await stageSourceToDisk(source, MAX_VIDEO_SIZE);
   try {
-    const staged = await stageVideoSource(element, tempDir, cleanups);
-    if (staged.bytes.length === 0) throw new Error('video file is empty');
-    if (staged.bytes.length > MAX_VIDEO_SIZE) {
-      throw new Error(`video file too large: ${(staged.bytes.length / (1024 * 1024)).toFixed(2)} MB > ${MAX_VIDEO_SIZE / (1024 * 1024)} MB`);
-    }
+    if (staged.fileSize === 0) throw new Error('video file is empty');
 
-    const hashes = computeHashes(staged.bytes);
+    // Baseline stat captured BEFORE hashing; re-checked before the upload so a
+    // source mutated mid-send fails cleanly (see uploadVideoMsgInfo).
+    const g = await fsp.stat(staged.filePath);
+    const hashes = await hashFileStreaming(staged.filePath);
     const { thumb, width, height, duration } = await loadThumb(element, staged.filePath);
 
     return {
-      bytes: staged.bytes,
+      bytes: new Uint8Array(0),
+      fileSource: { filePath: staged.filePath, fileSize: staged.fileSize },
       md5: hashes.md5,
       sha1: hashes.sha1,
-      sha1Blocks: computeVideoSha1Blocks(staged.bytes),
+      sha1Blocks: hashes.sha1Blocks,
       md5Hex: hashes.md5Hex,
       sha1Hex: hashes.sha1Hex,
-      fileName: staged.fileName || `${hashes.md5Hex}.mp4`,
-      filePath: staged.filePath,
-      fileSize: staged.bytes.length,
+      fileName: (element.fileName || staged.fileName) || `${hashes.md5Hex}.mp4`,
+      fileSize: staged.fileSize,
       width,
       height,
       duration,
       videoFormat: 0,
       thumb,
       fastOnly: false,
-      cleanups: [...cleanups],
+      guard: { size: g.size, mtimeMs: g.mtimeMs },
+      cleanup: staged.cleanup,
     };
   } catch (err) {
-    for (const fn of cleanups.reverse()) {
-      try { fn(); } catch { /* best-effort cleanup */ }
-    }
+    await staged.cleanup();
     throw err;
   }
 }
@@ -338,6 +301,7 @@ export async function uploadVideoMsgInfo(
         source: 'top',
         cmdId: isGroup ? GROUP_VIDEO_CMD_ID : PRIVATE_VIDEO_CMD_ID,
         bytes: video.bytes,
+        fileSource: video.fileSource, // streamed from disk (undefined on the fingerprint fast path)
         md5: video.md5,
         sha1: video.sha1Blocks,
         subFileIndex: 0,
@@ -353,6 +317,19 @@ export async function uploadVideoMsgInfo(
         // No fastOnlyError: thumb always has bytes (FALLBACK_THUMB at worst).
       },
     ];
+
+    // Mutation guard: the streaming path reads the staged file twice (hash pass
+    // in loadVideo, then the highway PUT). For a hardlinked local source a
+    // concurrent in-place write would make the uploaded bytes disagree with the
+    // hashes we already sent. Re-stat before the PUT and fail cleanly if the
+    // file changed since the baseline (the server's per-chunk md5 check is the
+    // backstop during the PUT itself).
+    if (video.guard && video.fileSource) {
+      const now = await fsp.stat(video.fileSource.filePath);
+      if (now.size !== video.guard.size || now.mtimeMs !== video.guard.mtimeMs) {
+        throw new Error('video source changed during send (mutated between hashing and upload)');
+      }
+    }
 
     const upload = await runNtv2Upload({
       bridge,
@@ -436,8 +413,6 @@ export async function uploadVideoMsgInfo(
     log.debug('video upload completed: md5=%s scene=%s', video.md5Hex, isGroup ? 'group' : 'c2c');
     return finalizeMediaMsgInfo(upload);
   } finally {
-    for (const fn of video.cleanups) {
-      try { fn(); } catch { /* best-effort cleanup */ }
-    }
+    await video.cleanup();
   }
 }

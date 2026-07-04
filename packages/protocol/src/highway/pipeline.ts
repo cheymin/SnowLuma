@@ -13,7 +13,7 @@ import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import crypto from 'crypto';
 import type { BridgeContext } from '../bridge-context';
 import { makeOidbEnvelope } from '../bridge-oidb';
-import { BufferChunkSource, buildHighwayExtend, fetchHighwaySession, uploadHighwayHttp } from './highway-client';
+import { BufferChunkSource, FileChunkSource, buildHighwayExtend, fetchHighwaySession, uploadHighwayHttp } from './highway-client';
 
 const moduleLog = createLogger('Highway');
 
@@ -37,8 +37,13 @@ export interface MediaSubFileUpload {
   cmdId: number;
   /** Bytes to upload. Empty when the caller is forwarding from cached
    *  fingerprints; in that case set fastOnlyError so we throw with a
-   *  typed message when the server actually demands the bytes. */
+   *  typed message when the server actually demands the bytes. Also empty
+   *  when `fileSource` is set (the bytes are streamed from disk instead). */
   bytes: Uint8Array;
+  /** When set, this sub-file streams from a disk file instead of `bytes`
+   *  (which should be empty). runPuts opens a `FileChunkSource`; all size /
+   *  data-presence decisions use `fileSource.fileSize`, not `bytes.length`. */
+  fileSource?: { filePath: string; fileSize: number };
   /** md5 used for the highway request. */
   md5: Uint8Array;
   /** sha1 — single buffer or per-1MB block array. Passed verbatim to
@@ -191,17 +196,22 @@ export async function runNtv2Upload(params: NtV2UploadParams): Promise<NTV2Uploa
     for (const sub of uploads) {
       const target = sub.source === 'top' ? upload : upload.subFileInfos?.[sub.source];
       const uKey = target?.uKey ?? '';
+      // Data size / presence comes from fileSource (streamed) when set, else
+      // from the in-memory bytes — a streamed sub-file has empty `bytes`, so
+      // keying the checks below on `bytes.length` would wrongly treat it as a
+      // fast-only / empty sub-file.
+      const subSize = sub.fileSource ? sub.fileSource.fileSize : sub.bytes.length;
       // No uKey: the server fast-pathed this sub-file (or msgInfo is absent
       // entirely) — it already holds (or claims to hold) the resource, so
       // there are no bytes to push for it.
       if (!uKey || !upload.msgInfo) {
-        if (!uKey && upload.msgInfo && sub.bytes.length > 0) {
+        if (!uKey && upload.msgInfo && subSize > 0) {
           log.debug('%s fast-upload hit for sub=%s (server reusing cached resource)', label, String(sub.source));
         }
         continue;
       }
 
-      if (sub.bytes.length === 0) {
+      if (subSize === 0) {
         if (sub.fastOnlyError) throw new Error(sub.fastOnlyError);
         continue;
       }
@@ -215,9 +225,18 @@ export async function runNtv2Upload(params: NtV2UploadParams): Promise<NTV2Uploa
         sub.sha1,
         sub.subFileIndex ?? 0,
       );
-      log.debug('%s OIDB requires bytes, PUT %d bytes (sub=%s)', label, sub.bytes.length, String(sub.source));
+      // Resolve the (lazy, cached) session BEFORE opening the ChunkSource, so
+      // there is no fallible await between opening the FileChunkSource handle
+      // and the uploadHighwayHttp call that owns closing it — otherwise a
+      // session-fetch failure on the first PUT would leak the open handle.
+      const putSession = await getSession();
+      // uploadHighwayHttp owns the ChunkSource and closes it exactly once.
+      const chunkSource = sub.fileSource
+        ? await FileChunkSource.open(sub.fileSource.filePath, sub.fileSource.fileSize)
+        : new BufferChunkSource(sub.bytes);
+      log.debug('%s OIDB requires bytes, PUT %d bytes (sub=%s)', label, subSize, String(sub.source));
       const t0 = Date.now();
-      await uploadHighwayHttp(bridge, await getSession(), sub.cmdId, new BufferChunkSource(sub.bytes), sub.md5, extend);
+      await uploadHighwayHttp(bridge, putSession, sub.cmdId, chunkSource, sub.md5, extend);
       log.debug('%s PUT done in %dms', label, Date.now() - t0);
       didPut = true;
     }
