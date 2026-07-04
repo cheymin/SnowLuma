@@ -88,7 +88,7 @@ vi.mock('net', () => ({
   createConnection: createConnectionMock,
 }));
 
-import { uploadHighwayHttp, type HighwaySession } from '@snowluma/protocol/highway';
+import { uploadHighwayHttp, BufferChunkSource, type HighwaySession } from '@snowluma/protocol/highway';
 import type { BridgeContext } from '@snowluma/protocol/bridge-context';
 
 const HIGHWAY_BLOCK_SIZE = 1024 * 1024;
@@ -130,7 +130,7 @@ describe('uploadHighwayHttp connection lifecycle', () => {
     // 0.5 MiB → 1 chunk。覆盖 PTT / 小图的常见场景。
     const bytes = new Uint8Array(512 * 1024);
     await uploadHighwayHttp(
-      makeBridge(), makeSession(), 1003, bytes, new Uint8Array(16), new Uint8Array(0),
+      makeBridge(), makeSession(), 1003, new BufferChunkSource(bytes), new Uint8Array(16), new Uint8Array(0),
     );
     expect(createConnectionMock).toHaveBeenCalledTimes(1);
     expect(createdSockets[0]!.destroyed).toBe(true);
@@ -142,7 +142,7 @@ describe('uploadHighwayHttp connection lifecycle', () => {
     // 关闭，新实现必须为每个 chunk 各开一个 socket。
     const bytes = new Uint8Array(Math.floor(1.5 * HIGHWAY_BLOCK_SIZE));
     await uploadHighwayHttp(
-      makeBridge(), makeSession(), 1003, bytes, new Uint8Array(16), new Uint8Array(0),
+      makeBridge(), makeSession(), 1003, new BufferChunkSource(bytes), new Uint8Array(16), new Uint8Array(0),
     );
     expect(createConnectionMock).toHaveBeenCalledTimes(2);
     expect(createdSockets).toHaveLength(2);
@@ -154,8 +154,15 @@ describe('uploadHighwayHttp connection lifecycle', () => {
   it('opens N connections for N chunks (3 chunks here)', async () => {
     const bytes = new Uint8Array(Math.floor(2.5 * HIGHWAY_BLOCK_SIZE));
     await uploadHighwayHttp(
-      makeBridge(), makeSession(), 1004, bytes, new Uint8Array(16), new Uint8Array(0),
+      makeBridge(), makeSession(), 1004, new BufferChunkSource(bytes), new Uint8Array(16), new Uint8Array(0),
     );
     expect(createConnectionMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('a zero-length source opens ZERO connections (empty-input invariant)', async () => {
+    await uploadHighwayHttp(
+      makeBridge(), makeSession(), 1003, new BufferChunkSource(new Uint8Array(0)), new Uint8Array(16), new Uint8Array(0),
+    );
+    expect(createConnectionMock).not.toHaveBeenCalled();
   });
 });

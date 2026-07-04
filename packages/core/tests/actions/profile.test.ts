@@ -28,6 +28,7 @@ vi.mock('@snowluma/protocol/bridge-oidb', async () => {
 vi.mock('@snowluma/protocol/highway', () => ({
   fetchHighwaySession: vi.fn(async () => ({})),
   uploadHighwayHttp: vi.fn(async () => undefined),
+  BufferChunkSource: class BufferChunkSource { constructor(readonly bytes: Uint8Array) {} },
 }));
 
 vi.mock('@snowluma/protocol/highway/utils', () => ({

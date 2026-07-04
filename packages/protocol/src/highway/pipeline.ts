@@ -13,7 +13,7 @@ import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import crypto from 'crypto';
 import type { BridgeContext } from '../bridge-context';
 import { makeOidbEnvelope } from '../bridge-oidb';
-import { buildHighwayExtend, fetchHighwaySession, uploadHighwayHttp } from './highway-client';
+import { BufferChunkSource, buildHighwayExtend, fetchHighwaySession, uploadHighwayHttp } from './highway-client';
 
 const moduleLog = createLogger('Highway');
 
@@ -217,7 +217,7 @@ export async function runNtv2Upload(params: NtV2UploadParams): Promise<NTV2Uploa
       );
       log.debug('%s OIDB requires bytes, PUT %d bytes (sub=%s)', label, sub.bytes.length, String(sub.source));
       const t0 = Date.now();
-      await uploadHighwayHttp(bridge, await getSession(), sub.cmdId, sub.bytes, sub.md5, extend);
+      await uploadHighwayHttp(bridge, await getSession(), sub.cmdId, new BufferChunkSource(sub.bytes), sub.md5, extend);
       log.debug('%s PUT done in %dms', label, Date.now() - t0);
       didPut = true;
     }

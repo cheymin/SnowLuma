@@ -1,7 +1,7 @@
 import { toHexUpper } from '@snowluma/common/hex';
 import { createLogger } from '@snowluma/common/logger';
 import type { FileUploadExt } from '@snowluma/proto-defs/highway';
-import { fetchHighwaySession, uploadHighwayHttp } from '@snowluma/protocol/highway';
+import { BufferChunkSource, fetchHighwaySession, uploadHighwayHttp } from '@snowluma/protocol/highway';
 import { computeHashes, computeMd5, FILE_UPLOAD_MAX_BYTES, loadBinarySource } from '@snowluma/protocol/highway/utils';
 import { protobuf_encode } from '@snowluma/proton';
 import type { Bridge } from '../bridge';
@@ -330,7 +330,7 @@ export class GroupFileApi {
       );
 
       const session = await fetchHighwaySession(bridge);
-      await uploadHighwayHttp(bridge, session, 71, loaded.bytes, hashes.md5, ext);
+      await uploadHighwayHttp(bridge, session, 71, new BufferChunkSource(loaded.bytes), hashes.md5, ext);
     }
 
     // Stage 3: file is on the server, now publish it as a chat message.
@@ -490,7 +490,7 @@ export class GroupFileApi {
       );
 
       const session = await fetchHighwaySession(bridge);
-      await uploadHighwayHttp(bridge, session, 95, loaded.bytes, hashes.md5, ext);
+      await uploadHighwayHttp(bridge, session, 95, new BufferChunkSource(loaded.bytes), hashes.md5, ext);
     }
 
     // Stage 3: publish the file as a c2c chat message. C2C files use
