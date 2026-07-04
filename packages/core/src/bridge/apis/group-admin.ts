@@ -35,8 +35,8 @@ export class GroupAdminApi {
     return SetAddOption.invoke(this.ctx, { groupId, addType });
   }
 
-  setSearch(groupId: number): Promise<void> {
-    return SetSearch.invoke(this.ctx, { groupId });
+  setSearch(groupId: number, noFingerOpen?: number, noCodeFingerOpen?: number): Promise<void> {
+    return SetSearch.invoke(this.ctx, { groupId, noFingerOpen, noCodeFingerOpen });
   }
 
   setAddRequest(

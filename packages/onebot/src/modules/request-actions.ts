@@ -27,7 +27,18 @@ export async function handleGroupAddRequest(
     }
   }
 
-  const requests = await bridge.apis.contacts.fetchGroupRequests();
+  // A join/invite request lands in either the main inbox (0x10c8 subCommand 1)
+  // or the spam-filtered one (subCommand 2). The old code only fetched the main
+  // inbox, so a filtered request that SnowLuma had already reported to the
+  // client couldn't be approved through its own flag — "matching group request
+  // not found" (#197). Search both; each request keeps the `filtered` flag its
+  // inbox needs for the approval subCommand. One inbox failing degrades to the
+  // other rather than aborting.
+  const [mainInbox, filteredInbox] = await Promise.all([
+    bridge.apis.contacts.fetchGroupRequests(false).catch(() => []),
+    bridge.apis.contacts.fetchGroupRequests(true).catch(() => []),
+  ]);
+  const requests = [...mainInbox, ...filteredInbox];
   const matching = requests.find((r) => {
     if (r.groupId !== groupId) return false;
     if (requestType === 'add') return r.targetUid === targetUid;

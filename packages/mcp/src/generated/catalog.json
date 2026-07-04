@@ -837,6 +837,7 @@
       "name": "create_group_file_folder",
       "aliases": [],
       "summary": "创建群文件夹",
+      "returns": "{ result: { retCode, retMsg }, groupItem: { folderInfo: { folderId, folderName, folderPath, createTime, modifyTime, createUin, modifyUin } } }",
       "readOnly": false,
       "params": [
         {
@@ -3275,7 +3276,7 @@
       "name": "get_group_file_system_info",
       "aliases": [],
       "summary": "获取群文件系统信息",
-      "returns": "{ file_count, limit_count, used_space, total_space }：群文件数量与容量信息（used_space 恒 0，total_space 为固定 10GiB 常量）。",
+      "returns": "{ file_count, limit_count, used_space, total_space }：群文件数量与容量信息（均为服务端实际值）。",
       "returnsSchema": {
         "type": "object",
         "properties": {
@@ -3285,15 +3286,15 @@
           },
           "limit_count": {
             "type": "integer",
-            "description": "最大文件数"
+            "description": "文件数上限"
           },
           "used_space": {
             "type": "integer",
-            "description": "已用空间（占位，恒 0）"
+            "description": "已用空间（字节）"
           },
           "total_space": {
             "type": "integer",
-            "description": "总空间（占位，恒 10GiB）"
+            "description": "总空间（字节）"
           }
         },
         "required": [
@@ -3785,6 +3786,18 @@
           "max_member_count": {
             "type": "integer",
             "description": "成员上限"
+          },
+          "group_create_time": {
+            "type": "integer",
+            "description": "建群时间戳（秒）"
+          },
+          "group_level": {
+            "type": "integer",
+            "description": "群等级"
+          },
+          "group_memo": {
+            "type": "string",
+            "description": "群简介 / 公告预览"
           }
         },
         "required": [
@@ -3898,6 +3911,18 @@
             "max_member_count": {
               "type": "integer",
               "description": "成员上限"
+            },
+            "group_create_time": {
+              "type": "integer",
+              "description": "建群时间戳（秒）"
+            },
+            "group_level": {
+              "type": "integer",
+              "description": "群等级（列表批量场景恒 0，详见 get_group_info）"
+            },
+            "group_memo": {
+              "type": "string",
+              "description": "群简介 / 公告预览"
             }
           },
           "required": [
@@ -3994,6 +4019,22 @@
           "title": {
             "type": "string",
             "description": "专属头衔"
+          },
+          "area": {
+            "type": "string",
+            "description": "地区（QQ NT 不提供，恒空）"
+          },
+          "unfriendly": {
+            "type": "boolean",
+            "description": "是否不良记录（QQ NT 不提供，恒 false）"
+          },
+          "title_expire_time": {
+            "type": "integer",
+            "description": "头衔过期时间戳（QQ NT 不提供，恒 0）"
+          },
+          "card_changeable": {
+            "type": "boolean",
+            "description": "是否可改名片（占位，恒 true）"
           }
         },
         "required": [
@@ -4129,6 +4170,22 @@
             "title": {
               "type": "string",
               "description": "专属头衔"
+            },
+            "area": {
+              "type": "string",
+              "description": "地区（QQ NT 不提供，恒空）"
+            },
+            "unfriendly": {
+              "type": "boolean",
+              "description": "是否不良记录（QQ NT 不提供，恒 false）"
+            },
+            "title_expire_time": {
+              "type": "integer",
+              "description": "头衔过期时间戳（QQ NT 不提供，恒 0）"
+            },
+            "card_changeable": {
+              "type": "boolean",
+              "description": "是否可改名片（占位，恒 true）"
             }
           },
           "required": [
@@ -8410,7 +8467,7 @@
     {
       "name": "set_group_search",
       "aliases": [],
-      "summary": "允许群被搜索",
+      "summary": "设置群被搜索方式（群指纹 / 群号搜索开关）",
       "readOnly": false,
       "params": [
         {
@@ -8423,6 +8480,24 @@
             "minimum": 1
           },
           "desc": "群号"
+        },
+        {
+          "name": "no_finger_open",
+          "type": "int",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "no_code_finger_open",
+          "type": "int",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       ],
       "invariants": [],
@@ -8434,6 +8509,14 @@
             "minimum": 1,
             "description": "群号",
             "x-role": "group_id"
+          },
+          "no_finger_open": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "no_code_finger_open": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -8902,6 +8985,93 @@
         "additionalProperties": true
       },
       "category": "扩展"
+    },
+    {
+      "name": "set_qzone_msg_right",
+      "aliases": [],
+      "summary": "修改一条已发说说的查看权限（QQ 空间，按 tid）",
+      "returns": "更新后的权限对象。",
+      "returnsSchema": {
+        "type": "object",
+        "properties": {
+          "ugc_right": {
+            "type": "integer",
+            "description": "更新后的查看权限"
+          }
+        },
+        "required": [
+          "ugc_right"
+        ]
+      },
+      "readOnly": false,
+      "params": [
+        {
+          "name": "tid",
+          "type": "string",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "desc": "说说 tid（来自 get_qzone_msg_list / send_qzone_msg）"
+        },
+        {
+          "name": "ugc_right",
+          "type": "int",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "desc": "查看权限：1=所有人可见，4=好友可见，16=部分好友可见，64=仅自己可见，128=部分好友不可见"
+        },
+        {
+          "name": "target_uins",
+          "type": "uint[]",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "desc": "权限作用 QQ 号数组；ugc_right=16 时表示可见名单，128 时表示不可见名单"
+        }
+      ],
+      "invariants": [
+        "ugc_right must be one of 1, 4, 16, 64, 128",
+        "target_uins is required when ugc_right is 16 or 128"
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "说说 tid（来自 get_qzone_msg_list / send_qzone_msg）"
+          },
+          "ugc_right": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "查看权限：1=所有人可见，4=好友可见，16=部分好友可见，64=仅自己可见，128=部分好友不可见"
+          },
+          "target_uins": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "权限作用 QQ 号数组；ugc_right=16 时表示可见名单，128 时表示不可见名单"
+          }
+        },
+        "required": [
+          "tid",
+          "ugc_right"
+        ],
+        "additionalProperties": true
+      },
+      "category": "空间"
     },
     {
       "name": "set_restart",
@@ -9834,7 +10004,7 @@
     },
     {
       "category": "空间",
-      "count": 7
+      "count": 8
     },
     {
       "category": "流式接口",

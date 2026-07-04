@@ -1,7 +1,7 @@
 {
   "license": "SEE LICENSE IN LICENSE",
   "name": "snowluma-monorepo",
-  "version": "1.11.1",
+  "version": "1.11.2",
   "description": "SnowLuma monorepo workspace (pnpm)",
   "private": true,
   "type": "module",
@@ -47,7 +47,11 @@
     },
     "onlyBuiltDependencies": [
       "better-sqlite3"
-    ]
+    ],
+    "overrides": {
+      "esbuild@<0.28.1": "^0.28.1",
+      "@babel/core@<7.29.6": "^7.29.6"
+    }
   },
   "packageManager": "pnpm@10.28.0",
   "engines": {

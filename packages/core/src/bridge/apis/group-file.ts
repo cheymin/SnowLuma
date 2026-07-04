@@ -12,6 +12,7 @@ import { CreateGroupFolder } from '@snowluma/protocol/oidb-services/group-file/c
 import { DeleteGroupFile } from '@snowluma/protocol/oidb-services/group-file/delete-group-file';
 import { DeleteGroupFolder } from '@snowluma/protocol/oidb-services/group-file/delete-group-folder';
 import { GetGroupFileCount } from '@snowluma/protocol/oidb-services/group-file/get-group-file-count';
+import { GetGroupFileSpace } from '@snowluma/protocol/oidb-services/group-file/get-group-file-space';
 import { GetGroupFileUrl } from '@snowluma/protocol/oidb-services/group-file/get-group-file-url';
 import { GetGroupPttUrl } from '@snowluma/protocol/oidb-services/group-file/get-group-ptt-url';
 import { GetGroupVideoUrl } from '@snowluma/protocol/oidb-services/group-file/get-group-video-url';
@@ -248,6 +249,10 @@ export class GroupFileApi {
 
   getCount(groupId: number): Promise<{ fileCount: number; maxCount: number }> {
     return GetGroupFileCount.invoke(this.ctx, { groupId });
+  }
+
+  getSpace(groupId: number): Promise<{ usedSpace: number; totalSpace: number }> {
+    return GetGroupFileSpace.invoke(this.ctx, { groupId });
   }
 
   // ─────────────── upload (3-stage: OIDB preflight → highway → publish) ───────────────
@@ -623,7 +628,7 @@ export class GroupFileApi {
 
   // ─────────────── folders ───────────────
 
-  createFolder(groupId: number, name: string, parentId = '/'): Promise<void> {
+  createFolder(groupId: number, name: string, parentId = '/'): Promise<CreateGroupFolder.Result> {
     return CreateGroupFolder.invoke(this.ctx, {
       groupId, parentId: normalizeDirectory(parentId), folderName: name,
     });

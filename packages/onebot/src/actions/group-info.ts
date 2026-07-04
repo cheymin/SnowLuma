@@ -18,6 +18,9 @@ export const actions = [
           group_name: { type: 'string', description: '群名' },
           member_count: { type: 'integer', description: '当前成员数' },
           max_member_count: { type: 'integer', description: '成员上限' },
+          group_create_time: { type: 'integer', description: '建群时间戳（秒）' },
+          group_level: { type: 'integer', description: '群等级（列表批量场景恒 0，详见 get_group_info）' },
+          group_memo: { type: 'string', description: '群简介 / 公告预览' },
         },
         required: ['group_id', 'group_name', 'member_count', 'max_member_count'],
       },
@@ -44,6 +47,9 @@ export const actions = [
         group_name: { type: 'string', description: '群名' },
         member_count: { type: 'integer', description: '当前成员数' },
         max_member_count: { type: 'integer', description: '成员上限' },
+        group_create_time: { type: 'integer', description: '建群时间戳（秒）' },
+        group_level: { type: 'integer', description: '群等级' },
+        group_memo: { type: 'string', description: '群简介 / 公告预览' },
       },
       required: ['group_id', 'group_name', 'member_count', 'max_member_count'],
     },
@@ -51,11 +57,12 @@ export const actions = [
     run: async (p, ctx) => {
       const groupId = p.group_id;
       const noCache = p.no_cache;
+      const fallback = { group_id: groupId, group_name: '', member_count: 0, max_member_count: 0, group_create_time: 0, group_level: 0, group_memo: '' };
       if (ctx.getGroupInfo) {
         const info = await ctx.getGroupInfo(groupId, noCache);
-        return okResponse(info ?? { group_id: groupId, group_name: '', member_count: 0, max_member_count: 0 });
+        return okResponse(info ?? fallback);
       }
-      return okResponse({ group_id: groupId, group_name: '', member_count: 0, max_member_count: 0 });
+      return okResponse(fallback);
     },
   }),
 
@@ -80,6 +87,10 @@ export const actions = [
           level: { type: 'string', description: '群等级' },
           role: { type: 'string', enum: ['owner', 'admin', 'member'], description: '角色' },
           title: { type: 'string', description: '专属头衔' },
+          area: { type: 'string', description: '地区（QQ NT 不提供，恒空）' },
+          unfriendly: { type: 'boolean', description: '是否不良记录（QQ NT 不提供，恒 false）' },
+          title_expire_time: { type: 'integer', description: '头衔过期时间戳（QQ NT 不提供，恒 0）' },
+          card_changeable: { type: 'boolean', description: '是否可改名片（占位，恒 true）' },
         },
         required: ['group_id', 'user_id', 'nickname', 'role'],
       },
@@ -114,6 +125,10 @@ export const actions = [
         level: { type: 'string', description: '群等级' },
         role: { type: 'string', enum: ['owner', 'admin', 'member'], description: '角色' },
         title: { type: 'string', description: '专属头衔' },
+        area: { type: 'string', description: '地区（QQ NT 不提供，恒空）' },
+        unfriendly: { type: 'boolean', description: '是否不良记录（QQ NT 不提供，恒 false）' },
+        title_expire_time: { type: 'integer', description: '头衔过期时间戳（QQ NT 不提供，恒 0）' },
+        card_changeable: { type: 'boolean', description: '是否可改名片（占位，恒 true）' },
       },
       required: ['group_id', 'user_id', 'nickname', 'role'],
     },

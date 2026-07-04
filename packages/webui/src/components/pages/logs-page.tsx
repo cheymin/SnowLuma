@@ -13,13 +13,17 @@ import { useApi } from '@/lib/api';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useLayout } from '@/contexts/LayoutContext';
 
+// Dedicated log-level text tokens (see index.css): the app accent colors are
+// too light as small text on the light canvas (WCAG AA fails), so these hit
+// >=4.5:1 in light mode while keeping the bright values in dark. trace stays the
+// faintest level (dimmer than debug) but at /90 it now also clears AA.
 const levelClass: Record<LogLevel, string> = {
-  trace: 'text-muted-foreground/60',
+  trace: 'text-muted-foreground/90',
   debug: 'text-muted-foreground',
-  info: 'text-primary',
-  success: 'text-success',
-  warn: 'text-warning',
-  error: 'text-destructive',
+  info: 'text-log-info',
+  success: 'text-log-success',
+  warn: 'text-log-warn',
+  error: 'text-log-error',
 };
 
 const LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'success', 'warn', 'error'];
@@ -141,9 +145,27 @@ export function LogsPage() {
   }, [api, serverLevel, levelBusy]);
 
   useEffect(() => {
-    return api.logs.stream({
+    // Batch incoming lines: buffer in a ref and flush on a ~80ms timer instead
+    // of a per-line setState. Under a high log rate this turns N O(n) array
+    // copies + N React commits per window into one. Dedup-by-id and the
+    // maxLines cap are preserved (a reconnect can replay recent ids).
+    let pending: LogEntry[] = [];
+    let flushTimer: number | null = null;
+    const flush = () => {
+      flushTimer = null;
+      if (pending.length === 0) return;
+      const batchMap = new Map(pending.map((e) => [e.id, e] as const));
+      pending = [];
+      setLogs((prev) => {
+        const kept = prev.length ? prev.filter((it) => !batchMap.has(it.id)) : prev;
+        const merged = kept.length ? [...kept, ...batchMap.values()] : [...batchMap.values()];
+        return merged.length > maxLinesRef.current ? merged.slice(-maxLinesRef.current) : merged;
+      });
+    };
+    const dispose = api.logs.stream({
       onLine: (entry) => {
-        setLogs((prev) => [...prev.filter((it) => it.id !== entry.id), entry].slice(-maxLinesRef.current));
+        pending.push(entry);
+        if (flushTimer == null) flushTimer = window.setTimeout(flush, 80);
       },
       onStatus: (s) => {
         if (s === 'open') setStreamStatus('实时');
@@ -151,6 +173,10 @@ export function LogsPage() {
         else setStreamStatus('已断开');
       },
     });
+    return () => {
+      dispose();
+      if (flushTimer != null) clearTimeout(flushTimer);
+    };
   }, [api]);
 
   useEffect(() => {

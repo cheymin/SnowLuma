@@ -82,4 +82,33 @@ describe('onebot/modules/request-actions / handleGroupAddRequest', () => {
     expect(setAddRequest).toHaveBeenCalledOnce();
     expect(setAddRequest).toHaveBeenCalledWith(999, 97, 8, false, 'no', false);
   });
+
+  it('finds a request that only lives in the filtered inbox (#197)', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      // Main inbox empty; the invite sits only in the spam-filtered inbox.
+      fetchGroupRequests: vi.fn(async (filtered: boolean) =>
+        filtered
+          ? [fakeRequest({ groupId: 999, invitorUid: 'u_i', sequence: 55, eventType: 2, filtered: true })]
+          : []),
+      getGroupInviteCardSequence: vi.fn(() => null),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await handleGroupAddRequest(bridge, 'invite:999:u_i', true, 'ok');
+
+    // Approved through the filtered inbox (subCommand 2 → last arg true).
+    expect(setAddRequest).toHaveBeenCalledOnce();
+    expect(setAddRequest).toHaveBeenCalledWith(999, 55, 2, true, 'ok', true);
+  });
+
+  it('surfaces "not found" only when neither inbox has the request', async () => {
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => []),
+      getGroupInviteCardSequence: vi.fn(() => null),
+      apis: { groupAdmin: { setAddRequest: vi.fn(async () => {}) } } as any,
+    });
+    await expect(handleGroupAddRequest(bridge, 'invite:999:u_i', true, 'ok'))
+      .rejects.toThrow(/matching group request not found/);
+  });
 });

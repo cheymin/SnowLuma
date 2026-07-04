@@ -140,18 +140,31 @@ export function AppLayout() {
   useEffect(() => {
     if (pollInterval <= 0) return;
     let cancelled = false;
+    let running = false;
     const reconcileMs = Math.max(pollInterval * 10, 10_000);
     const tick = async () => {
-      if (cancelled) return;
-      await Promise.all([refreshQqList(), refreshProcesses(), refreshConnections()]);
+      // Skip while the tab is hidden — SSE already carries live updates, and a
+      // backgrounded tab has no UI to refresh. Re-tick on becoming visible.
+      // `running` drops a tick while the previous refresh is still in flight,
+      // so a slow backend can't stack overlapping requests.
+      if (cancelled || document.hidden || running) return;
+      running = true;
+      try {
+        await Promise.all([refreshQqList(), refreshProcesses(), refreshConnections()]);
+      } finally {
+        running = false;
+      }
     };
     // Initial tick primes the lists before the SSE handshake completes
     // (avoids a flash of empty state in the chrome).
     tick();
     const interval = setInterval(tick, reconcileMs);
+    const onVisible = () => { if (!document.hidden) void tick(); };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [pollInterval, refreshQqList, refreshProcesses, refreshConnections]);
 
@@ -163,15 +176,20 @@ export function AppLayout() {
   useEffect(() => {
     if (pollInterval <= 0) return;
     let cancelled = false;
+    let running = false;
     const tick = async () => {
-      if (cancelled) return;
-      await refreshSystem();
+      if (cancelled || document.hidden || running) return;
+      running = true;
+      try { await refreshSystem(); } finally { running = false; }
     };
     tick();
     const interval = setInterval(tick, pollInterval);
+    const onVisible = () => { if (!document.hidden) void tick(); };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [pollInterval, refreshSystem]);
 
@@ -179,8 +197,14 @@ export function AppLayout() {
   // list-polling above — GitHub's API is rate-limited, the result rarely
   // changes, and the server caches it anyway, so this is cheap.
   useEffect(() => {
-    refreshUpdate();
-    const id = setInterval(() => refreshUpdate(), 6 * 60 * 60 * 1000);
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try { await refreshUpdate(); } finally { running = false; }
+    };
+    tick();
+    const id = setInterval(tick, 6 * 60 * 60 * 1000);
     return () => clearInterval(id);
   }, [refreshUpdate]);
 

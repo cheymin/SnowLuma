@@ -37,6 +37,16 @@
   --success: oklch(70% 0.15 160);
   --warning: oklch(78% 0.16 80);
 
+  /* Log-level TEXT colors. The accent tokens above are tuned as fills (white
+     text on them passes AA); as small text on the light canvas they fail WCAG
+     AA (info 2.6:1, success 2.4:1, warn 2.0:1, error 4.3:1). These darker
+     variants restore >=4.5:1 for the log viewer without darkening the app-wide
+     accent. Dark theme keeps the bright values (they already pass on dark). */
+  --log-info: oklch(50% 0.155 230);
+  --log-success: oklch(50% 0.15 160);
+  --log-warn: oklch(52% 0.16 80);
+  --log-error: oklch(55% 0.22 27);
+
   --border: oklch(92% 0.01 240);
   --input: oklch(94% 0.012 240);
   --ring: oklch(68.5% 0.155 230);
@@ -79,6 +89,13 @@
   --success: oklch(72% 0.15 160);
   --warning: oklch(80% 0.16 80);
 
+  /* On the dark canvas the bright accents already clear AA as text, so the
+     log-level text tokens mirror them (see the :root note above). */
+  --log-info: oklch(75% 0.14 230);
+  --log-success: oklch(72% 0.15 160);
+  --log-warn: oklch(80% 0.16 80);
+  --log-error: oklch(62% 0.2 27);
+
   --border: oklch(28% 0.02 250);
   --input: oklch(26% 0.02 250);
   --ring: oklch(75% 0.14 230);
@@ -112,6 +129,10 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-log-info: var(--log-info);
+  --color-log-success: var(--log-success);
+  --color-log-warn: var(--log-warn);
+  --color-log-error: var(--log-error);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

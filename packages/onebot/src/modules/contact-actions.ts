@@ -50,7 +50,32 @@ export async function getGroupList(
     group_name: g.groupName,
     member_count: g.memberCount,
     max_member_count: g.memberMax,
+    // #197: create_time + memo come free from the list; group_level is only in
+    // the per-group 0x88D_0 detail, so it stays 0 here (a per-group fetch across
+    // the whole list would be far too expensive). get_group_info fills it in.
+    group_create_time: g.createTime ?? 0,
+    group_level: g.level ?? 0,
+    group_memo: g.memo ?? '',
   }));
+}
+
+// group_level lives only in the 0x88D_0 detail. Memoize it (short TTL) so a
+// joined-group get_group_info doesn't fetch the detail on every call (#197).
+const GROUP_LEVEL_TTL_MS = 5 * 60 * 1000;
+const groupLevelCache = new Map<number, { level: number; at: number }>();
+async function getGroupLevel(bridge: BridgeInterface, groupId: number, noCache?: boolean): Promise<number> {
+  if (!noCache) {
+    const c = groupLevelCache.get(groupId);
+    if (c && Date.now() - c.at < GROUP_LEVEL_TTL_MS) return c.level;
+  }
+  try {
+    const detail = await bridge.apis.contacts.fetchGroupDetail(groupId);
+    const level = detail?.level ?? 0;
+    groupLevelCache.set(groupId, { level, at: Date.now() });
+    return level;
+  } catch {
+    return 0;
+  }
 }
 
 // Short-TTL cache for the non-member group lookup (0x88D_0). Joined groups come
@@ -79,6 +104,9 @@ export async function getGroupInfo(
       group_name: g.groupName,
       member_count: g.memberCount,
       max_member_count: g.memberMax,
+      group_create_time: g.createTime ?? 0,
+      group_level: await getGroupLevel(bridge, groupId, noCache),
+      group_memo: g.memo ?? '',
     };
   }
 
@@ -96,6 +124,9 @@ export async function getGroupInfo(
         group_name: detail.groupName,
         member_count: detail.memberCount,
         max_member_count: detail.memberMax,
+        group_create_time: detail.createTime ?? 0,
+        group_level: detail.level ?? 0,
+        group_memo: detail.memo ?? '',
       };
       nonMemberGroupCache.set(groupId, { info, at: Date.now() });
       return { ...info };
@@ -264,5 +295,12 @@ function formatGroupMember(
     level: String(member.level),
     role: member.role,
     title: member.title,
+    // OneBot v11 completeness (#197). QQ NT doesn't expose these, so they're
+    // fixed placeholders — matching go-cqhttp / NapCat, which also hardcode
+    // them: area='', unfriendly=false, title_expire_time=0, card_changeable=true.
+    area: '',
+    unfriendly: false,
+    title_expire_time: 0,
+    card_changeable: true,
   };
 }

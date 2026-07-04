@@ -706,24 +706,28 @@ export const actions = [
     name: 'get_group_file_system_info',
     summary: '获取群文件系统信息',
     readOnly: true,
-    returns: '{ file_count, limit_count, used_space, total_space }：群文件数量与容量信息（used_space 恒 0，total_space 为固定 10GiB 常量）。',
+    returns: '{ file_count, limit_count, used_space, total_space }：群文件数量与容量信息（均为服务端实际值）。',
     returnsSchema: {
       type: 'object',
       properties: {
         file_count: { type: 'integer', description: '当前文件数' },
-        limit_count: { type: 'integer', description: '最大文件数' },
-        used_space: { type: 'integer', description: '已用空间（占位，恒 0）' },
-        total_space: { type: 'integer', description: '总空间（占位，恒 10GiB）' },
+        limit_count: { type: 'integer', description: '文件数上限' },
+        used_space: { type: 'integer', description: '已用空间（字节）' },
+        total_space: { type: 'integer', description: '总空间（字节）' },
       },
       required: ['file_count', 'limit_count', 'used_space', 'total_space'],
     },
     run: async (p, ctx) => {
-      const info = await ctx.bridge.apis.groupFile.getCount(p.group_id);
+      // 0x6D8 count (subcmd 2) + space (subcmd 3) are separate queries (#196).
+      const [count, space] = await Promise.all([
+        ctx.bridge.apis.groupFile.getCount(p.group_id),
+        ctx.bridge.apis.groupFile.getSpace(p.group_id),
+      ]);
       return okResponse({
-        file_count: info.fileCount,
-        limit_count: info.maxCount,
-        used_space: 0,
-        total_space: 10737418240,
+        file_count: count.fileCount,
+        limit_count: count.maxCount,
+        used_space: space.usedSpace,
+        total_space: space.totalSpace,
       });
     },
   }),

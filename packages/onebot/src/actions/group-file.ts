@@ -224,10 +224,16 @@ export const actions = [
   groupAction({
     name: 'create_group_file_folder',
     summary: '创建群文件夹',
+    // NapCat-aligned data so callers can read back the new folderId (#195):
+    // { result, groupItem: { folderInfo: { folderId, folderName, … } } }.
+    returns: '{ result: { retCode, retMsg }, groupItem: { folderInfo: { folderId, folderName, folderPath, createTime, modifyTime, createUin, modifyUin } } }',
     params: { name: f.string({ allowEmpty: false }), parent_id: f.string().default('/') },
     run: async (p, ctx) => {
-      await ctx.bridge.apis.groupFile.createFolder(p.group_id, p.name, p.parent_id || '/');
-      return okResponse();
+      const folderInfo = await ctx.bridge.apis.groupFile.createFolder(p.group_id, p.name, p.parent_id || '/');
+      return okResponse({
+        result: { retCode: 0, retMsg: 'success' },
+        groupItem: { folderInfo },
+      });
     },
   }),
 
