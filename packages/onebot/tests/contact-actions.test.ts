@@ -151,6 +151,7 @@ describe('onebot/contact-actions / getGroupList', () => {
     expect(out).toEqual([{
       group_id: 100, group_name: 'Group A',
       member_count: 0, max_member_count: 500,
+      group_create_time: 0, group_level: 0, group_memo: '',
     }]);
   });
 

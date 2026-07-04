@@ -3789,6 +3789,18 @@ export const ACTIONS: CatalogAction[] = [
         "max_member_count": {
           "type": "integer",
           "description": "成员上限"
+        },
+        "group_create_time": {
+          "type": "integer",
+          "description": "建群时间戳（秒）"
+        },
+        "group_level": {
+          "type": "integer",
+          "description": "群等级"
+        },
+        "group_memo": {
+          "type": "string",
+          "description": "群简介 / 公告预览"
         }
       },
       "required": [
@@ -3902,6 +3914,18 @@ export const ACTIONS: CatalogAction[] = [
           "max_member_count": {
             "type": "integer",
             "description": "成员上限"
+          },
+          "group_create_time": {
+            "type": "integer",
+            "description": "建群时间戳（秒）"
+          },
+          "group_level": {
+            "type": "integer",
+            "description": "群等级（列表批量场景恒 0，详见 get_group_info）"
+          },
+          "group_memo": {
+            "type": "string",
+            "description": "群简介 / 公告预览"
           }
         },
         "required": [
@@ -3998,6 +4022,22 @@ export const ACTIONS: CatalogAction[] = [
         "title": {
           "type": "string",
           "description": "专属头衔"
+        },
+        "area": {
+          "type": "string",
+          "description": "地区（QQ NT 不提供，恒空）"
+        },
+        "unfriendly": {
+          "type": "boolean",
+          "description": "是否不良记录（QQ NT 不提供，恒 false）"
+        },
+        "title_expire_time": {
+          "type": "integer",
+          "description": "头衔过期时间戳（QQ NT 不提供，恒 0）"
+        },
+        "card_changeable": {
+          "type": "boolean",
+          "description": "是否可改名片（占位，恒 true）"
         }
       },
       "required": [
@@ -4133,6 +4173,22 @@ export const ACTIONS: CatalogAction[] = [
           "title": {
             "type": "string",
             "description": "专属头衔"
+          },
+          "area": {
+            "type": "string",
+            "description": "地区（QQ NT 不提供，恒空）"
+          },
+          "unfriendly": {
+            "type": "boolean",
+            "description": "是否不良记录（QQ NT 不提供，恒 false）"
+          },
+          "title_expire_time": {
+            "type": "integer",
+            "description": "头衔过期时间戳（QQ NT 不提供，恒 0）"
+          },
+          "card_changeable": {
+            "type": "boolean",
+            "description": "是否可改名片（占位，恒 true）"
           }
         },
         "required": [

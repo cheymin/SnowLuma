@@ -115,6 +115,10 @@ export class ContactsApi {
         memberCount: raw.info?.memberCount ?? 0,
         memberMax: raw.info?.memberMax ?? 0,
         members: new Map(),
+        // #197: the list already carries these — no extra fetch needed. `level`
+        // is not in the list (0x88D_0 detail only), so it stays undefined here.
+        createTime: raw.info?.createdTime ?? 0,
+        memo: raw.info?.announcement || raw.info?.description || '',
       });
     }
     this.ctx.identity.rememberGroups(groups);
@@ -140,6 +144,11 @@ export class ContactsApi {
       memberCount: Number(r.memberCount ?? 0n),
       memberMax: Number(r.maxMemberCount ?? 0n),
       members: new Map(),
+      // #197: the detail is the only source of `level`; it also carries
+      // createTime + the notice preview (memo).
+      createTime: Number(r.createTime ?? 0n),
+      level: Number(r.level ?? 0n),
+      memo: r.noticePreview ?? '',
     };
   }
 

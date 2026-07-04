@@ -41,6 +41,12 @@ export interface QQGroupInfo {
   memberCount: number;
   memberMax: number;
   members: Map<number, GroupMemberInfo>;
+  /** Group creation time (unix seconds). 0 when unknown (#197). */
+  createTime?: number;
+  /** Group level. Only the 0x88D_0 detail carries it; 0 from the list (#197). */
+  level?: number;
+  /** Group memo / announcement preview. '' when unknown (#197). */
+  memo?: string;
 }
 
 export interface GroupRequestInfo {
