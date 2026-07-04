@@ -34,6 +34,10 @@ export interface MessageElement {
   flash?: boolean;
   resId?: string;
   fileHash?: string;
+  // 闪传文件 (flash transfer) — decoded from an older-client richui markdown
+  // commonElem (svc=45, busId=FlashTransfer). #199/#200. title reuses fileName.
+  filesetId?: string;
+  sceneType?: number;
   // Preview-bubble metadata for the `forward` element. Drives the
   // `com.tencent.multimsg` LightApp JSON the recipient renders before
   // they tap to expand. When unset, the element builder falls back to
