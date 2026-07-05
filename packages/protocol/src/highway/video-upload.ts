@@ -43,6 +43,17 @@ export const GROUP_VIDEO_THUMB_CMD_ID = 1006;
 // costs ~1.5 GiB+ of process memory.
 export const MAX_VIDEO_SIZE = 1536 * 1024 * 1024;
 const SHA1_STREAM_BLOCK_SIZE = 1024 * 1024;
+
+// [#145] A group video whose MsgInfo carries width/height=0 makes QQ-NT
+// receivers fail to lay out the tile and render 文件已过期 even though the
+// resource is fresh. The normal upload path ffprobes real dimensions, but the
+// fast-upload (fingerprint / forward) path has no bytes to probe and relies on
+// cached dims — which are 0 when the source video arrived on the wire with no
+// dimensions (e.g. forwarded from another bot that itself sent 0x0). Fall back
+// to a neutral portrait aspect so a forwarded video at least renders and plays
+// (thumbnail is already a fallback on this path); real cached dims always win.
+const FAST_UPLOAD_FALLBACK_WIDTH = 720;
+const FAST_UPLOAD_FALLBACK_HEIGHT = 1280;
 const SHA1_BLOCK_SIZE = 64;
 
 export function getVideoSourceSize(element: MessageElement): number | null {
@@ -117,8 +128,10 @@ function videoPayloadFromFingerprint(element: MessageElement): VideoPayload {
     sha1Hex: element.sha1Hex ?? '',
     fileName: element.fileName || `${element.md5Hex ?? 'video'}.mp4`,
     fileSize: element.fileSize ?? 0,
-    width: element.width ?? 0,
-    height: element.height ?? 0,
+    // `|| fallback` (not `??`): a cached-but-zero dimension must be replaced too,
+    // else a group forward ships 0x0 and the receiver shows 文件已过期 (#145).
+    width: element.width || FAST_UPLOAD_FALLBACK_WIDTH,
+    height: element.height || FAST_UPLOAD_FALLBACK_HEIGHT,
     duration: element.duration ?? 1,
     videoFormat: element.videoFormat ?? 0,
     thumb: makeFallbackThumb(),

@@ -123,6 +123,23 @@ describe('video-upload', () => {
     expect((c2cInfo[0] as any).fileInfo.height).toBe(0);
   });
 
+  it('[#145] fast-upload with 0x0 dims (e.g. forwarding a dimensionless video) falls back to portrait for group', async () => {
+    // A forwarded video whose cached dims are 0 must NOT ship 0x0 to a group
+    // (→ 文件已过期). videoPayloadFromFingerprint substitutes a neutral 720x1280
+    // portrait; c2c stays 0 (server rejects non-zero there).
+    const noDims = { ...FINGERPRINT, width: 0, height: 0 } as any;
+    await uploadVideoMsgInfo({} as any, true, 12345, noDims);
+    const groupInfo = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((groupInfo[0] as any).fileInfo.width).toBe(720);
+    expect((groupInfo[0] as any).fileInfo.height).toBe(1280);
+
+    vi.mocked(pipeline.runNtv2Upload).mockClear();
+    await uploadVideoMsgInfo({} as any, false, 'recipient-uid', noDims);
+    const c2cInfo = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((c2cInfo[0] as any).fileInfo.width).toBe(0);
+    expect((c2cInfo[0] as any).fileInfo.height).toBe(0);
+  });
+
   it('main video carries the real `time` (duration in seconds) — regression: was 0', async () => {
     // NTV2 server bakes the `time` field into the resulting MsgInfo
     // bytes that ride along as `commonElem.pbElem`; the receiver
