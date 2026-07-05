@@ -111,6 +111,11 @@ export const ELEMENT_MANIFEST = {
     fields: ['text'],
     note: '收侧（D/S）无对应，仅发送方向存在',
   },
+  flash_file: {
+    directions: { D: 'yes', S: 'yes', P: 'by-design-no', W: 'by-design-no' },
+    fields: ['filesetId', 'sceneType', 'fileName'],
+    note: '闪传文件（#199/#200）：旧客户端(≤9.9.30)的 richui markdown 卡片才有；仅收侧解码上报，发送走 send_flash_msg 动作，故 P/W 按设计不支持',
+  },
 } as const satisfies Record<string, ElementSpec>;
 
 export type ElementType = keyof typeof ELEMENT_MANIFEST;

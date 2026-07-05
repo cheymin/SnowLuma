@@ -12,6 +12,7 @@ import type {
   QFaceExtra,
   QSmallFaceExtra,
 } from '@snowluma/proto-defs/element';
+import type { MarkdownData } from '@snowluma/proto-defs/action';
 import type { FileExtra, MessageBody, PushMsgBody as PushMsgBodyFull, RichText } from '@snowluma/proto-defs/message';
 import { decompressData, makeImageUrl } from './helpers';
 
@@ -480,11 +481,66 @@ function convertElements(elems: ElemDecoded[]): MessageElement[] {
         const extra = protobuf_decode<QFaceExtra>(ce.pbElem);
         if (extra?.qsid !== undefined) result.push({ type: 'face', faceId: extra.qsid });
         skipNext = true;
+      } else if (svcType === 45 && ce.pbElem && ce.pbElem.length > 0) {
+        // Markdown commonElem. Older QQ clients (≤9.9.30) deliver a 闪传 (flash
+        // transfer) file as a richui markdown card (busId=FlashTransfer); newer
+        // clients send a plain text+link message that decodes elsewhere. Pull
+        // the flash fields out so the message isn't dropped to empty (#199/#200).
+        const flash = decodeFlashTransferCard(ce.pbElem);
+        if (flash) result.push(flash);
       }
     }
   }
 
   return result;
+}
+
+/**
+ * Decode a 闪传 richui markdown commonElem (svc=45) into a `flash_file`
+ * element. The pbElem is a `MarkdownData` whose `content` is a markdown link
+ * `[闪传](mqqapi://markdown/node?nodeType=richui&json=<url-encoded JSON>)`; the
+ * JSON's `busId` is `FlashTransfer`. Field NAMES (fileSetId / sceneType /
+ * title) were confirmed against QQ NT's flash-transfer manager in
+ * wrapper.node.i64; the exact nesting is unknown (the card is built by the
+ * sender's client), so we search recursively rather than pin a path. Returns
+ * null for any non-flash markdown. See #199 / #200.
+ */
+function deepFindValue(obj: unknown, keys: readonly string[], depth = 0): unknown {
+  if (depth > 8 || obj === null || typeof obj !== 'object') return undefined;
+  const rec = obj as Record<string, unknown>;
+  for (const key of keys) {
+    const v = rec[key];
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  for (const v of Object.values(rec)) {
+    const found = deepFindValue(v, keys, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function decodeFlashTransferCard(pbElem: Uint8Array): MessageElement | null {
+  const md = protobuf_decode<MarkdownData>(pbElem);
+  const content = md?.content ?? '';
+  if (!content.includes('FlashTransfer')) return null;
+  const m = content.match(/[?&]json=([^)\s]+)/);
+  if (!m) return null;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(decodeURIComponent(m[1]));
+  } catch {
+    return null;
+  }
+  if (deepFindValue(obj, ['busId']) !== 'FlashTransfer') return null;
+  const filesetId = deepFindValue(obj, ['fileSetId', 'filesetId', 'fileset_id', 'file_set_id']);
+  const title = deepFindValue(obj, ['title', 'fileName', 'name']);
+  const sceneType = deepFindValue(obj, ['sceneType', 'scene_type']);
+  return {
+    type: 'flash_file',
+    filesetId: filesetId != null ? String(filesetId) : '',
+    fileName: title != null ? String(title) : '',
+    sceneType: sceneType != null ? Number(sceneType) : 0,
+  };
 }
 
 function extractRichtextExtras(

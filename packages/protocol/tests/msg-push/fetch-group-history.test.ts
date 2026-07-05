@@ -67,6 +67,35 @@ describe('fetchGroupMessageRange / SsoGetGroupMsg', () => {
     expect(out[1]).toMatchObject({ msgSeq: 120, senderUin: 222, senderNick: 'Bob' });
   });
 
+  it('[#1] prefers the fresher group card in grp.memberCard (field 4) over a stale cache card', async () => {
+    const stale = { uin: 222, uid: '', nickname: 'BaseNick', card: 'StaleCard', role: 'member', level: 0, title: '', joinTime: 0, lastSentTime: 0, shutUpTime: 0 };
+    const idWithMember = { findGroupMember: (_g: number, u: number) => (u === 222 ? stale : undefined) } as unknown as IdentityService;
+    const resp = protobuf_encode<SsoGetGroupMsgResponse>({
+      body: { groupUin: 9999, messages: [
+        { responseHead: { fromUin: 222, grp: { groupUin: 9999, memberCard: 'FreshCard' } }, // field2 empty, field4 = fresh card
+          contentHead: { msgType: 82, sequence: 130, timestamp: 1700000130, msgId: 5130 },
+          body: { richText: { elems: [{ text: { str: 'hi' } }] } } },
+      ] },
+    });
+    const out = await fetchGroupMessageRange({ sendRawPacket: async () => okResult(resp) }, idWithMember, 10001, 9999, 100, 140);
+    // Base nickname from cache; card overridden by the fresher field-4 value.
+    expect(out[0]).toMatchObject({ senderUin: 222, senderNick: 'BaseNick', senderCard: 'FreshCard' });
+  });
+
+  it('[#1] keeps the cache card when field 4 equals the base nickname (no active group card)', async () => {
+    const m = { uin: 222, uid: '', nickname: 'BaseNick', card: 'CachedCard', role: 'member', level: 0, title: '', joinTime: 0, lastSentTime: 0, shutUpTime: 0 };
+    const id = { findGroupMember: () => m } as unknown as IdentityService;
+    const resp = protobuf_encode<SsoGetGroupMsgResponse>({
+      body: { groupUin: 9999, messages: [
+        { responseHead: { fromUin: 222, grp: { groupUin: 9999, memberCard: 'BaseNick' } }, // field4 == base nick → not a card
+          contentHead: { msgType: 82, sequence: 130, timestamp: 1700000130, msgId: 5130 },
+          body: { richText: { elems: [{ text: { str: 'hi' } }] } } },
+      ] },
+    });
+    const out = await fetchGroupMessageRange({ sendRawPacket: async () => okResult(resp) }, id, 10001, 9999, 100, 140);
+    expect(out[0]).toMatchObject({ senderNick: 'BaseNick', senderCard: 'CachedCard' });
+  });
+
   it('drops content-less blank messages, keeps real ones (#102 parity)', async () => {
     const resp = protobuf_encode<SsoGetGroupMsgResponse>({
       body: {

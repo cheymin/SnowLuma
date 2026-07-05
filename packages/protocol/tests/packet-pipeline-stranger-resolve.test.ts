@@ -292,3 +292,57 @@ describe('IncomingPacketPipeline / stranger resolve on group_invite', () => {
     expect(captured).toHaveLength(1);
   });
 });
+
+describe('IncomingPacketPipeline / #1 group card self-heal', () => {
+  function makeGroupMsgPipeline() {
+    const identity = IdentityService.memory('10001');
+    const events = new BridgeEventBus();
+    const pipeline = new IncomingPacketPipeline({
+      identity,
+      events,
+      refreshMemberCache: vi.fn(async () => false),
+      resolveStrangerProfile: vi.fn(async () => null),
+      resolveGroupJoinRequest: vi.fn(async () => null),
+    });
+    return { identity, pipeline };
+  }
+
+  const groupMsg = (senderCard: string): QQEventVariant => ({
+    kind: 'group_message', time: 1, selfUin: 10001, groupId: 9999, senderUin: 222,
+    senderNick: 'BaseNick', senderCard, senderRole: 'member',
+    msgSeq: 1, msgId: 1, elements: [{ type: 'text', text: 'hi' }],
+  } as QQEventVariant);
+
+  const member = (card: string) => ({
+    uin: 222, uid: '', nickname: 'BaseNick', card, role: 'member',
+    level: 0, title: '', joinTime: 0, lastSentTime: 0, shutUpTime: 0,
+  });
+
+  it('updates the cached member card when a group_message carries a fresher card', () => {
+    const { identity, pipeline } = makeGroupMsgPipeline();
+    identity.rememberGroups([{ groupId: 9999, groupName: "g", memberCount: 1, members: new Map() } as unknown as Parameters<typeof identity.rememberGroups>[0][0]]);
+    identity.rememberGroupMembers(9999, [member('StaleCard')]);
+    pipeline.registerCmd('test.cmd', () => [groupMsg('FreshCard')]);
+    pipeline.process({ serviceCmd: 'test.cmd' } as PacketInfo);
+    expect(identity.findGroupMember(9999, 222)?.card).toBe('FreshCard');
+  });
+
+  it('does not write when the card is unchanged (gated)', () => {
+    const { identity, pipeline } = makeGroupMsgPipeline();
+    identity.rememberGroups([{ groupId: 9999, groupName: "g", memberCount: 1, members: new Map() } as unknown as Parameters<typeof identity.rememberGroups>[0][0]]);
+    identity.rememberGroupMembers(9999, [member('SameCard')]);
+    const spy = vi.spyOn(identity, 'updateGroupMember');
+    pipeline.registerCmd('test.cmd', () => [groupMsg('SameCard')]);
+    pipeline.process({ serviceCmd: 'test.cmd' } as PacketInfo);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('does not create an entry for an uncached member (no self-heal without a base)', () => {
+    const { identity, pipeline } = makeGroupMsgPipeline();
+    const spy = vi.spyOn(identity, 'updateGroupMember');
+    pipeline.registerCmd('test.cmd', () => [groupMsg('SomeCard')]);
+    pipeline.process({ serviceCmd: 'test.cmd' } as PacketInfo);
+    expect(spy).not.toHaveBeenCalled();
+    expect(identity.findGroupMember(9999, 222)).toBeNull();
+  });
+});

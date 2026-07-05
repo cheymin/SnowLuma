@@ -11,6 +11,7 @@ import type {
 import { createLogger } from '@snowluma/common/logger';
 import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import net from 'net';
+import { promises as fsp } from 'fs';
 import type { BridgeContext } from '../bridge-context';
 import { computeMd5, packHighwayFrame, unpackHighwayFrame } from './utils';
 
@@ -240,11 +241,70 @@ async function httpPostFrame(
   return readHttpResponseBody(socket);
 }
 
+// ─────────────── ChunkSource: buffer-or-disk input for highway PUTs ───────────────
+
+/**
+ * Abstracts where the upload bytes come from so `uploadHighwayHttp` can PUT
+ * either an in-memory buffer (image / ptt / thumb / avatar — small) or a file
+ * on disk (large video / group file — streamed 1 MiB at a time, never fully
+ * buffered). `read(offset, length)` MUST return exactly `length` bytes. The
+ * uploader owns the source and calls `close()` exactly once.
+ */
+export interface ChunkSource {
+  readonly size: number;
+  read(offset: number, length: number): Promise<Uint8Array>;
+  close(): Promise<void>;
+}
+
+/** In-memory source — byte-for-byte the pre-refactor behavior. `close()` no-op. */
+export class BufferChunkSource implements ChunkSource {
+  constructor(private readonly bytes: Uint8Array) {}
+  get size(): number { return this.bytes.length; }
+  read(offset: number, length: number): Promise<Uint8Array> {
+    return Promise.resolve(this.bytes.subarray(offset, offset + length));
+  }
+  close(): Promise<void> { return Promise.resolve(); }
+}
+
+/**
+ * Disk-backed source. Reads from an open `FileHandle` at explicit offsets, so a
+ * multi-GiB upload never holds more than one chunk in memory. `read` loops until
+ * it has exactly `length` bytes — `FileHandle.read` may legally short-read — and
+ * throws on unexpected EOF (callers only ever request ranges within `size`).
+ */
+export class FileChunkSource implements ChunkSource {
+  private constructor(private readonly fh: fsp.FileHandle, readonly size: number) {}
+
+  static async open(filePath: string, size: number): Promise<FileChunkSource> {
+    const fh = await fsp.open(filePath, 'r');
+    return new FileChunkSource(fh, size);
+  }
+
+  async read(offset: number, length: number): Promise<Uint8Array> {
+    const buf = Buffer.allocUnsafe(length);
+    let got = 0;
+    while (got < length) {
+      const { bytesRead } = await this.fh.read(buf, got, length - got, offset + got);
+      if (bytesRead === 0) {
+        throw new Error(
+          `FileChunkSource: unexpected EOF at ${offset + got} ` +
+          `(wanted ${length}, got ${got}, size=${this.size})`,
+        );
+      }
+      got += bytesRead;
+    }
+    return buf;
+  }
+
+  close(): Promise<void> { return this.fh.close(); }
+}
+
 export async function uploadHighwayHttp(
   bridge: BridgeContext, session: HighwaySession, commandId: number,
-  bytes: Uint8Array, fileMd5: Uint8Array, extend: Uint8Array,
+  source: ChunkSource, fileMd5: Uint8Array, extend: Uint8Array,
 ): Promise<void> {
   const pathStr = `/cgi-bin/httpconn?htcmd=0x6FF0087&uin=${bridge.identity.uin}`;
+  const totalSize = source.size;
 
   // 每个 chunk 一个独立的 TCP 连接。
   //
@@ -261,75 +321,91 @@ export async function uploadHighwayHttp(
   //   - 单个 1 MB chunk 的传输时间远大于 TCP 建连开销；
   //   - QQ 服务端反正也不希望客户端长时间占用连接；
   //   - 与 NapCat / Lagrange 在大文件上传时的连接生命周期一致。
-  let offset = 0;
-  while (offset < bytes.length) {
-    const chunkSize = Math.min(HIGHWAY_BLOCK_SIZE, bytes.length - offset);
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    const chunkMd5 = computeMd5(chunk);
-    const head = makeHighwayHead(
-      bridge.identity.uin, commandId, bytes.length, offset, chunkSize,
-      chunkMd5, fileMd5, session.sigSession, extend,
-    );
-    const frame = packHighwayFrame(head, chunk);
-
-    // Retry the connect + POST for this chunk on transient transport errors
-    // (peer FIN before response, ECONNRESET, connect refused/timeout). Each
-    // attempt uses a fresh connection; re-sending the same offset range is
-    // idempotent on the server.
-    let responseBody: Uint8Array | undefined;
-    for (let attempt = 1; ; attempt++) {
-      let socket: net.Socket;
-      try {
-        socket = await tcpConnect(session.host, session.port);
-      } catch (err) {
-        if (attempt >= HIGHWAY_MAX_CHUNK_ATTEMPTS) {
-          throw new Error(
-            `highway connect failed after ${attempt} attempts ` +
-            `(cmdId=${commandId} offset=${offset}/${bytes.length}): ${String(err)}`,
-          );
-        }
-        await sleepMs(HIGHWAY_RETRY_BASE_MS * attempt);
-        continue;
-      }
-      try {
-        responseBody = await httpPostFrame(socket, session.host, pathStr, frame);
-        break;
-      } catch (err) {
-        if (attempt >= HIGHWAY_MAX_CHUNK_ATTEMPTS) {
-          throw new Error(
-            `highway upload transport failed after ${attempt} attempts ` +
-            `(cmdId=${commandId} chunk=${chunkSize}/${bytes.length} offset=${offset}): ${String(err)}`,
-          );
-        }
-        log.trace('chunk offset=%d attempt %d failed (%s), retrying', offset, attempt, String(err));
-        await sleepMs(HIGHWAY_RETRY_BASE_MS * attempt);
-      } finally {
-        socket.destroy();
-      }
-    }
-
-    // Unreachable: the retry loop only exits via break (responseBody set) or
-    // throw — the guard just narrows the type for the compiler.
-    if (!responseBody) throw new Error('highway upload: missing response');
-    const { head: respHead } = unpackHighwayFrame(responseBody);
-    const resp = protobuf_decode<RespDataHighwayHead>(respHead);
-    if (resp?.errorCode && resp.errorCode !== 0) {
-      // Surface every diagnostic the highway response carries so
-      // user reports of `error_code=921` and friends include the
-      // server-side context (segHead.retCode, chunk size, file md5)
-      // — without these we can't tell apart a malformed-payload
-      // reject, a session-ticket mismatch, or a per-account rate-
-      // limit.
-      const segRetCode = resp.msgSegHead?.retCode ?? 0;
-      const fileMd5Hex = Buffer.from(fileMd5).toString('hex');
-      throw new Error(
-        `highway upload error_code=${resp.errorCode}` +
-        ` (cmdId=${commandId} chunk=${chunkSize}/${bytes.length}` +
-        ` offset=${offset} segRetCode=${segRetCode}` +
-        ` fileMd5=${fileMd5Hex.slice(0, 16)}…)`,
+  //
+  // `source` may buffer the whole file (BufferChunkSource) or stream it from
+  // disk (FileChunkSource); either way one chunk is read/held at a time. We
+  // own the source and close it exactly once in the `finally` below.
+  let succeeded = false;
+  try {
+    let offset = 0;
+    while (offset < totalSize) {
+      const chunkSize = Math.min(HIGHWAY_BLOCK_SIZE, totalSize - offset);
+      const chunk = await source.read(offset, chunkSize);
+      const chunkMd5 = computeMd5(chunk);
+      const head = makeHighwayHead(
+        bridge.identity.uin, commandId, totalSize, offset, chunkSize,
+        chunkMd5, fileMd5, session.sigSession, extend,
       );
+      const frame = packHighwayFrame(head, chunk);
+
+      // Retry the connect + POST for this chunk on transient transport errors
+      // (peer FIN before response, ECONNRESET, connect refused/timeout). Each
+      // attempt uses a fresh connection; re-sending the same offset range is
+      // idempotent on the server.
+      let responseBody: Uint8Array | undefined;
+      for (let attempt = 1; ; attempt++) {
+        let socket: net.Socket;
+        try {
+          socket = await tcpConnect(session.host, session.port);
+        } catch (err) {
+          if (attempt >= HIGHWAY_MAX_CHUNK_ATTEMPTS) {
+            throw new Error(
+              `highway connect failed after ${attempt} attempts ` +
+              `(cmdId=${commandId} offset=${offset}/${totalSize}): ${String(err)}`,
+            );
+          }
+          await sleepMs(HIGHWAY_RETRY_BASE_MS * attempt);
+          continue;
+        }
+        try {
+          responseBody = await httpPostFrame(socket, session.host, pathStr, frame);
+          break;
+        } catch (err) {
+          if (attempt >= HIGHWAY_MAX_CHUNK_ATTEMPTS) {
+            throw new Error(
+              `highway upload transport failed after ${attempt} attempts ` +
+              `(cmdId=${commandId} chunk=${chunkSize}/${totalSize} offset=${offset}): ${String(err)}`,
+            );
+          }
+          log.trace('chunk offset=%d attempt %d failed (%s), retrying', offset, attempt, String(err));
+          await sleepMs(HIGHWAY_RETRY_BASE_MS * attempt);
+        } finally {
+          socket.destroy();
+        }
+      }
+
+      // Unreachable: the retry loop only exits via break (responseBody set) or
+      // throw — the guard just narrows the type for the compiler.
+      if (!responseBody) throw new Error('highway upload: missing response');
+      const { head: respHead } = unpackHighwayFrame(responseBody);
+      const resp = protobuf_decode<RespDataHighwayHead>(respHead);
+      if (resp?.errorCode && resp.errorCode !== 0) {
+        // Surface every diagnostic the highway response carries so
+        // user reports of `error_code=921` and friends include the
+        // server-side context (segHead.retCode, chunk size, file md5)
+        // — without these we can't tell apart a malformed-payload
+        // reject, a session-ticket mismatch, or a per-account rate-
+        // limit.
+        const segRetCode = resp.msgSegHead?.retCode ?? 0;
+        const fileMd5Hex = Buffer.from(fileMd5).toString('hex');
+        throw new Error(
+          `highway upload error_code=${resp.errorCode}` +
+          ` (cmdId=${commandId} chunk=${chunkSize}/${totalSize}` +
+          ` offset=${offset} segRetCode=${segRetCode}` +
+          ` fileMd5=${fileMd5Hex.slice(0, 16)}…)`,
+        );
+      }
+      offset += chunkSize;
+      log.trace('uploaded %d/%d bytes', offset, totalSize);
     }
-    offset += chunkSize;
-    log.trace('uploaded %d/%d bytes', offset, bytes.length);
+    succeeded = true;
+  } finally {
+    // Best-effort close — never mask a primary upload error. A close failure
+    // is only surfaced when the upload itself succeeded.
+    try {
+      await source.close();
+    } catch (closeErr) {
+      if (succeeded) throw closeErr;
+    }
   }
 }

@@ -4,8 +4,18 @@ import type { Elem } from './element';
 // ResponseHead.Grp 
 export interface ResponseGrp {
   groupUin?:   pb<1, uint_32>;
+  /** Sender display name as populated by the group-history fetch (SsoGetGroupMsg).
+   *  Empty on live OlPush pushes and merged-forward nodes — those use `memberCard`
+   *  (field 4) instead. */
   memberName?: pb<2, string>;
-  groupName?:  pb<4, string>;
+  /** Sender display name (group card if set, else nickname) as populated on live
+   *  group pushes AND merged-forward nodes. Verified on-target (#201): a live
+   *  message shows "星屿"/"墨梓柒111" (the card) here while field 2 is empty, and
+   *  forward nodes carry per-node sender names here. Lagrange labels this
+   *  `MemberName`; we keep `memberName` for the field-2 group-history slot. */
+  memberCard?: pb<4, string>;
+  /** The real group name (Lagrange: GroupName). "测试123" on-target. */
+  groupName?:  pb<7, string>;
 }
 
 export interface ResponseForward {

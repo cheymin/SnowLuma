@@ -382,6 +382,22 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
     },
   },
 
+  // 闪传文件 (flash transfer) — receive-only. Decoded from an older-client
+  // richui markdown card (#199/#200). Sending uses the send_flash_msg action,
+  // so there is no fromSegment.
+  flash_file: {
+    async toSegment(element) {
+      return {
+        type: 'flash_file',
+        data: {
+          title: element.fileName ?? '',
+          file_set_id: element.filesetId ?? '',
+          scene_type: element.sceneType ?? 0,
+        },
+      };
+    },
+  },
+
   forward: {
     async toSegment(element) {
       return {

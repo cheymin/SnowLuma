@@ -10,7 +10,7 @@ import { DeleteCustomFace } from '@snowluma/protocol/oidb-services/custom-face/d
 import { ModifyCustomFace } from '@snowluma/protocol/oidb-services/custom-face/modify-custom-face';
 import { MoveCustomFace } from '@snowluma/protocol/oidb-services/custom-face/move-custom-face';
 import { OrderCustomFace } from '@snowluma/protocol/oidb-services/custom-face/order-custom-face';
-import { fetchHighwaySession, uploadHighwayHttp } from '@snowluma/protocol/highway';
+import { BufferChunkSource, fetchHighwaySession, uploadHighwayHttp } from '@snowluma/protocol/highway';
 import { computeHashes, loadBinarySource } from '@snowluma/protocol/highway/utils';
 import { GetLike, type LikeInfo } from '@snowluma/protocol/oidb-services/profile/get-like';
 import { GetUnidirectionalFriendList, type UnidirectionalFriendEntry } from '@snowluma/protocol/oidb-services/profile/get-unidirectional-friend-list';
@@ -93,7 +93,7 @@ export class ProfileApi {
 
     const hashes = computeHashes(loaded.bytes);
     const session = await fetchHighwaySession(bridge);
-    await uploadHighwayHttp(bridge, session, 90, loaded.bytes, hashes.md5, new Uint8Array(0));
+    await uploadHighwayHttp(bridge, session, 90, new BufferChunkSource(loaded.bytes), hashes.md5, new Uint8Array(0));
   }
 
   /**
@@ -120,7 +120,7 @@ export class ProfileApi {
       field5: 3,
       field6: 1,
     });
-    await uploadHighwayHttp(bridge, session, 3000, loaded.bytes, hashes.md5, extra);
+    await uploadHighwayHttp(bridge, session, 3000, new BufferChunkSource(loaded.bytes), hashes.md5, extra);
   }
 
   // ─────────────── queries on me / my contacts ───────────────

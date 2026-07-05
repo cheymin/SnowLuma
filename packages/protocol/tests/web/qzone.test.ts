@@ -93,6 +93,31 @@ describe('qzone / getQzoneMsgList (HTTP layer)', () => {
     expect(q.get('format')).toBe('jsonp');
   });
 
+  it('retries via the user.qzone.qq.com route on a -10000 rate-limit', async () => {
+    const spy = vi
+      .spyOn(RequestUtil, 'HttpGetText')
+      .mockResolvedValueOnce('{"code":-10000,"message":"使用人数过多，请稍后再试"}')
+      .mockResolvedValueOnce(
+        '{"code":0,"total":1,"msglist":[{"tid":"T1","content":"hi","created_time":1700000000,"cmtnum":0,"secret":0,"pic":[]}]}',
+      );
+
+    const out = await getQzoneMsgList(cookies, '10000', 0, 20);
+
+    expect(out).toEqual({
+      total: 1,
+      msglist: [{ tid: 'T1', content: 'hi', time: 1700000000, comment_num: 0, is_private: false, images: [] }],
+    });
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[0]![0]).toContain('https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/');
+    const [retryUrl, , , retryHeaders] = spy.mock.calls[1]!;
+    expect(retryUrl).toContain('https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6?');
+    expect((retryHeaders as Record<string, string>).Referer).toBe('https://user.qzone.qq.com/10000');
+    const q = new URLSearchParams((retryUrl as string).split('?')[1]);
+    expect(q.get('format')).toBe('json');
+    expect(q.get('g_tk')).toBe(expectedGtk);
+  });
+
   it('returns an empty list (not a throw) for a genuinely empty space', async () => {
     // The throw-on-auth-failure contract hinges on distinguishing a missing
     // msglist (cookie failure → throw) from an empty msglist (no 说说 → []).

@@ -308,6 +308,19 @@ export class IncomingPacketPipeline {
 
   private rememberEventIdentity(event: QQEventVariant): void {
     switch (event.kind) {
+      case 'group_message': {
+        // [#1] Self-heal a member's cached group card from message traffic. The
+        // member cache only refreshes via a member-list refetch, which nothing
+        // triggers on a card change and a quiet, months-long bot may never fire.
+        // The decoder resolved the current card from field 4 into senderCard;
+        // when it differs from the cache, update it — gated so we write only on
+        // an actual change, not on every message.
+        const cached = this.deps.identity.findGroupMember(event.groupId, event.senderUin);
+        if (cached && event.senderCard && event.senderCard !== cached.card) {
+          this.deps.identity.updateGroupMember(event.groupId, { ...cached, card: event.senderCard });
+        }
+        break;
+      }
       case 'group_member_join':
         this.deps.identity.rememberGroupMemberIdentity(event.groupId, {
           uid: event.userUid,

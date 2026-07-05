@@ -511,23 +511,6 @@ function StatTileWidget({ id }: { id: string }) {
 
 const HOST_GRID_COLS: Record<number, string> = { 1: 'lg:grid-cols-1', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3' };
 
-function bestGrid(n: number, maxCols = 48): { cols: number; rows: number; waste: number } {
-  let best = { cols: 2, rows: Math.ceil(n / 2), waste: 0 };
-  let bestScore = Infinity;
-  const limit = Math.min(maxCols, n);
-  for (let cols = 2; cols <= limit; cols++) {
-    const rows = Math.ceil(n / cols);
-    const waste = cols * rows - n;
-    const balance = Math.abs(cols - rows);
-    const score = waste * 20 + balance;
-    if (score < bestScore) {
-      bestScore = score;
-      best = { cols, rows, waste };
-    }
-  }
-  return best;
-}
-
 function HostBlock({ config }: { config: HostConfig }) {
   const { systemInfo, refreshSystem } = useAppState();
   const panelCount = [config.cpu, config.memory, config.runtime].filter(Boolean).length;
@@ -554,42 +537,41 @@ function HostBlock({ config }: { config: HostConfig }) {
               <div className="flex items-center gap-2">
                 <Cpu className="size-4 text-primary" />
                 <span className="text-sm font-semibold">CPU 使用率</span>
+                {systemInfo && (
+                  <span className="text-[11px] text-muted-foreground tabular-nums">{systemInfo.cpu.perCore.length} 核</span>
+                )}
               </div>
               <span className="text-sm font-semibold tabular-nums text-primary">
                 {systemInfo ? `${systemInfo.cpu.average.toFixed(1)}%` : '—'}
               </span>
             </div>
             <Progress value={systemInfo?.cpu.average ?? 0} />
-            <p className="mt-2 text-[11px] text-muted-foreground">
-            负载: {systemInfo ? systemInfo.cpu.loadAvg.map((v) => v.toFixed(2)).join(' / ') : '—'}
+            <p className="mt-2 text-[11px] text-muted-foreground tabular-nums">
+              负载: {systemInfo ? systemInfo.cpu.loadAvg.map((v) => v.toFixed(2)).join(' / ') : '—'}
             </p>
             {systemInfo && systemInfo.cpu.perCore.length > 0 && (
-              (() => {
-                const n = systemInfo.cpu.perCore.length;
-                const { cols, rows } = bestGrid(n);
-                const total = cols * rows;
-                return (
+              <div
+                className="mt-3 grid"
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(34px, 1fr))', gap: 3 }}
+              >
+                {systemInfo.cpu.perCore.map((p, i) => (
                   <div
-                    className="mt-3 overflow-hidden"
+                    key={i}
+                    title={`Core ${i}: ${p.toFixed(1)}%`}
+                    className="grid aspect-square place-items-center rounded-md transition-[background] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: `repeat(${cols}, 1fr)`,
-                      gridTemplateRows: `repeat(${rows}, 1fr)`,
-                      gap: 2,
-                      height: 80,
+                      background: `color-mix(in oklab, var(--primary) ${Math.min(100, Math.max(0, p)).toFixed(1)}%, color-mix(in oklab, var(--muted) 80%, transparent))`,
                     }}
                   >
-                    {systemInfo.cpu.perCore.map((p, i) => (
-                      <div key={i} title={`Core ${i}: ${p.toFixed(1)}%`} className="rounded-sm bg-muted overflow-hidden relative">
-                        <div className="absolute bottom-0 left-0 right-0 bg-primary/70 transition-[height] duration-500" style={{ height: `${Math.max(2, p)}%` }} />
-                      </div>
-                    ))}
-                    {Array.from({ length: total - n }).map((_, i) => (
-                      <div key={`e-${i}`} className="rounded-sm bg-muted" style={{ visibility: 'hidden' }} />
-                    ))}
+                    <span
+                      className="text-[10px] leading-none tabular-nums"
+                      style={{ color: 'color-mix(in oklab, var(--foreground) 55%, transparent)' }}
+                    >
+                      {i}
+                    </span>
                   </div>
-                );
-              })()
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -605,11 +587,39 @@ function HostBlock({ config }: { config: HostConfig }) {
                 {systemInfo ? `${systemInfo.memory.usagePercent.toFixed(1)}%` : '—'}
               </span>
             </div>
-            <Progress value={systemInfo?.memory.usagePercent ?? 0} />
-            <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground tabular-nums">
-              <span>已用 {systemInfo ? formatBytes(systemInfo.memory.used) : '—'}</span>
-              <span>共 {systemInfo ? formatBytes(systemInfo.memory.total) : '—'}</span>
-            </div>
+            {systemInfo ? (() => {
+              const m = systemInfo.memory;
+              const rss = Math.min(systemInfo.runtime.rss, m.used);
+              const other = Math.max(0, m.used - rss);
+              const segs = [
+                { key: 'proc', label: '本进程', bytes: rss, grow: (rss / m.total) * 100, color: 'var(--primary)' },
+                { key: 'other', label: '其他已用', bytes: other, grow: (other / m.total) * 100, color: 'color-mix(in oklab, var(--primary) 45%, transparent)' },
+                { key: 'free', label: '空闲', bytes: m.free, grow: (m.free / m.total) * 100, color: 'color-mix(in oklab, var(--muted) 85%, transparent)' },
+              ];
+              return (
+                <>
+                  <div className="mt-1.5 flex h-3 gap-0.5">
+                    {segs.map((seg) => (
+                      <span
+                        key={seg.key}
+                        className="rounded-[3px]"
+                        style={{ flexGrow: seg.grow, minWidth: 2, background: seg.color }}
+                        title={`${seg.label} ${formatBytes(seg.bytes)}`}
+                      />
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-3.5 gap-y-1 text-[11px] text-muted-foreground">
+                    {segs.map((seg) => (
+                      <span key={seg.key} className="inline-flex items-center gap-1.5">
+                        <i className="size-2 rounded-[2px]" style={{ background: seg.color }} />
+                        {seg.label}
+                        <b className="font-semibold text-foreground tabular-nums">{formatBytes(seg.bytes)}</b>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              );
+            })() : <Progress value={0} />}
           </div>
         )}
         {/* Runtime */}

@@ -96,15 +96,17 @@ describe('send_group_msg large-video fallback', () => {
 
 describe('videoNeedsFileFallback', () => {
   it('triggers on a known oversize source regardless of the error message', () => {
-    // The real-bot case: a local 1.4 GB video whose Highway upload fails
-    // with a cryptic `error_code=323` (not size-worded). Source size is
-    // known, so the file fallback must still fire.
-    const big = { type: 'video', fileSize: 1400 * MB } as MessageElement;
+    // Above MAX_VIDEO_SIZE (1.5 GiB) the video is re-routed to the file
+    // pipeline even when the error isn't size-worded. Source size is known,
+    // so the fallback fires from the size alone.
+    const big = { type: 'video', fileSize: 1700 * MB } as MessageElement;
     expect(videoNeedsFileFallback(big, /* isSizeErr */ false)).toBe(true);
   });
 
-  it('does not trigger for a known under-limit source', () => {
-    const small = { type: 'video', fileSize: 50 * MB } as MessageElement;
+  it('does not trigger for a known under-limit source (now covers large videos)', () => {
+    // 500 MB used to route to file under the old 100 MB cap; it now sends as
+    // a real video (verified on tempserver up to ~500 MB).
+    const small = { type: 'video', fileSize: 500 * MB } as MessageElement;
     expect(videoNeedsFileFallback(small, true)).toBe(false);
   });
 

@@ -716,6 +716,9 @@ export class ForwardApi {
       if (!event) continue;
 
       if (event.kind === 'group_message') {
+        // [#201] The merged-forward sender name now comes through the group
+        // decoder (event.senderNick), which reads grp.memberCard (field 4) when
+        // there's no member cache — exactly the forward-node case.
         out.push({
           userUin: event.senderUin,
           nickname: event.senderCard || event.senderNick,

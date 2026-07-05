@@ -502,7 +502,12 @@ async function cacheSelfSentMessage(
       font: 0,
       sender: {
         user_id: selfId,
-        nickname: '',
+        // This is the bot itself — seed our own nickname so a self-sent message
+        // that the server never echoes back (notably group file / video sends,
+        // which publish via OIDB rather than PbSendMsg) doesn't surface an empty
+        // sender.nickname in get_msg / get_group_msg_history. For a normal text
+        // send the echo still overwrites this with the same value.
+        nickname: ref.bridge.identity.nickname || '',
         sex: 'unknown',
         age: 0,
       },
@@ -620,11 +625,12 @@ export async function sendPrivateMessage(
   let allFileElements = elements.filter(e => e.type === 'file');
   let nonFileElements = elements.filter(e => e.type !== 'file');
 
-  // [#145] A video above QQ's ~100 MB video-resource cap (MAX_VIDEO_SIZE)
-  // uploads "successfully" but renders as 视频已过期 on the receiver — the
-  // server accepts the bytes yet never produces a valid video resource. The
-  // on-error fallback below can't catch it (the oversized upload doesn't
-  // throw), so route known-oversized videos to the file path up front.
+  // [#145] Videos up to MAX_VIDEO_SIZE (1.5 GiB) send as real videos; only
+  // above that do we route to the file pipeline (the whole video is buffered
+  // in RAM for the Highway upload, so this bounds memory). The earlier
+  // 100 MB cap was a workaround for the width/height=0 → 已过期 bug (now
+  // fixed) and has been lifted. Route known-oversized videos up front —
+  // the on-error fallback below can't catch them (the upload doesn't throw).
   {
     const pre = splitVideoFileFallback(nonFileElements, false);
     if (pre.fileEls.length > 0) {
@@ -723,8 +729,8 @@ export async function sendGroupMessage(
   let allFileElements = elements.filter(e => e.type === 'file');
   let nonFileElements = elements.filter(e => e.type !== 'file');
 
-  // [#145] Route known-oversized videos (> MAX_VIDEO_SIZE) to the file path
-  // up front — they upload as a video without error but render expired.
+  // [#145] Route videos above MAX_VIDEO_SIZE (1.5 GiB) to the file path up
+  // front; everything at or below sends as a real video (see sendPrivate).
   {
     const pre = splitVideoFileFallback(nonFileElements, false);
     if (pre.fileEls.length > 0) {

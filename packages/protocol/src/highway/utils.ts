@@ -82,8 +82,102 @@ export function resolveLocalFilePath(source: string): string | null {
  * Tag a size-limit error so the HTTP retry path leaves it alone — retrying
  * a too-large response just re-downloads the same oversized body.
  */
-function tooLarge(message: string): Error {
+export function tooLarge(message: string): Error {
   return Object.assign(new Error(message), { noRetry: true });
+}
+
+/**
+ * Where a download's bytes go. `loadBinarySource` uses an in-memory sink;
+ * `stageSourceToDisk` uses a disk-file sink. A fresh sink is built per fetch
+ * attempt and `discard()`ed on failure so a Referer retry starts clean.
+ */
+export interface DownloadSink<T> {
+  write(chunk: Uint8Array): Promise<void> | void;
+  done(): Promise<T> | T;
+  discard(): Promise<void> | void;
+}
+
+/**
+ * Shared HTTP download engine for both the buffered and the disk-streaming
+ * paths — the single owner of the observable download behavior: browser UA +
+ * Accept, redirect follow, 60s timeout, incremental `maxBytes` enforcement
+ * (declared Content-Length AND streamed total, `noRetry`-tagged), and one
+ * Referer retry on a non-size failure. Bytes are delivered chunk-by-chunk to a
+ * caller-provided sink so the same length-checking transport feeds either RAM
+ * or disk.
+ */
+export async function downloadHttp<T>(
+  source: string,
+  resourceName: string,
+  maxBytes: number,
+  makeSink: () => DownloadSink<T>,
+): Promise<{ result: T; fileName: string }> {
+  const fileName = guessFileNameFromUrl(source);
+
+  const attempt = async (headers: Record<string, string>): Promise<T> => {
+    const resp = await fetch(source, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!resp.ok) throw new Error(`HTTP download failed: ${resp.status}`);
+    const declared = Number(resp.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw tooLarge(`${resourceName} too large: ${declared} > ${maxBytes}`);
+    }
+
+    const sink = makeSink();
+    try {
+      const reader = resp.body?.getReader();
+      if (!reader) {
+        const buf = new Uint8Array(await resp.arrayBuffer());
+        if (buf.length > maxBytes) {
+          throw tooLarge(`${resourceName} too large: ${buf.length} > ${maxBytes}`);
+        }
+        await sink.write(buf);
+      } else {
+        let total = 0;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            total += value.byteLength;
+            if (total > maxBytes) {
+              await reader.cancel().catch(() => { /* ignore */ });
+              throw tooLarge(`${resourceName} too large: > ${maxBytes}`);
+            }
+            await sink.write(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
+      return await sink.done();
+    } catch (e) {
+      await sink.discard();
+      throw e;
+    }
+  };
+
+  // First try with a browser UA only. On any non-size failure — a
+  // network-level `fetch failed` (connection reset by an anti-bot front-end)
+  // or a 403/4xx from anti-hotlink — retry once with a Referer pointing at the
+  // resource itself, the common bypass for same-origin hotlink checks.
+  const baseHeaders: Record<string, string> = {
+    'User-Agent': DOWNLOAD_USER_AGENT,
+    Accept: '*/*',
+  };
+  try {
+    return { result: await attempt(baseHeaders), fileName };
+  } catch (err) {
+    if ((err as { noRetry?: boolean } | null)?.noRetry) throw err;
+    try {
+      return { result: await attempt({ ...baseHeaders, Referer: source }), fileName };
+    } catch {
+      throw err;
+    }
+  }
 }
 
 export async function loadBinarySource(
@@ -102,79 +196,25 @@ export async function loadBinarySource(
   }
 
   if (/^https?:\/\//i.test(source)) {
-    const fileName = guessFileNameFromUrl(source);
-
-    // A single fetch attempt with the given headers. Streams the body
-    // incrementally so a server that omits or understates Content-Length
-    // can't make us buffer a chunked response past maxBytes — `await
-    // resp.arrayBuffer()` would happily allocate the entire payload before
-    // we get a chance to length-check it. Size-limit rejections are tagged
-    // `noRetry` so the outer retry doesn't re-download an oversized body.
-    const attempt = async (headers: Record<string, string>): Promise<LoadedBinary> => {
-      const resp = await fetch(source, {
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!resp.ok) throw new Error(`HTTP download failed: ${resp.status}`);
-      const declared = Number(resp.headers.get('content-length') ?? '0');
-      if (Number.isFinite(declared) && declared > maxBytes) {
-        throw tooLarge(`${resourceName} too large: ${declared} > ${maxBytes}`);
-      }
-      const reader = resp.body?.getReader();
-      if (!reader) {
-        const bytes = new Uint8Array(await resp.arrayBuffer());
-        if (bytes.length > maxBytes) {
-          throw tooLarge(`${resourceName} too large: ${bytes.length} > ${maxBytes}`);
-        }
-        return { bytes, fileName };
-      }
+    // Buffered sink: accumulate the streamed chunks and assemble them into one
+    // contiguous buffer. The shared `downloadHttp` owns the transport, the
+    // incremental length check, and the Referer retry.
+    const memorySink = (): DownloadSink<Uint8Array> => {
       const chunks: Uint8Array[] = [];
       let total = 0;
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!value) continue;
-          total += value.byteLength;
-          if (total > maxBytes) {
-            await reader.cancel().catch(() => { /* ignore */ });
-            throw tooLarge(`${resourceName} too large: > ${maxBytes}`);
-          }
-          chunks.push(value);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      const bytes = new Uint8Array(total);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      return { bytes, fileName };
+      return {
+        write(chunk) { chunks.push(chunk); total += chunk.byteLength; },
+        done() {
+          const bytes = new Uint8Array(total);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+          return bytes;
+        },
+        discard() { chunks.length = 0; },
+      };
     };
-
-    // First try with a browser UA only. On any non-size failure — a
-    // network-level `fetch failed` (connection reset by an anti-bot
-    // front-end) or a 403/4xx from anti-hotlink — retry once with a
-    // Referer pointing at the resource itself, the common bypass for
-    // same-origin hotlink checks. Mirrors NapCat's with/without-Referer
-    // strategy.
-    const baseHeaders: Record<string, string> = {
-      'User-Agent': DOWNLOAD_USER_AGENT,
-      Accept: '*/*',
-    };
-    try {
-      return await attempt(baseHeaders);
-    } catch (err) {
-      if ((err as { noRetry?: boolean } | null)?.noRetry) throw err;
-      try {
-        return await attempt({ ...baseHeaders, Referer: source });
-      } catch {
-        throw err;
-      }
-    }
+    const { result, fileName } = await downloadHttp(source, resourceName, maxBytes, memorySink);
+    return { bytes: result, fileName };
   }
 
   const filePath = resolveLocalFilePath(source);
