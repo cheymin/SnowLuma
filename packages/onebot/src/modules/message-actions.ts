@@ -502,7 +502,12 @@ async function cacheSelfSentMessage(
       font: 0,
       sender: {
         user_id: selfId,
-        nickname: '',
+        // This is the bot itself — seed our own nickname so a self-sent message
+        // that the server never echoes back (notably group file / video sends,
+        // which publish via OIDB rather than PbSendMsg) doesn't surface an empty
+        // sender.nickname in get_msg / get_group_msg_history. For a normal text
+        // send the echo still overwrites this with the same value.
+        nickname: ref.bridge.identity.nickname || '',
         sex: 'unknown',
         age: 0,
       },
