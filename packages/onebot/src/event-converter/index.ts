@@ -17,6 +17,7 @@ import {
   convertGroupMemberLeave,
   convertGroupMsgEmojiLike,
   convertGroupMute,
+  convertGroupNameChange,
   convertGroupPoke,
   convertGroupRecall,
 } from './to-notice';
@@ -80,6 +81,7 @@ const CONVERTERS: ConverterRegistry = {
   group_file_upload: convertGroupFileUpload,
   friend_add: convertFriendAdd,
   friend_input_status: convertFriendInputStatus,
+  group_name_change: convertGroupNameChange,
   group_msg_emoji_like: convertGroupMsgEmojiLike,
   // Requests.
   friend_request: convertFriendRequest,

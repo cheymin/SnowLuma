@@ -263,6 +263,14 @@ export interface GroupReactNotify {
   groupReactionData?: pb<44, GroupReactionData>;
 }
 
+// Group-name change (Event 0x2DC subType 16, NotifyMessageBody.field13 == 12).
+// Rides in `NotifyMessageBody.eventParam` (field 5). Field layout matches
+// Lagrange's `GroupNameChange` (RE'd from wrapper.linux.node): only the new
+// name at field 2. The operator uid is `NotifyMessageBody.operatorUid` (f21).
+export interface GroupNameChange {
+  name?: pb<2, string>;
+}
+
 // C2C input-status notify — the "对方正在输入…" push. Delivered as a system
 // message (msgType 0x210 / subMsgType 0x115) whose `MsgBody.msgContent` carries
 // this body. Field layout RE'd from `wrapper.linux.node`

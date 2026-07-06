@@ -18,6 +18,7 @@ type GroupFileUpload = Extract<QQEventVariant, { kind: 'group_file_upload' }>;
 type FriendAdd = Extract<QQEventVariant, { kind: 'friend_add' }>;
 type GroupMsgEmojiLike = Extract<QQEventVariant, { kind: 'group_msg_emoji_like' }>;
 type FriendInputStatus = Extract<QQEventVariant, { kind: 'friend_input_status' }>;
+type GroupNameChange = Extract<QQEventVariant, { kind: 'group_name_change' }>;
 
 export function convertGroupMemberJoin(ctx: ConverterContext, event: GroupMemberJoin): JsonObject {
   return notice(ctx, event, {
@@ -154,6 +155,18 @@ export function convertFriendAdd(ctx: ConverterContext, event: FriendAdd): JsonO
   return notice(ctx, event, {
     notice_type: 'friend_add',
     user_id: event.userUin,
+  });
+}
+
+export function convertGroupNameChange(ctx: ConverterContext, event: GroupNameChange): JsonObject {
+  // Mirrors NapCat's OB11GroupNameEvent: notify/group_name with the operator's
+  // uin as user_id and the new name in `name_new`.
+  return notice(ctx, event, {
+    notice_type: 'notify',
+    sub_type: 'group_name',
+    group_id: event.groupId,
+    user_id: event.operatorUin,
+    name_new: event.name,
   });
 }
 

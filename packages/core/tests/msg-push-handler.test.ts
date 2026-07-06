@@ -14,7 +14,7 @@ import type { GroupMemberInfo, QQGroupInfo } from '@snowluma/protocol/qq-info';
 // inline-extract the kind.
 import type {
   GroupChange, NewFriend, FriendRecall, OperatorInfo, SelfJoinInGroup, GroupAdmin,
-  InputStatusNotify,
+  InputStatusNotify, NotifyMessageBody, GroupNameChange,
 } from '@snowluma/proto-defs/notify';
 import type { PushMsg } from '@snowluma/proto-defs/message';
 import type {
@@ -296,6 +296,55 @@ describe('parseMsgPush Event0x210 subType=277 (input status → 对方正在输�
   it('drops a body with no fromUid (nothing to key user_id on)', () => {
     const events = parseMsgPush(
       makeEvent0x210PacketAny(277, protobuf_encode<InputStatusNotify>({ notifyItem: { eventType: 1 } })),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x2DC subType=16 field13=12 (group name change)', () => {
+  // RE cross-ref: Lagrange Event0x2DCSubType16Field13.GroupNameChangeNotice = 12,
+  // EventParam(f5) → GroupNameChange{f2=name}, operator = NotifyMessageBody.f21.
+  // The 0x2DC subType16 body carries a 7-byte prefix (groupUin+byte+len) before
+  // the NotifyMessageBody proto — the decoder strips it via subarray(7).
+  type GroupNameChangeEvent = Extract<QQEventVariant, { kind: 'group_name_change' }>;
+
+  function makeGroupNamePacket(groupUin: number, operatorUid: string, name: string): PacketInfo {
+    const notify = protobuf_encode<NotifyMessageBody>({
+      groupUin,
+      field13: 12,
+      operatorUid,
+      eventParam: protobuf_encode<GroupNameChange>({ name }),
+    });
+    const content = new Uint8Array(7 + notify.length); // 7-byte prefix + proto
+    content.set(notify, 7);
+    const body = protobuf_encode<PushMsg>({
+      message: {
+        responseHead: { fromUin: 0, type: 0, sigMap: 0 },
+        contentHead: { msgType: 732, subType: 16, timestamp: 1710000000 },
+        body: { msgContent: content },
+      },
+      status: 0,
+    });
+    return { pid: 1, uin: SELF_UIN, serviceCmd: MSG_PUSH_CMD, seqId: 1, retCode: 0, fromClient: false, body };
+  }
+
+  it('emits group_name_change with the new name + operator', () => {
+    const member = makeGroupMember(54321, 'u_operator');
+    const [event] = parseMsgPush(
+      makeGroupNamePacket(GROUP_ID, member.uid, '新的群名'),
+      makeIdentity([member]),
+    ) as GroupNameChangeEvent[];
+
+    expect(event.kind).toBe('group_name_change');
+    expect(event.groupId).toBe(GROUP_ID);
+    expect(event.name).toBe('新的群名');
+    expect(event.operatorUin).toBe(54321);
+  });
+
+  it('drops a name-change body with an empty name', () => {
+    const events = parseMsgPush(
+      makeGroupNamePacket(GROUP_ID, 'u_operator', ''),
       makeIdentity(),
     );
     expect(events).toEqual([]);

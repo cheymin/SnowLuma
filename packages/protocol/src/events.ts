@@ -295,6 +295,17 @@ export interface PttTransResultEvent extends QQEvent {
 }
 
 /**
+ * Group name changed (Event 0x2DC subType 16, field13 == 12). Mirrors NapCat's
+ * OB11GroupNameEvent → `notice/notify` `sub_type:'group_name'`.
+ */
+export interface GroupNameChangeEvent extends QQEvent {
+  kind: 'group_name_change';
+  groupId: number;
+  operatorUin: number; // who renamed the group
+  name: string;        // the new group name
+}
+
+/**
  * C2C "对方正在输入…" input-status push (Event 0x210 subType 0x115 / 277).
  * `eventType` 1 = typing, 3 = recording a voice message. Mirrors NapCat's
  * `onInputStatusPush` → OB11 `notice/notify` `sub_type:'input_status'`.
@@ -326,4 +337,5 @@ export type QQEventVariant =
   | FriendAddEvent
   | GroupMsgEmojiLikeEvent
   | PttTransResultEvent
-  | FriendInputStatusEvent;
+  | FriendInputStatusEvent
+  | GroupNameChangeEvent;
