@@ -308,6 +308,17 @@ export interface GroupCardChangeEvent extends QQEvent {
 }
 
 /**
+ * A group member was granted a special title (群头衔) — Event 0x2DC subType 16,
+ * field13 == 6. Maps to OB11 `notice/notify` `sub_type:'title'`.
+ */
+export interface GroupTitleChangeEvent extends QQEvent {
+  kind: 'group_title_change';
+  groupId: number;
+  userUin: number; // the member who received the title
+  title: string;
+}
+
+/**
  * Group name changed (Event 0x2DC subType 16, field13 == 12). Mirrors NapCat's
  * OB11GroupNameEvent → `notice/notify` `sub_type:'group_name'`.
  */
@@ -352,4 +363,5 @@ export type QQEventVariant =
   | PttTransResultEvent
   | FriendInputStatusEvent
   | GroupNameChangeEvent
-  | GroupCardChangeEvent;
+  | GroupCardChangeEvent
+  | GroupTitleChangeEvent;

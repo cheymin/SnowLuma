@@ -5,6 +5,7 @@ import type {
   GroupMsgEmojiLikeEvent,
   GroupMuteEvent,
   GroupNameChangeEvent,
+  GroupTitleChangeEvent,
   GroupPokeEvent,
   GroupRecallEvent,
   QQEventVariant,
@@ -12,6 +13,7 @@ import type {
 import type {
   GroupMute,
   GroupNameChange,
+  GroupSpecialTitleChange,
   GroupReactNotify,
   NotifyMessageBody,
 } from '@snowluma/proto-defs/notify';
@@ -129,17 +131,57 @@ const GROUP_REACT_DISCRIMINATOR = 35;
 // `NotifyMessageBody.field13`. RE cross-ref (Lagrange Event0x2DCSubType16Field13,
 // itself RE'd from wrapper.linux.node): 6=special title, 12=name change, 23=todo,
 // 35=emoji reaction. We peek field13 off the shared NotifyMessageBody, then branch.
+const SUBTYPE16_SPECIAL_TITLE = 6;
 const SUBTYPE16_GROUP_NAME_CHANGE = 12;
 
 function decodeSubType16(ctx: MsgPushContext): QQEventVariant[] {
   if (ctx.content.length <= GROUP_REACT_PREFIX_BYTES) return [];
   const field13 = protobuf_decode<NotifyMessageBody>(ctx.content.subarray(GROUP_REACT_PREFIX_BYTES))?.field13 ?? 0;
   switch (field13) {
+    case SUBTYPE16_SPECIAL_TITLE: return decodeGroupTitle(ctx);
     case SUBTYPE16_GROUP_NAME_CHANGE: return decodeGroupName(ctx);
     case GROUP_REACT_DISCRIMINATOR: return decodeGroupMsgEmojiLike(ctx);
     default:
       unknownLog.debug('Event0x2DC subType=16 unhandled field13=%d', field13);
       return [];
+  }
+}
+
+// field13 == 6: a member was granted a special title. eventParam carries the
+// member uin (f5) + a gray-tip template string (f2); the title text is the last
+// `<{"…","text":TITLE,…}>` rich token in that string (on-wire captured shape —
+// the kernel resolves the template to a clean string, we parse it here).
+function decodeGroupTitle(ctx: MsgPushContext): QQEventVariant[] {
+  const notify = protobuf_decode<NotifyMessageBody>(ctx.content.subarray(GROUP_REACT_PREFIX_BYTES));
+  const param = notify?.eventParam
+    ? protobuf_decode<GroupSpecialTitleChange>(notify.eventParam)
+    : undefined;
+  const userUin = param?.memberUin ?? 0;
+  const title = extractTitleFromTip(param?.tipText ?? '');
+  if (!userUin || !title) return [];
+  const ev: GroupTitleChangeEvent = {
+    kind: 'group_title_change',
+    time: ctx.head.timestamp,
+    selfUin: ctx.selfUin,
+    groupId: notify?.groupUin ?? 0,
+    userUin,
+    title,
+  };
+  return [ev];
+}
+
+// The tip text is "恭喜<{member}>获得群主授予的<{…"text":TITLE…}>头衔" — the title is
+// the `text` of the LAST `<{…}>` rich token (the one just before "头衔"). Tokens
+// are flat JSON with no `<`/`>` inside, so a non-greedy scan is safe.
+function extractTitleFromTip(text: string): string {
+  const tokens = text.match(/<\{[^<>]*\}>/g);
+  if (!tokens || tokens.length === 0) return '';
+  const last = tokens[tokens.length - 1];
+  try {
+    const parsed = JSON.parse(last.slice(1, -1)) as { text?: string };
+    return parsed.text ?? '';
+  } catch {
+    return '';
   }
 }
 

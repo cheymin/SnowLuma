@@ -20,6 +20,7 @@ type GroupMsgEmojiLike = Extract<QQEventVariant, { kind: 'group_msg_emoji_like' 
 type FriendInputStatus = Extract<QQEventVariant, { kind: 'friend_input_status' }>;
 type GroupNameChange = Extract<QQEventVariant, { kind: 'group_name_change' }>;
 type GroupCardChange = Extract<QQEventVariant, { kind: 'group_card_change' }>;
+type GroupTitleChange = Extract<QQEventVariant, { kind: 'group_title_change' }>;
 
 export function convertGroupMemberJoin(ctx: ConverterContext, event: GroupMemberJoin): JsonObject {
   return notice(ctx, event, {
@@ -168,6 +169,18 @@ export function convertGroupCardChange(ctx: ConverterContext, event: GroupCardCh
     user_id: event.userUin,
     card_new: event.cardNew,
     card_old: event.cardOld,
+  });
+}
+
+export function convertGroupTitleChange(ctx: ConverterContext, event: GroupTitleChange): JsonObject {
+  // Mirrors NapCat's OB11GroupTitleEvent: notify/title with the recipient's uin
+  // and the granted title text.
+  return notice(ctx, event, {
+    notice_type: 'notify',
+    sub_type: 'title',
+    group_id: event.groupId,
+    user_id: event.userUin,
+    title: event.title,
   });
 }
 

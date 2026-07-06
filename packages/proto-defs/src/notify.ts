@@ -271,6 +271,17 @@ export interface GroupNameChange {
   name?: pb<2, string>;
 }
 
+// Group special-title granted (Event 0x2DC subType 16, NotifyMessageBody.field13
+// == 6). Rides in `NotifyMessageBody.eventParam` (field 5). Field layout captured
+// on-wire: f2 = the gray-tip template text ("恭喜<{…}>获得群主授予的<{…"text":TITLE…}>头衔"),
+// f5 = the member uin who received the title. The title text itself is embedded in
+// the last `<{…}>` rich token of f2 (the kernel parses that template into a clean
+// string; on the raw wire we parse it ourselves).
+export interface GroupSpecialTitleChange {
+  tipText?:   pb<2, string>;
+  memberUin?: pb<5, uint_32>;
+}
+
 // C2C input-status notify — the "对方正在输入…" push. Delivered as a system
 // message (msgType 0x210 / subMsgType 0x115) whose `MsgBody.msgContent` carries
 // this body. Field layout RE'd from `wrapper.linux.node`

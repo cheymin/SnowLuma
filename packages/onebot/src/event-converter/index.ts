@@ -19,6 +19,7 @@ import {
   convertGroupMsgEmojiLike,
   convertGroupMute,
   convertGroupNameChange,
+  convertGroupTitleChange,
   convertGroupPoke,
   convertGroupRecall,
 } from './to-notice';
@@ -83,6 +84,7 @@ const CONVERTERS: ConverterRegistry = {
   friend_add: convertFriendAdd,
   friend_input_status: convertFriendInputStatus,
   group_name_change: convertGroupNameChange,
+  group_title_change: convertGroupTitleChange,
   group_card_change: convertGroupCardChange,
   group_msg_emoji_like: convertGroupMsgEmojiLike,
   // Requests.

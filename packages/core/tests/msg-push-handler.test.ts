@@ -14,7 +14,7 @@ import type { GroupMemberInfo, QQGroupInfo } from '@snowluma/protocol/qq-info';
 // inline-extract the kind.
 import type {
   GroupChange, NewFriend, FriendRecall, OperatorInfo, SelfJoinInGroup, GroupAdmin,
-  InputStatusNotify, NotifyMessageBody, GroupNameChange,
+  InputStatusNotify, NotifyMessageBody, GroupNameChange, GroupSpecialTitleChange,
 } from '@snowluma/proto-defs/notify';
 import type { PushMsg } from '@snowluma/proto-defs/message';
 import type {
@@ -296,6 +296,56 @@ describe('parseMsgPush Event0x210 subType=277 (input status → 对方正在输�
   it('drops a body with no fromUid (nothing to key user_id on)', () => {
     const events = parseMsgPush(
       makeEvent0x210PacketAny(277, protobuf_encode<InputStatusNotify>({ notifyItem: { eventType: 1 } })),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x2DC subType=16 field13=6 (group special title)', () => {
+  // Built from a REAL on-wire capture: eventParam f2 = the gray-tip template
+  // "恭喜<{member}>获得群主授予的<{…"text":TITLE…}>头衔", f5 = member uin. The title
+  // is the last <{…}> token's text.
+  type GroupTitleChangeEvent = Extract<QQEventVariant, { kind: 'group_title_change' }>;
+
+  const TIP = '恭喜<{"cmd":5,"data":"3433035623","text":"星屿"}>获得群主授予的'
+    + '<{"cmd":1,"data":"https://qun.qq.com/x?medal=302&uin=3433035623","text":"摸鱼冠军",'
+    + '"url":"https://qun.qq.com/x?medal=302&uin=3433035623"}>头衔';
+
+  function makeTitlePacket(memberUin: number, tip: string): PacketInfo {
+    const notify = protobuf_encode<NotifyMessageBody>({
+      groupUin: GROUP_ID,
+      field13: 6,
+      eventParam: protobuf_encode<GroupSpecialTitleChange>({ tipText: tip, memberUin }),
+    });
+    const content = new Uint8Array(7 + notify.length);
+    content.set(notify, 7);
+    const body = protobuf_encode<PushMsg>({
+      message: {
+        responseHead: { fromUin: 0, type: 0, sigMap: 0 },
+        contentHead: { msgType: 732, subType: 16, timestamp: 1710000000 },
+        body: { msgContent: content },
+      },
+      status: 0,
+    });
+    return { pid: 1, uin: SELF_UIN, serviceCmd: MSG_PUSH_CMD, seqId: 1, retCode: 0, fromClient: false, body };
+  }
+
+  it('emits group_title_change with the granted title + member', () => {
+    const [event] = parseMsgPush(
+      makeTitlePacket(22222, TIP),
+      makeIdentity([makeGroupMember(22222, 'u_member')]),
+    ) as GroupTitleChangeEvent[];
+
+    expect(event.kind).toBe('group_title_change');
+    expect(event.groupId).toBe(GROUP_ID);
+    expect(event.userUin).toBe(22222);
+    expect(event.title).toBe('摸鱼冠军'); // last <{…}> token's text
+  });
+
+  it('drops a title tip with no parseable title token', () => {
+    const events = parseMsgPush(
+      makeTitlePacket(22222, '恭喜获得头衔'),
       makeIdentity(),
     );
     expect(events).toEqual([]);
