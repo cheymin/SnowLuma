@@ -33,6 +33,7 @@ function fakeBridge(overrides: Partial<BridgeInterface> = {}): BridgeInterface {
 function makeCtx(bridge: BridgeInterface): OneBotInstanceContext {
   return {
     uin: '10001',
+    selfId: 10001,
     bridge,
     messageStore: { findEvent: () => null } as any,
     cacheMessageMeta: vi.fn(),
@@ -216,5 +217,28 @@ describe('forward — nested {type:"node"} content', () => {
     const [nodes] = uploadForwardNodes.mock.calls[0]!;
     const elements = (nodes as any[])[0]!.elements;
     expect(elements.some((e: any) => e.type === 'text' && e.text === 'a sibling')).toBe(true);
+  });
+
+  it('[#203] node with user_id "0" or missing falls back to the bot self_id', async () => {
+    // Upstream frameworks (AstrBot etc.) send fake forward nodes with
+    // user_id "0" or omit it; the protocol端 knows self_id, so default to it
+    // instead of rejecting (matches NapCat/LLBot + the core builder).
+    const uploadForwardNodes = vi.fn(async (_nodes: any[]) => 'RESID');
+    const sendGroupMessage = vi.fn(async () => ({
+      messageId: 1, sequence: 100, clientSequence: 0, random: 1, timestamp: 1700000000,
+    }));
+    const bridge = fakeBridge({ apis: { message: { sendGroup: sendGroupMessage }, forward: { upload: uploadForwardNodes } } } as any);
+    const ctx = makeCtx(bridge);
+
+    const messages = [
+      { type: 'node', data: { user_id: '0', nickname: 'PixivBot', content: [{ type: 'text', data: { text: 'a' } }] } },
+      { type: 'node', data: { nickname: 'PixivBot', content: [{ type: 'text', data: { text: 'b' } }] } }, // user_id omitted
+    ];
+
+    await sendGroupForwardMessage(ctx, 12345, messages as any);
+    const [nodes] = uploadForwardNodes.mock.calls[0]!;
+    expect((nodes as any[])[0].userUin).toBe(10001);       // "0" → self_id
+    expect((nodes as any[])[0].nickname).toBe('PixivBot');  // custom nickname preserved
+    expect((nodes as any[])[1].userUin).toBe(10001);       // omitted → self_id
   });
 });

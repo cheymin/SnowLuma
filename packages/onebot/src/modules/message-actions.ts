@@ -1193,7 +1193,13 @@ async function parseForwardNodes(
       continue;
     }
 
-    const userUin = toPositiveInt(nodeData.user_id ?? nodeData.uin);
+    // [#203] A fake forward node may omit user_id or send "0" — upstream
+    // frameworks (AstrBot, etc.) don't manage QQ uins. The protocol端 is logged
+    // in and the core builder already defaults a zero sender to the bot's own
+    // uin (bridge/apis/forward.ts buildForwardPushBody), so match that leniency
+    // here instead of rejecting. The throw stays as a guard for the not-logged-in
+    // case (selfId 0).
+    const userUin = toPositiveInt(nodeData.user_id ?? nodeData.uin) || ref.selfId;
     if (userUin <= 0) throw new Error('forward node user_id/uin is required');
 
     const nickname = String(nodeData.nickname ?? nodeData.name ?? userUin);

@@ -123,6 +123,56 @@ describe('video-upload', () => {
     expect((c2cInfo[0] as any).fileInfo.height).toBe(0);
   });
 
+  it('[#145] fast-upload with 0x0 dims (e.g. forwarding a dimensionless video) falls back to portrait for group', async () => {
+    // A forwarded video whose cached dims are 0 must NOT ship 0x0 to a group
+    // (→ 文件已过期). videoPayloadFromFingerprint substitutes a neutral 720x1280
+    // portrait; c2c stays 0 (server rejects non-zero there).
+    const noDims = { ...FINGERPRINT, width: 0, height: 0 } as any;
+    await uploadVideoMsgInfo({} as any, true, 12345, noDims);
+    const groupInfo = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((groupInfo[0] as any).fileInfo.width).toBe(720);
+    expect((groupInfo[0] as any).fileInfo.height).toBe(1280);
+
+    vi.mocked(pipeline.runNtv2Upload).mockClear();
+    await uploadVideoMsgInfo({} as any, false, 'recipient-uid', noDims);
+    const c2cInfo = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((c2cInfo[0] as any).fileInfo.width).toBe(0);
+    expect((c2cInfo[0] as any).fileInfo.height).toBe(0);
+  });
+
+  it('[#145] zero-trust: fallback cover declared dims equal the video fallback (content == declared)', async () => {
+    // The fast-upload cover is a real 720x1280 image; the thumb sub-file must
+    // declare those same pixels, not a 1x1 lying about its size, and they match
+    // the video fallback so tile + cover agree.
+    const noDims = { ...FINGERPRINT, width: 0, height: 0 } as any;
+    await uploadVideoMsgInfo({} as any, true, 12345, noDims);
+    const info = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((info[0] as any).fileInfo.width).toBe(720);   // video tile
+    expect((info[0] as any).fileInfo.height).toBe(1280);
+    expect((info[1] as any).fileInfo.width).toBe(720);   // cover sub-file (subFileType 100)
+    expect((info[1] as any).fileInfo.height).toBe(1280);
+  });
+
+  it('[#145] zero-trust: cached duration 0 → time 1, never 00:00', async () => {
+    const noDur = { ...FINGERPRINT, duration: 0 } as any;
+    await uploadVideoMsgInfo({} as any, true, 12345, noDur);
+    const info = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((info[0] as any).fileInfo.time).toBe(1);
+  });
+
+  it('[#145] real video dims are preserved on the main file even though the cover is the 720x1280 fallback', async () => {
+    // FINGERPRINT has real 320x240 dims; the fast-upload cover is always the
+    // 720x1280 fallback (no real cover cached on the forward path). The video
+    // tile keeps the real dims — the cover/tile aspect mismatch is tolerated,
+    // only a 0x0 MAIN file triggers 文件已过期.
+    await uploadVideoMsgInfo({} as any, true, 12345, FINGERPRINT);
+    const info = vi.mocked(pipeline.runNtv2Upload).mock.calls[0]![0].uploadInfo;
+    expect((info[0] as any).fileInfo.width).toBe(320);   // main video: real dims preserved
+    expect((info[0] as any).fileInfo.height).toBe(240);
+    expect((info[1] as any).fileInfo.width).toBe(720);   // cover: fallback
+    expect((info[1] as any).fileInfo.height).toBe(1280);
+  });
+
   it('main video carries the real `time` (duration in seconds) — regression: was 0', async () => {
     // NTV2 server bakes the `time` field into the resulting MsgInfo
     // bytes that ride along as `commonElem.pbElem`; the receiver
