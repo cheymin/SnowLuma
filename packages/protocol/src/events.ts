@@ -330,6 +330,18 @@ export interface GroupNameChangeEvent extends QQEvent {
 }
 
 /**
+ * Someone liked the bot's profile card ("名片赞") — Event 0x210 subType 39,
+ * inner ProfileLikeTip msgType 0 / subType 203. Mirrors NapCat's
+ * OB11ProfileLikeEvent → `notice/notify` `sub_type:'profile_like'`.
+ */
+export interface FriendProfileLikeEvent extends QQEvent {
+  kind: 'friend_profile_like';
+  operatorUin: number;   // who liked
+  operatorNick: string;
+  times: number;         // like count from this event
+}
+
+/**
  * C2C "对方正在输入…" input-status push (Event 0x210 subType 0x115 / 277).
  * `eventType` 1 = typing, 3 = recording a voice message. Mirrors NapCat's
  * `onInputStatusPush` → OB11 `notice/notify` `sub_type:'input_status'`.
@@ -364,4 +376,5 @@ export type QQEventVariant =
   | FriendInputStatusEvent
   | GroupNameChangeEvent
   | GroupCardChangeEvent
-  | GroupTitleChangeEvent;
+  | GroupTitleChangeEvent
+  | FriendProfileLikeEvent;

@@ -282,6 +282,33 @@ export interface GroupSpecialTitleChange {
   memberUin?: pb<5, uint_32>;
 }
 
+// Profile-like ("名片赞") notify — Event 0x210 subType 39, whose body.msgContent
+// decodes as this ProfileLikeTip. subType 39 is multiplexed; only inner
+// msgType==0 && subType==203 is a like. NOTE: proto shape sourced from NapCat's
+// raw-bytes decoder (adaptDecoder.ts) — semantics only; pending a real like
+// capture to confirm byte-exactly. times is parsed from `detail.txt`.
+export interface ProfileLikeDetail {
+  txt?:      pb<1, string>;
+  uin?:      pb<3, uint_64>;
+  nickname?: pb<5, string>;
+}
+
+export interface ProfileLikeMsg {
+  times?:  pb<1, int_32>;
+  time?:   pb<2, int_32>;
+  detail?: pb<3, ProfileLikeDetail>;
+}
+
+export interface ProfileLikeSubTip {
+  msg?: pb<14, ProfileLikeMsg>;
+}
+
+export interface ProfileLikeTip {
+  msgType?: pb<1, int_32>;
+  subType?: pb<2, int_32>;
+  content?: pb<203, ProfileLikeSubTip>;
+}
+
 // C2C input-status notify — the "对方正在输入…" push. Delivered as a system
 // message (msgType 0x210 / subMsgType 0x115) whose `MsgBody.msgContent` carries
 // this body. Field layout RE'd from `wrapper.linux.node`

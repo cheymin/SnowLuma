@@ -12,6 +12,7 @@ import type {
   GeneralGrayTipInfo,
   InputStatusNotify,
   NewFriend,
+  ProfileLikeTip,
 } from '@snowluma/proto-defs/notify';
 import type { PttTransPush } from '@snowluma/proto-defs/ptt-trans';
 import type { MsgPushContext } from '../context';
@@ -25,6 +26,7 @@ import type { MsgPushDecoder } from '../registry';
 
 type FriendRecallEvent = Extract<QQEventVariant, { kind: 'friend_recall' }>;
 type FriendInputStatusEvent = Extract<QQEventVariant, { kind: 'friend_input_status' }>;
+type FriendProfileLikeEvent = Extract<QQEventVariant, { kind: 'friend_profile_like' }>;
 
 const unknownLog = createLogger('MsgPush.Unknown');
 
@@ -40,6 +42,7 @@ export const decodeEvent0x210: MsgPushDecoder = (ctx) => {
       return decodeFriendRecall(ctx);
     case Event0x210SubType.FriendPokeNotice: return decodeFriendPoke(ctx);
     case Event0x210SubType.InputStatusNotice: return decodeInputStatus(ctx);
+    case Event0x210SubType.ProfileLikeNotice: return decodeProfileLike(ctx);
     // 179 + 226 both carry the NewFriend payload — see enum comment.
     case Event0x210SubType.NewFriendNotice:
     case Event0x210SubType.NewFriendNoticeAlt:
@@ -157,6 +160,32 @@ function decodeInputStatus(ctx: MsgPushContext): QQEventVariant[] {
 // The client's own strings (wrapper.linux.node @0xB8FFE0 / @0xB90000).
 function inputStatusText(eventType: number): string {
   return eventType === 3 ? '对方正在讲话...' : '对方正在输入...';
+}
+
+// subType 39 is multiplexed; body.msgContent decodes as ProfileLikeTip and is a
+// profile-like ("名片赞") only when inner msgType==0 && subType==203. Other 39
+// variants (multi-device sync etc.) decode to a non-matching tip → dropped.
+// `times` is the like count parsed out of `detail.txt`. Proto shape from NapCat's
+// raw-bytes decoder — pending a real like capture to validate byte-exactly.
+function decodeProfileLike(ctx: MsgPushContext): QQEventVariant[] {
+  const tip = protobuf_decode<ProfileLikeTip>(ctx.content);
+  // msgType 0 is the proto default → omitted on the wire → decodes as undefined,
+  // so treat missing as 0 (matches NapCat's `msgType !== 0` check).
+  if (!tip || (tip.msgType ?? 0) !== 0 || (tip.subType ?? 0) !== 203) return [];
+  const msg = tip.content?.msg;
+  const detail = msg?.detail;
+  const operatorUin = Number(detail?.uin ?? 0n);
+  if (!operatorUin) return [];
+  const times = Number.parseInt((detail?.txt ?? '').match(/\d+/)?.[0] ?? '0', 10) || 0;
+  const ev: FriendProfileLikeEvent = {
+    kind: 'friend_profile_like',
+    time: msg?.time || ctx.head.timestamp,
+    selfUin: ctx.selfUin,
+    operatorUin,
+    operatorNick: detail?.nickname ?? '',
+    times,
+  };
+  return [ev];
 }
 
 function decodeFriendPoke(ctx: MsgPushContext): QQEventVariant[] {

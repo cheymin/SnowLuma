@@ -71,6 +71,7 @@ const NOTICE_KINDS = [
   'group_file_upload',
   'friend_add',
   'friend_input_status',
+  'friend_profile_like',
   'group_name_change',
   'group_title_change',
   'group_card_change',

@@ -15,6 +15,7 @@ import type { GroupMemberInfo, QQGroupInfo } from '@snowluma/protocol/qq-info';
 import type {
   GroupChange, NewFriend, FriendRecall, OperatorInfo, SelfJoinInGroup, GroupAdmin,
   InputStatusNotify, NotifyMessageBody, GroupNameChange, GroupSpecialTitleChange,
+  ProfileLikeTip,
 } from '@snowluma/proto-defs/notify';
 import type { PushMsg } from '@snowluma/proto-defs/message';
 import type {
@@ -296,6 +297,46 @@ describe('parseMsgPush Event0x210 subType=277 (input status → 对方正在输�
   it('drops a body with no fromUid (nothing to key user_id on)', () => {
     const events = parseMsgPush(
       makeEvent0x210PacketAny(277, protobuf_encode<InputStatusNotify>({ notifyItem: { eventType: 1 } })),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x210 subType=39 (profile like → 名片赞)', () => {
+  // 0x210/39 is multiplexed; body.msgContent decodes as ProfileLikeTip and is a
+  // like only when inner msgType==0 && subType==203. Proto shape from NapCat's
+  // raw-bytes decoder (pending a real like capture to validate byte-exactly).
+  type FriendProfileLikeEvent = Extract<QQEventVariant, { kind: 'friend_profile_like' }>;
+
+  function makeLikePacket(opts: { msgType?: number; subType?: number; uin?: number; nick?: string; txt?: string; time?: number }): PacketInfo {
+    const content = protobuf_encode<ProfileLikeTip>({
+      msgType: opts.msgType ?? 0,
+      subType: opts.subType ?? 203,
+      content: { msg: {
+        time: opts.time ?? 1710001111,
+        detail: { txt: opts.txt ?? '', uin: BigInt(opts.uin ?? 0), nickname: opts.nick ?? '' },
+      } },
+    });
+    return makeEvent0x210PacketAny(39, content);
+  }
+
+  it('emits friend_profile_like with liker uin, nick and parsed count', () => {
+    const [event] = parseMsgPush(
+      makeLikePacket({ uin: 1787882683, nick: '東雪蓮', txt: '赞了你3次' }),
+      makeIdentity(),
+    ) as FriendProfileLikeEvent[];
+
+    expect(event.kind).toBe('friend_profile_like');
+    expect(event.operatorUin).toBe(1787882683);
+    expect(event.operatorNick).toBe('東雪蓮');
+    expect(event.times).toBe(3);
+    expect(event.time).toBe(1710001111);
+  });
+
+  it('ignores a non-like 39 variant (inner subType != 203)', () => {
+    const events = parseMsgPush(
+      makeLikePacket({ subType: 999, uin: 1787882683 }),
       makeIdentity(),
     );
     expect(events).toEqual([]);
