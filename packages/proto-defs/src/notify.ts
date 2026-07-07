@@ -284,9 +284,9 @@ export interface GroupSpecialTitleChange {
 
 // Profile-like ("名片赞") notify — Event 0x210 subType 39, whose body.msgContent
 // decodes as this ProfileLikeTip. subType 39 is multiplexed; only inner
-// msgType==0 && subType==203 is a like. NOTE: proto shape sourced from NapCat's
-// raw-bytes decoder (adaptDecoder.ts) — semantics only; pending a real like
-// capture to confirm byte-exactly. times is parsed from `detail.txt`.
+// msgType==0 && subType==203 is a like. Field numbers CONFIRMED byte-exact against
+// real on-wire captures (detail.txt = "赞了我的资料卡N次", f3=liker uin, f5=nick);
+// the like count is parsed from `detail.txt`.
 export interface ProfileLikeDetail {
   txt?:      pb<1, string>;
   uin?:      pb<3, uint_64>;

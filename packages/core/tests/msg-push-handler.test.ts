@@ -322,15 +322,16 @@ describe('parseMsgPush Event0x210 subType=39 (profile like → 名片赞)', () =
   }
 
   it('emits friend_profile_like with liker uin, nick and parsed count', () => {
+    // txt shape taken from a real capture: "赞了我的资料卡N次".
     const [event] = parseMsgPush(
-      makeLikePacket({ uin: 1787882683, nick: '東雪蓮', txt: '赞了你3次' }),
+      makeLikePacket({ uin: 1206069534, nick: '墨白灵MotricLuck', txt: '赞了我的资料卡2次' }),
       makeIdentity(),
     ) as FriendProfileLikeEvent[];
 
     expect(event.kind).toBe('friend_profile_like');
-    expect(event.operatorUin).toBe(1787882683);
-    expect(event.operatorNick).toBe('東雪蓮');
-    expect(event.times).toBe(3);
+    expect(event.operatorUin).toBe(1206069534);
+    expect(event.operatorNick).toBe('墨白灵MotricLuck');
+    expect(event.times).toBe(2);
     expect(event.time).toBe(1710001111);
   });
 

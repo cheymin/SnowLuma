@@ -165,8 +165,8 @@ function inputStatusText(eventType: number): string {
 // subType 39 is multiplexed; body.msgContent decodes as ProfileLikeTip and is a
 // profile-like ("名片赞") only when inner msgType==0 && subType==203. Other 39
 // variants (multi-device sync etc.) decode to a non-matching tip → dropped.
-// `times` is the like count parsed out of `detail.txt`. Proto shape from NapCat's
-// raw-bytes decoder — pending a real like capture to validate byte-exactly.
+// `times` is the like count parsed out of `detail.txt` ("赞了我的资料卡N次").
+// Field layout confirmed byte-exact against real on-wire captures.
 function decodeProfileLike(ctx: MsgPushContext): QQEventVariant[] {
   const tip = protobuf_decode<ProfileLikeTip>(ctx.content);
   // msgType 0 is the proto default → omitted on the wire → decodes as undefined,
