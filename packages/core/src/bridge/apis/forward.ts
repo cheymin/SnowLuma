@@ -163,7 +163,9 @@ async function buildForwardPushBody(
       subType: 4,
       msgId: random,
       sequence: seq,
-      timestamp: now,
+      // Honour a custom per-node display time (#209); default to now. `now`
+      // still drives the c2c-file expireTime above, which must stay real.
+      timestamp: node.time && node.time > 0 ? node.time : now,
       c2cCmd: 0,
     },
     body: {

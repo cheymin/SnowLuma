@@ -97,6 +97,31 @@ describe('forward — nested {type:"node"} content', () => {
     expect(sendGroupMessage).toHaveBeenCalledOnce();
   });
 
+  it('threads an explicit data.time onto the node payload, leaving absent ones for the default (#209)', async () => {
+    const uploadForwardNodes = vi.fn(async (_nodes: any[], _groupId?: number, _userId?: number) => 'RESID');
+    const sendGroupMessage = vi.fn(async () => ({
+      messageId: 1, sequence: 100, clientSequence: 0, random: 1, timestamp: 1700000000,
+    }));
+
+    const bridge = fakeBridge({ apis: { message: { sendGroup: sendGroupMessage }, forward: { upload: uploadForwardNodes } } } as any);
+    const ctx = makeCtx(bridge);
+
+    const messages = [
+      { type: 'node', data: { user_id: 111, nickname: 'a', time: 1600000000, content: [{ type: 'text', data: { text: 'hi' } }] } },
+      { type: 'node', data: { user_id: 222, nickname: 'b', content: [{ type: 'text', data: { text: 'yo' } }] } },
+      { type: 'node', data: { user_id: 333, nickname: 'c', time: 1700000000000, content: [{ type: 'text', data: { text: 'ms' } }] } }, // ms → out of uint32 range
+      { type: 'node', data: { user_id: 444, nickname: 'd', time: -5, content: [{ type: 'text', data: { text: 'neg' } }] } },
+    ];
+
+    await sendGroupForwardMessage(ctx, 12345, messages as any);
+
+    const [nodes] = uploadForwardNodes.mock.calls[0]!;
+    expect((nodes as any[])[0].time).toBe(1600000000); // explicit seconds carried through
+    expect((nodes as any[])[1].time).toBeUndefined();   // absent → default to now
+    expect((nodes as any[])[2].time).toBeUndefined();   // millisecond input rejected (uint32 overflow guard)
+    expect((nodes as any[])[3].time).toBeUndefined();   // negative rejected → default to now
+  });
+
   it('private: nested forward threads userId into uploadForwardNodes', async () => {
     // Same shape but routed via sendPrivateForwardMessage. The c2c path
     // passes `userId` instead of `groupId` so the upload pipeline can

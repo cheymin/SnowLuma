@@ -14,12 +14,25 @@ vi.mock('@snowluma/protocol/element-builder', () => ({
   buildSendElems: vi.fn(async () => []),
 }));
 
-import { gzipSync } from 'zlib';
-import { protobuf_encode } from '@snowluma/proton';
-import type { SendLongMsgResp, LongMsgResult, RecvLongMsgResp } from '@snowluma/proto-defs/longmsg';
+import { gunzipSync, gzipSync } from 'zlib';
+import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
+import type { SendLongMsgReq, SendLongMsgResp, LongMsgResult, RecvLongMsgResp } from '@snowluma/proto-defs/longmsg';
 import type { PushMsgBody } from '@snowluma/proto-defs/message';
 import { ForwardApi } from '../../src/bridge/apis/forward';
 import { mockBridge } from './_helpers';
+
+/** Decode the SsoSendLongMsg packet body back into the per-node contentHead
+ *  timestamps of the MultiMsg action — how #209's custom time is verified on
+ *  the wire. */
+function sentNodeTimestamps(body: Uint8Array): number[] {
+  const req = protobuf_decode<SendLongMsgReq>(body);
+  const payload = req.info?.payload;
+  if (!payload) return [];
+  const longMsg = protobuf_decode<LongMsgResult>(gunzipSync(Buffer.from(payload)));
+  const main = longMsg.action?.find((a) => a?.actionCommand === 'MultiMsg');
+  const bodies = Array.isArray(main?.actionData?.msgBody) ? main!.actionData!.msgBody : [];
+  return bodies.map((b) => Number(b.contentHead?.timestamp ?? 0));
+}
 
 function uploadResponseWithResId(resId: string) {
   const encoded = protobuf_encode<SendLongMsgResp>({ result: { resId } });
@@ -63,6 +76,25 @@ describe('actions/forward', () => {
     const [serviceCmd, body] = bridge.sendRawPacket.mock.calls[0]!;
     expect(serviceCmd).toBe('trpc.group.long_msg_interface.MsgService.SsoSendLongMsg');
     expect((body as Uint8Array).length).toBeGreaterThan(0);
+  });
+
+  it('honours a custom per-node time on the wire, and defaults to now when absent (#209)', async () => {
+    const bridge = mockBridge({
+      sendRawPacket: vi.fn(async () => uploadResponseWithResId('res-time')) as any,
+    });
+
+    const customTime = 1600000000; // 2020-09-13, clearly not "now"
+    await new ForwardApi(bridge as any).upload([
+      { userUin: 10001, nickname: 'alice', elements: [], time: customTime },
+      { userUin: 10002, nickname: 'bob', elements: [] }, // no time → fallback
+    ]);
+
+    const [, body] = bridge.sendRawPacket.mock.calls[0]!;
+    const [tsAlice, tsBob] = sentNodeTimestamps(body as Uint8Array);
+
+    expect(tsAlice).toBe(customTime);
+    // Bob falls back to the current time (seconds).
+    expect(Math.abs(tsBob - Math.floor(Date.now() / 1000))).toBeLessThan(5);
   });
 
   it('uploadForwardNodes throws when sendRawPacket reports failure', async () => {
