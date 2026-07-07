@@ -265,7 +265,7 @@ export function ProcessesPage() {
           onOpenChange={(open) => !open && setProbeDialog(null)}
           onLoad={() => {
             if (probeDialog) {
-              void load(probeDialog.pid);
+              setConfirm({ kind: 'load', pid: probeDialog.pid, name: probeDialog.name });
               setProbeDialog(null);
             }
           }}
