@@ -25,12 +25,15 @@ function IconBtn({ onClick, title, children }: { onClick: () => void; title: str
   );
 }
 
-function StatusPill({ status }: { status: 'open' | 'reconnecting' | 'closed' }) {
-  const map = {
-    open: { dot: 'bg-emerald-500', label: '已连接', glow: 'shadow-[0_0_0_3px_rgb(16_185_129/0.15)]' },
-    reconnecting: { dot: 'bg-amber-500', label: '重连中', glow: 'shadow-[0_0_0_3px_rgb(245_158_11/0.15)]' },
-    closed: { dot: 'bg-muted-foreground/50', label: '未连接', glow: '' },
-  }[status];
+function StatusPill({ status, paused }: { status: 'open' | 'reconnecting' | 'closed'; paused?: boolean }) {
+  // A deliberate pause reads as "已暂停", distinct from an unwanted disconnect.
+  const map = paused
+    ? { dot: 'bg-muted-foreground/50', label: '已暂停', glow: '' }
+    : {
+      open: { dot: 'bg-emerald-500', label: '已连接', glow: 'shadow-[0_0_0_3px_rgb(16_185_129/0.15)]' },
+      reconnecting: { dot: 'bg-amber-500', label: '重连中', glow: 'shadow-[0_0_0_3px_rgb(245_158_11/0.15)]' },
+      closed: { dot: 'bg-muted-foreground/50', label: '未连接', glow: '' },
+    }[status];
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs font-medium backdrop-blur-sm">
       <span className={cn('h-2 w-2 rounded-full', map.dot, map.glow)} />
@@ -94,14 +97,18 @@ export function LiveActivity() {
   const [status, setStatus] = useState<'open' | 'reconnecting' | 'closed'>('closed');
   const [kindFilter, setKindFilter] = useState<'all' | 'event' | 'action'>('all');
   const [query, setQuery] = useState('');
-  const pausedRef = useRef(paused);
-  useEffect(() => { pausedRef.current = paused; }, [paused]);
   const idRef = useRef(0);
 
+  // Pausing truly drops the EventSource instead of connecting-and-discarding:
+  // `paused` is an effect dependency, so it closes the stream on pause and
+  // reopens it on resume. (The always-on-across-tabs behaviour is intentional —
+  // debug-page keeps this mounted so actions fired from other tabs still land in
+  // the feed — so only an explicit pause severs the connection.)
   useEffect(() => {
+    if (paused) return;
     const off = api.debug.stream(
       (m) => {
-        if (m.kind === 'ready' || pausedRef.current) return;
+        if (m.kind === 'ready') return;
         setRows((prev) => {
           // Precompute the search haystack once at enqueue, so filtering never
           // re-stringifies every row on each keystroke.
@@ -112,7 +119,7 @@ export function LiveActivity() {
       (s) => setStatus(s),
     );
     return off;
-  }, [api]);
+  }, [paused, api]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -149,7 +156,7 @@ export function LiveActivity() {
           <RadioTower className="h-[18px] w-[18px] text-primary" />
           <h2 className="text-[15px] font-semibold tracking-tight">实时活动</h2>
           <span className="text-xs text-muted-foreground tabular-nums">{visible.length}</span>
-          <StatusPill status={status} />
+          <StatusPill status={status} paused={paused} />
         </div>
         <div className="flex items-center gap-2">
           <Segmented value={kindFilter} onChange={setKindFilter}
