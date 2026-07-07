@@ -68,6 +68,23 @@ export enum Event0x210SubType {
   NewFriendNotice = 179,
   NewFriendNoticeAlt = 226,
   /**
+   * Multiplexed subType (Lagrange calls it FriendDeleteOrPinChanged=39). One of
+   * its variants is the profile-like ("名片赞") push: body.msgContent decodes as
+   * `ProfileLikeTip` and is a like only when inner msgType==0 && subType==203.
+   * NapCat routes 528/39 → parseLikeEvent (`api/msg.ts:1547`); other 39 variants
+   * (multi-device sync etc.) fall through.
+   */
+  ProfileLikeNotice = 39,
+  /**
+   * C2C input-status notify — the "对方正在输入…" push. subMsgType 0x115 (277).
+   * RE-confirmed against `wrapper.linux.node`
+   * `aio_input_state_worker.cc::IsInputStateNotifySysMsg`, which matches exactly
+   * `(msg_type ^ 0x210) | (sub_msg_type ^ 0x115) == 0`. The payload
+   * (`InputStatusNotify`) rides in `body.msgContent`. Mirrors NapCat's
+   * `onInputStatusPush`.
+   */
+  InputStatusNotice = 277,
+  /**
    * Group-app state push (troop shortcut bar / discussion app).
    *
    * Sourced from the decompiled stock QQ Android client decoder at

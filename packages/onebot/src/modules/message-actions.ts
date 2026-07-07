@@ -1240,6 +1240,12 @@ async function parseForwardNodes(
     }
 
     const node: ForwardNodePayload = { userUin, nickname, elements };
+    // Honour an explicit per-node display time (OneBot `data.time`, unix
+    // seconds) so a custom forward can set/back-date each node's timestamp
+    // (#209). The wire field is uint32, so reject a millisecond value or any
+    // out-of-range input (it would overflow/throw) and fall back to now.
+    const nodeTime = toPositiveInt(nodeData.time);
+    if (nodeTime > 0 && nodeTime < 0xffffffff) node.time = nodeTime;
     if (innerForward) node.innerForward = innerForward;
     nodes.push(node);
   }

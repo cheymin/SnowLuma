@@ -104,7 +104,12 @@ export class IncomingPacketPipeline {
                 err instanceof Error ? (err.stack ?? err.message) : String(err));
             });
           } else {
+            // Snapshot the sender's cached group card BEFORE dispatch — the
+            // side-effects inside finishDispatch self-heal (overwrite) it, so we
+            // must read it first to detect a real change and surface group_card.
+            const cardBefore = this.groupCardBefore(event);
             this.finishDispatch(event);
+            this.emitGroupCardChange(event, cardBefore);
           }
         }
       } catch (e) {
@@ -117,6 +122,32 @@ export class IncomingPacketPipeline {
     // Fire-and-forget: errors inside subscribers are surfaced via the bus's
     // own onError hook so one bad listener never blocks the others.
     void this.deps.events.emit(event);
+  }
+
+  /** The sender's cached group card just before this event is dispatched (its
+   *  side-effects will overwrite the cache). Only meaningful for group_message. */
+  private groupCardBefore(event: QQEventVariant): string | undefined {
+    if (event.kind !== 'group_message') return undefined;
+    return this.deps.identity.findGroupMember(event.groupId, event.senderUin)?.card;
+  }
+
+  /** Surface a `group_card_change` when a KNOWN member's card actually changed —
+   *  mirrors NapCat's `parseCardChangedEvent`. Requires a non-empty prior card
+   *  (`cardBefore`) that differs from a non-empty new one, so a cold/unknown
+   *  cache never fabricates a change on first contact. */
+  private emitGroupCardChange(event: QQEventVariant, cardBefore: string | undefined): void {
+    if (event.kind !== 'group_message') return;
+    const cardNew = event.senderCard ?? '';
+    if (!cardBefore || !cardNew || cardBefore === cardNew) return;
+    this.finishDispatch({
+      kind: 'group_card_change',
+      time: event.time,
+      selfUin: event.selfUin,
+      groupId: event.groupId,
+      userUin: event.senderUin,
+      cardNew,
+      cardOld: cardBefore,
+    });
   }
 
   /**

@@ -8,10 +8,17 @@ import {
 } from '../event-filter';
 import type { JsonObject, WsClientNetwork, WsRole } from '../types';
 import { IOneBotNetworkAdapter, type AdapterStatus, type NetworkAdapterContext } from './adapter';
-import { rawDataToString, safeClose, safeSend, safeSendAsync } from './utils';
+import { rawDataToString, safeClose, safeSend, safeSendAsync, startHeartbeat } from './utils';
 
 const moduleLog = createLogger('OneBot.WS-Client');
 const DEFAULT_RECONNECT_INTERVAL_MS = 5000;
+// Transport-level keepalive: ping every 30s, declare the link dead only after 2
+// consecutive pings go unanswered — ~90s of total silence (see startHeartbeat
+// for the +1-interval timing). Conservative on purpose so transient jitter/GC
+// never reaps a healthy connection. See issue #208.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_MAX_MISSED = 2;
+const HEARTBEAT_DEAD_AFTER_S = (HEARTBEAT_INTERVAL_MS * (HEARTBEAT_MAX_MISSED + 1)) / 1000;
 
 export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
   private socket: WebSocket | null = null;
@@ -20,6 +27,11 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
   private options: EventReportOptions;
   private role: WsRole;
   private explicitlyClosed = false;
+  // Stop fn for the CURRENT socket's keepalive, so close()/reload can halt it
+  // immediately instead of waiting for the deferred 'close' event. The per-socket
+  // closure in connect() still owns the #97 stale-socket case; this is idempotent
+  // with it (both call the same stop).
+  private heartbeatStop: (() => void) | null = null;
 
   constructor(name: string, config: WsClientNetwork, ctx: NetworkAdapterContext) {
     super(name, config, ctx, moduleLog);
@@ -41,6 +53,8 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
     this.isEnabled = false;
     this.connected = false;
     this.cancelReconnect();
+    this.heartbeatStop?.();
+    this.heartbeatStop = null;
     if (this.socket) {
       safeClose(this.socket);
       this.socket = null;
@@ -90,11 +104,30 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
 
     const socket = new WebSocket(this.config.url, { headers });
     this.socket = socket;
+    // Per-socket so a hot-reload overlap (old close firing after the new socket
+    // is assigned, see #97) can only ever stop its own keepalive.
+    let stopHeartbeat: (() => void) | null = null;
 
     socket.on('open', () => {
+      // Symmetric with the 'close' guard (#97): if this socket was already
+      // replaced, a late 'open' must not flip `connected` or install a stale
+      // heartbeat onto the current connection's slot.
+      if (this.socket !== socket) return;
       this.connected = true;
       this.log.info('[%s] connected %s', this.name, this.config.url);
       this.sendBootstrapMetaEvents(socket);
+      // Only meaningful once OPEN — ping() no-ops before the handshake completes.
+      stopHeartbeat = startHeartbeat(
+        socket,
+        { intervalMs: HEARTBEAT_INTERVAL_MS, maxMissed: HEARTBEAT_MAX_MISSED },
+        () => {
+          if (this.explicitlyClosed || !this.isEnabled) return;
+          this.log.warn('[%s] no inbound response for ~%ds, reconnecting half-open connection %s', this.name, HEARTBEAT_DEAD_AFTER_S, this.config.url);
+          // terminate → 'close' → scheduleReconnect, reusing the normal path.
+          socket.terminate();
+        },
+      );
+      this.heartbeatStop = stopHeartbeat;
     });
 
     socket.on('message', (raw: Buffer) => {
@@ -104,6 +137,11 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
     });
 
     socket.on('close', () => {
+      stopHeartbeat?.();
+      // Drop the instance handle only if it still points at THIS socket's stop
+      // (a newer socket may already own it after a hot-reload overlap).
+      if (this.heartbeatStop === stopHeartbeat) this.heartbeatStop = null;
+      stopHeartbeat = null;
       // Ignore close events from a socket that is no longer the current
       // connection. A hot reload (signature change) calls close() then open()
       // back-to-back; the old socket's `'close'` event fires AFTER the new

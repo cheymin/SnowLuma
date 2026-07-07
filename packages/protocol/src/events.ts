@@ -294,6 +294,77 @@ export interface PttTransResultEvent extends QQEvent {
   text: string;
 }
 
+/**
+ * The bot account was forced offline (kicked / logged in elsewhere / risk-control)
+ * — SSO push `StatusService.KickNT`. Mirrors NapCat's OB11BotOfflineEvent →
+ * `notice_type:'bot_offline'`. `tag` = short title, `message` = description.
+ */
+export interface BotOfflineEvent extends QQEvent {
+  kind: 'bot_offline';
+  tag: string;
+  message: string;
+}
+
+/**
+ * A group member's card (群名片) changed — detected from message traffic when
+ * the sender's live card differs from the cached one (same mechanism as NapCat's
+ * `parseCardChangedEvent`). Maps to OB11 `notice_type:'group_card'`.
+ */
+export interface GroupCardChangeEvent extends QQEvent {
+  kind: 'group_card_change';
+  groupId: number;
+  userUin: number;
+  cardNew: string;
+  cardOld: string;
+}
+
+/**
+ * A group member was granted a special title (群头衔) — Event 0x2DC subType 16,
+ * field13 == 6. Maps to OB11 `notice/notify` `sub_type:'title'`.
+ */
+export interface GroupTitleChangeEvent extends QQEvent {
+  kind: 'group_title_change';
+  groupId: number;
+  userUin: number; // the member who received the title
+  title: string;
+}
+
+/**
+ * Group name changed (Event 0x2DC subType 16, field13 == 12). Mirrors NapCat's
+ * OB11GroupNameEvent → `notice/notify` `sub_type:'group_name'`.
+ */
+export interface GroupNameChangeEvent extends QQEvent {
+  kind: 'group_name_change';
+  groupId: number;
+  operatorUin: number; // who renamed the group
+  name: string;        // the new group name
+}
+
+/**
+ * Someone liked the bot's profile card ("名片赞") — Event 0x210 subType 39,
+ * inner ProfileLikeTip msgType 0 / subType 203. Mirrors NapCat's
+ * OB11ProfileLikeEvent → `notice/notify` `sub_type:'profile_like'`.
+ */
+export interface FriendProfileLikeEvent extends QQEvent {
+  kind: 'friend_profile_like';
+  operatorUin: number;   // who liked
+  operatorNick: string;
+  times: number;         // like count from this event
+}
+
+/**
+ * C2C "对方正在输入…" input-status push (Event 0x210 subType 0x115 / 277).
+ * `eventType` 1 = typing, 3 = recording a voice message. Mirrors NapCat's
+ * `onInputStatusPush` → OB11 `notice/notify` `sub_type:'input_status'`.
+ */
+export interface FriendInputStatusEvent extends QQEvent {
+  kind: 'friend_input_status';
+  userUin: number;   // the peer whose input status changed (the typer)
+  userUid: string;
+  eventType: number; // 1 = 正在输入, 3 = 正在讲话(录音)
+  statusText: string;
+}
+
 export type QQEventVariant =
   | FriendMessage
   | GroupMessage
@@ -312,4 +383,10 @@ export type QQEventVariant =
   | GroupFileUploadEvent
   | FriendAddEvent
   | GroupMsgEmojiLikeEvent
-  | PttTransResultEvent;
+  | PttTransResultEvent
+  | FriendInputStatusEvent
+  | GroupNameChangeEvent
+  | GroupCardChangeEvent
+  | GroupTitleChangeEvent
+  | FriendProfileLikeEvent
+  | BotOfflineEvent;

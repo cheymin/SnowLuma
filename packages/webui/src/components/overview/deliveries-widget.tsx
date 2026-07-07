@@ -18,7 +18,12 @@ export function DeliveriesWidget() {
 
   useEffect(() => {
     let active = true;
-    const pull = () =>
+    let inFlight = false;
+    const pull = () => {
+      // Skip while the tab is backgrounded, or if a request is still in flight
+      // (a slow endpoint must not stack overlapping polls). #185.
+      if (inFlight || document.hidden) return;
+      inFlight = true;
       api.notifications
         .recent(50)
         .then((r) => {
@@ -26,12 +31,19 @@ export function DeliveriesWidget() {
         })
         .catch(() => {
           if (active) setRecords((prev) => prev ?? []);
-        });
+        })
+        .finally(() => { inFlight = false; });
+    };
     void pull();
     const id = window.setInterval(() => void pull(), POLL_MS);
+    // The interval keeps firing but no-ops while hidden, so refresh immediately
+    // when the tab becomes visible again to shed any staleness.
+    const onVisible = () => { if (!document.hidden) pull(); };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       active = false;
       window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [api]);
 

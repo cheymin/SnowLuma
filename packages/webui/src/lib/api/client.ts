@@ -42,6 +42,13 @@ class HttpApiClient implements ApiClient {
   private currentToken: string | null;
   private onUnauthorized?: () => void;
 
+  // Shared, ref-counted /api/logs/stream: a single EventSource fans out to every
+  // subscriber (any number of dashboard alert widgets + the log viewer) instead
+  // of opening one connection each. See openLogStream.
+  private logSubscribers = new Set<LogsStreamOptions>();
+  private logStreamDispose: (() => void) | null = null;
+  private lastLogStatus: StreamStatus = 'closed';
+
   // namespaced surfaces are bound up-front so callers can destructure
   readonly processes: ApiClient['processes'];
   readonly config: ApiClient['config'];
@@ -268,8 +275,12 @@ class HttpApiClient implements ApiClient {
   // ---------- token management ----------
 
   private setToken(token: string | null): void {
+    const changed = this.currentToken !== token;
     this.currentToken = token;
     this.tokenStore.save(token);
+    // The shared log stream URL carries the token — rebuild it on any change so
+    // a re-login doesn't leave subscribers on a stale-token connection (#185).
+    if (changed) this.reopenSharedLogStream();
   }
 
   // ---------- auth ----------
@@ -394,10 +405,63 @@ class HttpApiClient implements ApiClient {
   }
 
   private openLogStream(options: LogsStreamOptions): () => void {
-    return this.openSseChannel<LogEntry | { type: string }>('/api/logs/stream', (parsed) => {
+    this.logSubscribers.add(options);
+    if (this.logStreamDispose) {
+      // A late subscriber joins the already-live shared connection — replay the
+      // current transport status so its badge isn't stuck at the default.
+      options.onStatus?.(this.lastLogStatus);
+    } else {
+      this.openSharedLogStream();
+    }
+    return () => {
+      this.logSubscribers.delete(options);
+      if (this.logSubscribers.size === 0 && this.logStreamDispose) {
+        this.logStreamDispose();
+        this.logStreamDispose = null;
+        this.lastLogStatus = 'closed';
+      }
+    };
+  }
+
+  /** Open the single shared /api/logs/stream connection; every frame and status
+   *  change fans out to all subscribers, each isolated so one throwing handler
+   *  can't drop the frame for the others (and a subscriber unsubscribed mid-frame
+   *  is skipped). A no-token attempt does NOT cache a dead disposer — it reports
+   *  'closed' and returns so a later subscribe / setToken can open for real,
+   *  avoiding poisoning the shared cache. */
+  private openSharedLogStream(): void {
+    if (!this.currentToken) {
+      this.lastLogStatus = 'closed';
+      for (const sub of [...this.logSubscribers]) {
+        if (this.logSubscribers.has(sub)) { try { sub.onStatus?.('closed'); } catch { /* isolate */ } }
+      }
+      return;
+    }
+    this.lastLogStatus = 'reconnecting'; // connecting until onopen fires
+    this.logStreamDispose = this.openSseChannel<LogEntry | { type: string }>('/api/logs/stream', (parsed) => {
       if ('type' in parsed) return; // control frame, not a log line
-      options.onLine(parsed);
-    }, options.onStatus);
+      for (const sub of [...this.logSubscribers]) {
+        if (this.logSubscribers.has(sub)) { try { sub.onLine(parsed); } catch { /* isolate a bad subscriber */ } }
+      }
+    }, (s) => {
+      this.lastLogStatus = s;
+      for (const sub of [...this.logSubscribers]) {
+        if (this.logSubscribers.has(sub)) { try { sub.onStatus?.(s); } catch { /* isolate */ } }
+      }
+    });
+  }
+
+  /** Token changed (login / re-login / logout): the shared stream baked the old
+   *  token into its URL, so tear it down and reopen with the new one if anyone is
+   *  still listening. Without this a re-login would leave the feed retrying a
+   *  stale-token URL forever. */
+  private reopenSharedLogStream(): void {
+    if (this.logStreamDispose) {
+      this.logStreamDispose();
+      this.logStreamDispose = null;
+    }
+    this.lastLogStatus = 'closed';
+    if (this.logSubscribers.size > 0) this.openSharedLogStream();
   }
 
   // Invoke a (stream) action and relay each `data: <json>\n\n` SSE frame. Uses

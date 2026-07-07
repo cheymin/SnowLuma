@@ -14,6 +14,8 @@ import type { GroupMemberInfo, QQGroupInfo } from '@snowluma/protocol/qq-info';
 // inline-extract the kind.
 import type {
   GroupChange, NewFriend, FriendRecall, OperatorInfo, SelfJoinInGroup, GroupAdmin,
+  InputStatusNotify, NotifyMessageBody, GroupNameChange, GroupSpecialTitleChange,
+  ProfileLikeTip,
 } from '@snowluma/proto-defs/notify';
 import type { PushMsg } from '@snowluma/proto-defs/message';
 import type {
@@ -251,6 +253,193 @@ describe('parseMsgPush Event0x210 subType=179/226 (NewFriend → friend_add)', (
     ) as FriendAddEvent[];
     expect(event.kind).toBe('friend_add');
     expect(event.userUin).toBe(22222); // the packet's fromUin
+  });
+});
+
+describe('parseMsgPush Event0x210 subType=277 (input status → 对方正在输入)', () => {
+  // RE'd from wrapper.linux.node aio_input_state_worker.cc: 0x210/0x115 sys_msg,
+  // body = InputStatusNotify {fromUid, toUid, notifyItem{eventType@f4}}.
+  type FriendInputStatusEvent = Extract<QQEventVariant, { kind: 'friend_input_status' }>;
+
+  function makeInputStatusPacket(fromUid: string, eventType: number): PacketInfo {
+    const content = protobuf_encode<InputStatusNotify>({
+      fromUid,
+      toUid: 'u_self',
+      notifyItem: { eventType },
+    });
+    return makeEvent0x210PacketAny(277, content);
+  }
+
+  it('emits friend_input_status (typing) for eventType 1', () => {
+    const member = makeGroupMember(77777, 'u_typer');
+    const [event] = parseMsgPush(
+      makeInputStatusPacket(member.uid, 1),
+      makeIdentity([member]),
+    ) as FriendInputStatusEvent[];
+
+    expect(event.kind).toBe('friend_input_status');
+    expect(event.userUin).toBe(77777);
+    expect(event.eventType).toBe(1);
+    expect(event.statusText).toBe('对方正在输入...');
+  });
+
+  it('surfaces eventType 3 as the voice-recording status text', () => {
+    const member = makeGroupMember(77777, 'u_typer');
+    const [event] = parseMsgPush(
+      makeInputStatusPacket(member.uid, 3),
+      makeIdentity([member]),
+    ) as FriendInputStatusEvent[];
+
+    expect(event.eventType).toBe(3);
+    expect(event.statusText).toBe('对方正在讲话...');
+  });
+
+  it('drops a body with no fromUid (nothing to key user_id on)', () => {
+    const events = parseMsgPush(
+      makeEvent0x210PacketAny(277, protobuf_encode<InputStatusNotify>({ notifyItem: { eventType: 1 } })),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x210 subType=39 (profile like → 名片赞)', () => {
+  // 0x210/39 is multiplexed; body.msgContent decodes as ProfileLikeTip and is a
+  // like only when inner msgType==0 && subType==203. Proto shape from NapCat's
+  // raw-bytes decoder (pending a real like capture to validate byte-exactly).
+  type FriendProfileLikeEvent = Extract<QQEventVariant, { kind: 'friend_profile_like' }>;
+
+  function makeLikePacket(opts: { msgType?: number; subType?: number; uin?: number; nick?: string; txt?: string; time?: number }): PacketInfo {
+    const content = protobuf_encode<ProfileLikeTip>({
+      msgType: opts.msgType ?? 0,
+      subType: opts.subType ?? 203,
+      content: { msg: {
+        time: opts.time ?? 1710001111,
+        detail: { txt: opts.txt ?? '', uin: BigInt(opts.uin ?? 0), nickname: opts.nick ?? '' },
+      } },
+    });
+    return makeEvent0x210PacketAny(39, content);
+  }
+
+  it('emits friend_profile_like with liker uin, nick and parsed count', () => {
+    // txt shape taken from a real capture: "赞了我的资料卡N次".
+    const [event] = parseMsgPush(
+      makeLikePacket({ uin: 1206069534, nick: '墨白灵MotricLuck', txt: '赞了我的资料卡2次' }),
+      makeIdentity(),
+    ) as FriendProfileLikeEvent[];
+
+    expect(event.kind).toBe('friend_profile_like');
+    expect(event.operatorUin).toBe(1206069534);
+    expect(event.operatorNick).toBe('墨白灵MotricLuck');
+    expect(event.times).toBe(2);
+    expect(event.time).toBe(1710001111);
+  });
+
+  it('ignores a non-like 39 variant (inner subType != 203)', () => {
+    const events = parseMsgPush(
+      makeLikePacket({ subType: 999, uin: 1787882683 }),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x2DC subType=16 field13=6 (group special title)', () => {
+  // Built from a REAL on-wire capture: eventParam f2 = the gray-tip template
+  // "恭喜<{member}>获得群主授予的<{…"text":TITLE…}>头衔", f5 = member uin. The title
+  // is the last <{…}> token's text.
+  type GroupTitleChangeEvent = Extract<QQEventVariant, { kind: 'group_title_change' }>;
+
+  const TIP = '恭喜<{"cmd":5,"data":"3433035623","text":"星屿"}>获得群主授予的'
+    + '<{"cmd":1,"data":"https://qun.qq.com/x?medal=302&uin=3433035623","text":"摸鱼冠军",'
+    + '"url":"https://qun.qq.com/x?medal=302&uin=3433035623"}>头衔';
+
+  function makeTitlePacket(memberUin: number, tip: string): PacketInfo {
+    const notify = protobuf_encode<NotifyMessageBody>({
+      groupUin: GROUP_ID,
+      field13: 6,
+      eventParam: protobuf_encode<GroupSpecialTitleChange>({ tipText: tip, memberUin }),
+    });
+    const content = new Uint8Array(7 + notify.length);
+    content.set(notify, 7);
+    const body = protobuf_encode<PushMsg>({
+      message: {
+        responseHead: { fromUin: 0, type: 0, sigMap: 0 },
+        contentHead: { msgType: 732, subType: 16, timestamp: 1710000000 },
+        body: { msgContent: content },
+      },
+      status: 0,
+    });
+    return { pid: 1, uin: SELF_UIN, serviceCmd: MSG_PUSH_CMD, seqId: 1, retCode: 0, fromClient: false, body };
+  }
+
+  it('emits group_title_change with the granted title + member', () => {
+    const [event] = parseMsgPush(
+      makeTitlePacket(22222, TIP),
+      makeIdentity([makeGroupMember(22222, 'u_member')]),
+    ) as GroupTitleChangeEvent[];
+
+    expect(event.kind).toBe('group_title_change');
+    expect(event.groupId).toBe(GROUP_ID);
+    expect(event.userUin).toBe(22222);
+    expect(event.title).toBe('摸鱼冠军'); // last <{…}> token's text
+  });
+
+  it('drops a title tip with no parseable title token', () => {
+    const events = parseMsgPush(
+      makeTitlePacket(22222, '恭喜获得头衔'),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x2DC subType=16 field13=12 (group name change)', () => {
+  // RE cross-ref: Lagrange Event0x2DCSubType16Field13.GroupNameChangeNotice = 12,
+  // EventParam(f5) → GroupNameChange{f2=name}, operator = NotifyMessageBody.f21.
+  // The 0x2DC subType16 body carries a 7-byte prefix (groupUin+byte+len) before
+  // the NotifyMessageBody proto — the decoder strips it via subarray(7).
+  type GroupNameChangeEvent = Extract<QQEventVariant, { kind: 'group_name_change' }>;
+
+  function makeGroupNamePacket(groupUin: number, operatorUid: string, name: string): PacketInfo {
+    const notify = protobuf_encode<NotifyMessageBody>({
+      groupUin,
+      field13: 12,
+      operatorUid,
+      eventParam: protobuf_encode<GroupNameChange>({ name }),
+    });
+    const content = new Uint8Array(7 + notify.length); // 7-byte prefix + proto
+    content.set(notify, 7);
+    const body = protobuf_encode<PushMsg>({
+      message: {
+        responseHead: { fromUin: 0, type: 0, sigMap: 0 },
+        contentHead: { msgType: 732, subType: 16, timestamp: 1710000000 },
+        body: { msgContent: content },
+      },
+      status: 0,
+    });
+    return { pid: 1, uin: SELF_UIN, serviceCmd: MSG_PUSH_CMD, seqId: 1, retCode: 0, fromClient: false, body };
+  }
+
+  it('emits group_name_change with the new name + operator', () => {
+    const member = makeGroupMember(54321, 'u_operator');
+    const [event] = parseMsgPush(
+      makeGroupNamePacket(GROUP_ID, member.uid, '新的群名'),
+      makeIdentity([member]),
+    ) as GroupNameChangeEvent[];
+
+    expect(event.kind).toBe('group_name_change');
+    expect(event.groupId).toBe(GROUP_ID);
+    expect(event.name).toBe('新的群名');
+    expect(event.operatorUin).toBe(54321);
+  });
+
+  it('drops a name-change body with an empty name', () => {
+    const events = parseMsgPush(
+      makeGroupNamePacket(GROUP_ID, 'u_operator', ''),
+      makeIdentity(),
+    );
+    expect(events).toEqual([]);
   });
 });
 

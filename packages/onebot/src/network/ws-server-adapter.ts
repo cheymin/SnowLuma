@@ -9,14 +9,22 @@ import {
 } from '../event-filter';
 import type { JsonObject, WsRole, WsServerNetwork } from '../types';
 import { IOneBotNetworkAdapter, type AdapterStatus, type NetworkAdapterContext } from './adapter';
-import { isAuthorized, normalizePath, parseRequestPath, rawDataToString, safeClose, safeSend, safeSendAsync } from './utils';
+import { isAuthorized, normalizePath, parseRequestPath, rawDataToString, safeClose, safeSend, safeSendAsync, startHeartbeat } from './utils';
 
 const moduleLog = createLogger('OneBot.WS-Server');
+// Transport keepalive for each attached client, symmetric with the ws-client
+// adapter: ping every 30s, reap a client only after 2 consecutive pings go
+// unanswered — ~90s of total silence (see startHeartbeat for the +1-interval
+// timing). Any inbound frame resets the counter — see issue #208.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_MAX_MISSED = 2;
+const HEARTBEAT_DEAD_AFTER_S = (HEARTBEAT_INTERVAL_MS * (HEARTBEAT_MAX_MISSED + 1)) / 1000;
 
 interface ForwardConn {
   socket: WebSocket;
   role: WsRole;
   options: EventReportOptions;
+  stopHeartbeat: () => void;
 }
 
 export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
@@ -50,7 +58,10 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
 
     this.isEnabled = false;
     this.listening = false;
-    for (const ws of [...this.connections.keys()]) safeClose(ws);
+    for (const conn of this.connections.values()) {
+      conn.stopHeartbeat();
+      safeClose(conn.socket);
+    }
     this.connections.clear();
     this.wss?.close();
     this.wss = null;
@@ -115,7 +126,15 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
     }
 
     const role = this.config.role ?? classifyForwardRole(request);
-    const conn: ForwardConn = { socket, role, options: this.options };
+    const stopHeartbeat = startHeartbeat(
+      socket,
+      { intervalMs: HEARTBEAT_INTERVAL_MS, maxMissed: HEARTBEAT_MAX_MISSED },
+      () => {
+        this.log.warn('[%s] client silent for ~%ds, terminating half-open connection', this.name, HEARTBEAT_DEAD_AFTER_S);
+        socket.terminate(); // → 'close' → connections.delete; the client reconnects on its own
+      },
+    );
+    const conn: ForwardConn = { socket, role, options: this.options, stopHeartbeat };
     this.connections.set(socket, conn);
 
     socket.on('message', (raw: Buffer) => {
@@ -123,7 +142,10 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
         this.log.warn('[%s] handleApiMessage threw: %s', this.name, err instanceof Error ? (err.stack ?? err.message) : String(err));
       });
     });
-    socket.on('close', () => this.connections.delete(socket));
+    socket.on('close', () => {
+      stopHeartbeat();
+      this.connections.delete(socket);
+    });
     socket.on('error', (err: Error) => {
       this.log.warn('[%s] socket error: %s', this.name, err instanceof Error ? err.message : String(err));
     });

@@ -4,12 +4,16 @@ import type {
   GroupEssenceEvent,
   GroupMsgEmojiLikeEvent,
   GroupMuteEvent,
+  GroupNameChangeEvent,
+  GroupTitleChangeEvent,
   GroupPokeEvent,
   GroupRecallEvent,
   QQEventVariant,
 } from '../../events';
 import type {
   GroupMute,
+  GroupNameChange,
+  GroupSpecialTitleChange,
   GroupReactNotify,
   NotifyMessageBody,
 } from '@snowluma/proto-defs/notify';
@@ -28,7 +32,7 @@ const unknownLog = createLogger('MsgPush.Unknown');
 export const decodeEvent0x2DC: MsgPushDecoder = (ctx) => {
   switch (ctx.head.subType as Event0x2DCSubType) {
     case Event0x2DCSubType.GroupMuteNotice: return decodeGroupMute(ctx);
-    case Event0x2DCSubType.GroupMsgEmojiLikeNotice: return decodeGroupMsgEmojiLike(ctx);
+    case Event0x2DCSubType.GroupMsgEmojiLikeNotice: return decodeSubType16(ctx);
     case Event0x2DCSubType.GroupRecallNotice: return decodeGroupRecall(ctx);
     case Event0x2DCSubType.GroupGreyTipNotice: return decodeGroupGreyTip(ctx);
     case Event0x2DCSubType.GroupEssenceNotice: return decodeGroupEssence(ctx);
@@ -123,6 +127,84 @@ const GROUP_REACT_PREFIX_BYTES = 7;
 // for other notify variants, only 35 means "emoji react". Anything
 // else falls through to MsgPush.Unknown for protocol-drift visibility.
 const GROUP_REACT_DISCRIMINATOR = 35;
+// Event 0x2DC subType 16 multiplexes several group notices, discriminated by
+// `NotifyMessageBody.field13`. RE cross-ref (Lagrange Event0x2DCSubType16Field13,
+// itself RE'd from wrapper.linux.node): 6=special title, 12=name change, 23=todo,
+// 35=emoji reaction. We peek field13 off the shared NotifyMessageBody, then branch.
+const SUBTYPE16_SPECIAL_TITLE = 6;
+const SUBTYPE16_GROUP_NAME_CHANGE = 12;
+
+function decodeSubType16(ctx: MsgPushContext): QQEventVariant[] {
+  if (ctx.content.length <= GROUP_REACT_PREFIX_BYTES) return [];
+  const field13 = protobuf_decode<NotifyMessageBody>(ctx.content.subarray(GROUP_REACT_PREFIX_BYTES))?.field13 ?? 0;
+  switch (field13) {
+    case SUBTYPE16_SPECIAL_TITLE: return decodeGroupTitle(ctx);
+    case SUBTYPE16_GROUP_NAME_CHANGE: return decodeGroupName(ctx);
+    case GROUP_REACT_DISCRIMINATOR: return decodeGroupMsgEmojiLike(ctx);
+    default:
+      unknownLog.debug('Event0x2DC subType=16 unhandled field13=%d', field13);
+      return [];
+  }
+}
+
+// field13 == 6: a member was granted a special title. eventParam carries the
+// member uin (f5) + a gray-tip template string (f2); the title text is the last
+// `<{"…","text":TITLE,…}>` rich token in that string (on-wire captured shape —
+// the kernel resolves the template to a clean string, we parse it here).
+function decodeGroupTitle(ctx: MsgPushContext): QQEventVariant[] {
+  const notify = protobuf_decode<NotifyMessageBody>(ctx.content.subarray(GROUP_REACT_PREFIX_BYTES));
+  const param = notify?.eventParam
+    ? protobuf_decode<GroupSpecialTitleChange>(notify.eventParam)
+    : undefined;
+  const userUin = param?.memberUin ?? 0;
+  const title = extractTitleFromTip(param?.tipText ?? '');
+  if (!userUin || !title) return [];
+  const ev: GroupTitleChangeEvent = {
+    kind: 'group_title_change',
+    time: ctx.head.timestamp,
+    selfUin: ctx.selfUin,
+    groupId: notify?.groupUin ?? 0,
+    userUin,
+    title,
+  };
+  return [ev];
+}
+
+// The tip text is "恭喜<{member}>获得群主授予的<{…"text":TITLE…}>头衔" — the title is
+// the `text` of the LAST `<{…}>` rich token (the one just before "头衔"). Tokens
+// are flat JSON with no `<`/`>` inside, so a non-greedy scan is safe.
+function extractTitleFromTip(text: string): string {
+  const tokens = text.match(/<\{[^<>]*\}>/g);
+  if (!tokens || tokens.length === 0) return '';
+  const last = tokens[tokens.length - 1];
+  try {
+    const parsed = JSON.parse(last.slice(1, -1)) as { text?: string };
+    return parsed.text ?? '';
+  } catch {
+    return '';
+  }
+}
+
+// field13 == 12: group renamed. New name is nested in `eventParam` as a
+// `GroupNameChange` (field 2); operator is `NotifyMessageBody.operatorUid`.
+function decodeGroupName(ctx: MsgPushContext): QQEventVariant[] {
+  const notify = protobuf_decode<NotifyMessageBody>(ctx.content.subarray(GROUP_REACT_PREFIX_BYTES));
+  const name = notify?.eventParam ? (protobuf_decode<GroupNameChange>(notify.eventParam)?.name ?? '') : '';
+  if (!name) return [];
+  const groupId = notify?.groupUin ?? 0;
+  const ev: GroupNameChangeEvent = {
+    kind: 'group_name_change',
+    time: ctx.head.timestamp,
+    selfUin: ctx.selfUin,
+    groupId,
+    // Operator is a group member → resolves from the roster. Fall back to 0
+    // (not ctx.fromUin, which on a 0x2DC push is the group id) so an
+    // unresolved operator never surfaces the group id as user_id.
+    operatorUin: resolveUidToUin(ctx.identity, groupId, notify?.operatorUid ?? '', 0),
+    name,
+  };
+  return [ev];
+}
 
 function decodeGroupMsgEmojiLike(ctx: MsgPushContext): QQEventVariant[] {
   if (ctx.content.length <= GROUP_REACT_PREFIX_BYTES) return [];

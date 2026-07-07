@@ -89,6 +89,10 @@ export function LoginWaves() {
     let lines: Pt[][] = [];
     let paths: SVGPathElement[] = [];
     let raf = 0;
+    // Honour reduced-motion (the OS setting or the app's own data-reduce-motion
+    // toggle): draw a single static frame instead of running the rAF loop. #185.
+    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const reduced = () => prefersReduced.matches || document.documentElement.dataset.reduceMotion === '1';
 
     const setSize = () => {
       bounding = host.getBoundingClientRect();
@@ -143,7 +147,7 @@ export function LoginWaves() {
       const t = e.touches[0];
       if (t) updateMouse(t.clientX, t.clientY);
     };
-    const onResize = () => { setSize(); setLines(); };
+    const onResize = () => { setSize(); setLines(); if (reduced()) { movePoints(0); drawLines(); } };
 
     const movePoints = (time: number) => {
       lines.forEach((points) => {
@@ -213,10 +217,23 @@ export function LoginWaves() {
     window.addEventListener('resize', onResize);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('touchmove', onTouchMove, { passive: true });
-    raf = requestAnimationFrame(tick);
+    // Animate only when motion is allowed; otherwise paint one static frame.
+    // React live to changes of the OS reduced-motion preference.
+    const applyMotion = () => {
+      if (reduced()) {
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+        movePoints(0);
+        drawLines();
+      } else if (!raf) {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    prefersReduced.addEventListener('change', applyMotion);
+    applyMotion();
 
     return () => {
       cancelAnimationFrame(raf);
+      prefersReduced.removeEventListener('change', applyMotion);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('touchmove', onTouchMove);

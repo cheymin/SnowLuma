@@ -17,6 +17,12 @@ type GroupEssence = Extract<QQEventVariant, { kind: 'group_essence' }>;
 type GroupFileUpload = Extract<QQEventVariant, { kind: 'group_file_upload' }>;
 type FriendAdd = Extract<QQEventVariant, { kind: 'friend_add' }>;
 type GroupMsgEmojiLike = Extract<QQEventVariant, { kind: 'group_msg_emoji_like' }>;
+type FriendInputStatus = Extract<QQEventVariant, { kind: 'friend_input_status' }>;
+type GroupNameChange = Extract<QQEventVariant, { kind: 'group_name_change' }>;
+type GroupCardChange = Extract<QQEventVariant, { kind: 'group_card_change' }>;
+type GroupTitleChange = Extract<QQEventVariant, { kind: 'group_title_change' }>;
+type FriendProfileLike = Extract<QQEventVariant, { kind: 'friend_profile_like' }>;
+type BotOffline = Extract<QQEventVariant, { kind: 'bot_offline' }>;
 
 export function convertGroupMemberJoin(ctx: ConverterContext, event: GroupMemberJoin): JsonObject {
   return notice(ctx, event, {
@@ -153,6 +159,77 @@ export function convertFriendAdd(ctx: ConverterContext, event: FriendAdd): JsonO
   return notice(ctx, event, {
     notice_type: 'friend_add',
     user_id: event.userUin,
+  });
+}
+
+export function convertGroupCardChange(ctx: ConverterContext, event: GroupCardChange): JsonObject {
+  // Mirrors NapCat's OB11GroupCardEvent: notice_type group_card with the new and
+  // old group cards.
+  return notice(ctx, event, {
+    notice_type: 'group_card',
+    group_id: event.groupId,
+    user_id: event.userUin,
+    card_new: event.cardNew,
+    card_old: event.cardOld,
+  });
+}
+
+export function convertBotOffline(ctx: ConverterContext, event: BotOffline): JsonObject {
+  // Mirrors NapCat's OB11BotOfflineEvent: notice_type bot_offline with the bot's
+  // own uin plus the tag/message describing why it went offline.
+  return notice(ctx, event, {
+    notice_type: 'bot_offline',
+    user_id: event.selfUin,
+    tag: event.tag,
+    message: event.message,
+  });
+}
+
+export function convertFriendProfileLike(ctx: ConverterContext, event: FriendProfileLike): JsonObject {
+  // Mirrors NapCat's OB11ProfileLikeEvent: notify/profile_like with the liker's
+  // uin, nickname and like count.
+  return notice(ctx, event, {
+    notice_type: 'notify',
+    sub_type: 'profile_like',
+    operator_id: event.operatorUin,
+    operator_nick: event.operatorNick,
+    times: event.times,
+  });
+}
+
+export function convertGroupTitleChange(ctx: ConverterContext, event: GroupTitleChange): JsonObject {
+  // Mirrors NapCat's OB11GroupTitleEvent: notify/title with the recipient's uin
+  // and the granted title text.
+  return notice(ctx, event, {
+    notice_type: 'notify',
+    sub_type: 'title',
+    group_id: event.groupId,
+    user_id: event.userUin,
+    title: event.title,
+  });
+}
+
+export function convertGroupNameChange(ctx: ConverterContext, event: GroupNameChange): JsonObject {
+  // Mirrors NapCat's OB11GroupNameEvent: notify/group_name with the operator's
+  // uin as user_id and the new name in `name_new`.
+  return notice(ctx, event, {
+    notice_type: 'notify',
+    sub_type: 'group_name',
+    group_id: event.groupId,
+    user_id: event.operatorUin,
+    name_new: event.name,
+  });
+}
+
+export function convertFriendInputStatus(ctx: ConverterContext, event: FriendInputStatus): JsonObject {
+  // Mirrors NapCat's OB11InputStatusEvent: notify/input_status with the peer's
+  // uin, the raw event_type (1 = typing, 3 = recording voice) and status_text.
+  return notice(ctx, event, {
+    notice_type: 'notify',
+    sub_type: 'input_status',
+    user_id: event.userUin,
+    event_type: event.eventType,
+    status_text: event.statusText,
   });
 }
 

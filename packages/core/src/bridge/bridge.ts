@@ -4,6 +4,7 @@ import type { PacketInfo } from '@snowluma/common/protocol-types';
 import { BridgeEventBus } from '@snowluma/protocol/event-bus';
 import { IdentityService } from '@snowluma/protocol/identity-service';
 import { MSG_PUSH_CMD, parseMsgPush, SysMsgDedup } from '@snowluma/protocol/msg-push';
+import { KICK_NT_CMD, parseKickNT } from '@snowluma/protocol/kick-nt';
 import { IncomingPacketPipeline, type CmdParser } from '@snowluma/protocol/packet-pipeline';
 import { buildApiHub, type ApiHub } from './apis';
 import {
@@ -65,6 +66,7 @@ export class Bridge implements BridgeInterface {
       },
     });
     this.pipeline.registerCmd(MSG_PUSH_CMD, (pkt, identity) => parseMsgPush(pkt, identity, this.sysMsgDedup_));
+    this.pipeline.registerCmd(KICK_NT_CMD, parseKickNT);
   }
 
   dispose(): void {

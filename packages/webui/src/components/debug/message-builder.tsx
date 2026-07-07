@@ -140,27 +140,37 @@ export function MessageBuilder({ segments, onChange, uin, groupId, depth = 0 }: 
       {segments.map((s, i) => (
         <div
           key={s._id}
-          draggable
-          // stopPropagation makes the nested-builder boundary explicit: a child
-          // row's drag never reaches the parent node row.
-          onDragStart={(e) => { e.stopPropagation(); setDragFrom(i); }}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => { e.stopPropagation(); if (dragFrom !== null) move(dragFrom, i); setDragFrom(null); }}
-          onDragEnd={() => setDragFrom(null)}
-          className="flex items-start gap-2 rounded-xl border border-border/50 bg-card/60 p-2"
+          className="rounded-xl border border-border/50 bg-card/60 p-2"
         >
-          <GripVertical className="mt-1 h-4 w-4 shrink-0 cursor-grab text-muted-foreground/50" />
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-muted-foreground">{LABELS[s.k]}</span>
-              <div className="flex items-center gap-0.5">
-                <button type="button" onClick={() => move(i, i - 1)} disabled={i === 0} className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30" title="上移">↑</button>
-                <button type="button" onClick={() => move(i, i + 1)} disabled={i === segments.length - 1} className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30" title="下移">↓</button>
-                <button type="button" onClick={() => remove(i)} className="rounded p-0.5 text-muted-foreground hover:text-destructive" title="删除"><Trash2 className="h-3.5 w-3.5" /></button>
-              </div>
+          {/* Drag is scoped to the grip handle only — making the whole row
+              draggable hijacked text selection inside the segment inputs (you
+              couldn't select part of a pasted URL without dragging the card).
+              The row stays the drop target; its body is fully selectable. */}
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span
+                draggable
+                // stopPropagation keeps a nested (forward-node) builder's drag
+                // from reaching the parent row; onDragEnd lives here because the
+                // grip — not the row — is now the drag source.
+                onDragStart={(e) => { e.stopPropagation(); setDragFrom(i); }}
+                onDragEnd={() => setDragFrom(null)}
+                title="拖动此处排序" aria-label="拖动排序"
+                className="flex shrink-0 cursor-grab rounded-md p-0.5 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground active:cursor-grabbing"
+              >
+                <GripVertical className="h-3.5 w-3.5" />
+              </span>
+              <span className="truncate text-[11px] font-semibold text-muted-foreground">{LABELS[s.k]}</span>
+            </span>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <button type="button" onClick={() => move(i, i - 1)} disabled={i === 0} className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30" title="上移">↑</button>
+              <button type="button" onClick={() => move(i, i + 1)} disabled={i === segments.length - 1} className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30" title="下移">↓</button>
+              <button type="button" onClick={() => remove(i)} className="rounded p-0.5 text-muted-foreground hover:text-destructive" title="删除"><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
-            <SegmentEditor seg={s} onChange={(n) => patch(i, n)} uin={uin} groupId={groupId} depth={depth} />
           </div>
+          <SegmentEditor seg={s} onChange={(n) => patch(i, n)} uin={uin} groupId={groupId} depth={depth} />
         </div>
       ))}
 
