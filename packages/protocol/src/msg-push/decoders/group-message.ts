@@ -47,6 +47,6 @@ export const decodeGroupMessage: MsgPushDecoder = (ctx) => {
   // Group name: prefer the message's own wire field (ResponseGrp field 7 —
   // fresh even right after a rename), fall back to the cached group list, else
   // leave it empty. `ev.groupId` is set above from grp.groupUin.
-  ev.groupName = grp?.groupName || ctx.identity.findGroup(ev.groupId)?.groupName || '';
+  ev.groupName = grp?.groupName || ctx.identity.findGroup?.(ev.groupId)?.groupName || '';
   return [ev];
 };
