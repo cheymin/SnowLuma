@@ -133,6 +133,10 @@ export interface FriendMessage extends QQEvent {
 export interface GroupMessage extends QQEvent {
   kind: 'group_message';
   groupId: number;
+  /** Group display name. From the message's own wire field (ResponseGrp
+   *  field 7 — accurate even right after a rename), falling back to the
+   *  identity group cache, else '' when neither is available. */
+  groupName: string;
   senderUin: number;
   senderNick: string;
   senderCard: string;

@@ -9,7 +9,7 @@ import type { SsoGetGroupMsg, SsoGetGroupMsgResponse } from '@snowluma/proto-def
 import type { IdentityService } from '../../src/identity-service';
 import { SSO_GET_GROUP_MSG_CMD, fetchGroupMessageRange } from '../../src/msg-push';
 
-const identity = { findGroupMember: () => undefined } as unknown as IdentityService;
+const identity = { findGroupMember: () => undefined, findGroup: () => null } as unknown as IdentityService;
 
 function okResult(data: Uint8Array): SendPacketResult {
   return { success: true, gotResponse: true, responseData: data } as SendPacketResult;
@@ -69,7 +69,7 @@ describe('fetchGroupMessageRange / SsoGetGroupMsg', () => {
 
   it('[#1] prefers the fresher group card in grp.memberCard (field 4) over a stale cache card', async () => {
     const stale = { uin: 222, uid: '', nickname: 'BaseNick', card: 'StaleCard', role: 'member', level: 0, title: '', joinTime: 0, lastSentTime: 0, shutUpTime: 0 };
-    const idWithMember = { findGroupMember: (_g: number, u: number) => (u === 222 ? stale : undefined) } as unknown as IdentityService;
+    const idWithMember = { findGroupMember: (_g: number, u: number) => (u === 222 ? stale : undefined), findGroup: () => null } as unknown as IdentityService;
     const resp = protobuf_encode<SsoGetGroupMsgResponse>({
       body: { groupUin: 9999, messages: [
         { responseHead: { fromUin: 222, grp: { groupUin: 9999, memberCard: 'FreshCard' } }, // field2 empty, field4 = fresh card
@@ -84,7 +84,7 @@ describe('fetchGroupMessageRange / SsoGetGroupMsg', () => {
 
   it('[#1] keeps the cache card when field 4 equals the base nickname (no active group card)', async () => {
     const m = { uin: 222, uid: '', nickname: 'BaseNick', card: 'CachedCard', role: 'member', level: 0, title: '', joinTime: 0, lastSentTime: 0, shutUpTime: 0 };
-    const id = { findGroupMember: () => m } as unknown as IdentityService;
+    const id = { findGroupMember: () => m, findGroup: () => null } as unknown as IdentityService;
     const resp = protobuf_encode<SsoGetGroupMsgResponse>({
       body: { groupUin: 9999, messages: [
         { responseHead: { fromUin: 222, grp: { groupUin: 9999, memberCard: 'BaseNick' } }, // field4 == base nick → not a card

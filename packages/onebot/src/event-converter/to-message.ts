@@ -73,6 +73,7 @@ export async function convertGroupMessage(ctx: ConverterContext, event: GroupMes
     message_id: messageId,
     message_seq: event.msgSeq,
     group_id: event.groupId,
+    group_name: event.groupName,
     user_id: event.senderUin,
     message: segments,
     raw_message: segmentsToRawMessage(segments),

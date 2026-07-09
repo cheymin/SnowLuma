@@ -54,6 +54,7 @@ function makeGroupMessage(senderUin: number): GroupMessage {
     time: 1700000000,
     selfUin: SELF_ID,
     groupId: 99999,
+    groupName: 'Test Group 测试群',
     senderUin,
     senderNick: senderUin === SELF_ID ? 'me' : 'peer',
     senderCard: '',
@@ -100,6 +101,7 @@ describe('convertEvent — message kinds', () => {
     expect(out!.message_type).toBe('group');
     expect(out!.sub_type).toBe('normal');
     expect(out!.group_id).toBe(GROUP_ID);
+    expect(out!.group_name).toBe('Test Group 测试群');
   });
 
   it('group_message self → post_type "message_sent"', async () => {
