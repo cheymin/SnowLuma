@@ -12,6 +12,30 @@ import type {
 
 const moduleLogger = createLogger('Identity');
 
+const PERSISTENCE_QUEUE_CAPACITY = 256;
+const PERSISTENCE_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
+
+export type IdentityPersistenceState = 'memory-only' | 'healthy' | 'degraded' | 'closed';
+
+export interface IdentityPersistenceStatus {
+  state: IdentityPersistenceState;
+  suspended: boolean;
+  pendingWrites: number;
+  queueCapacity: number;
+  lastFailedLabel: string;
+  lastError: string;
+  lastFailureAt: number | null;
+  retryAttempt: number;
+  nextRetryAt: number | null;
+  abandonedWrites: number;
+  skippedWrites: number;
+}
+
+interface PendingIdentityWrite {
+  label: string;
+  write: () => void;
+}
+
 /**
  * Hooks Identity uses when its read methods miss every cache layer. Wired in
  * after construction (Bridge owns these methods, but Bridge can't exist
@@ -91,9 +115,9 @@ interface MemberRow {
  *   - In-memory state (this file) — O(1) for find* on the hot path.
  *   - SQLite (optional, opened by openForUin) — survives restarts.
  *
- * Both layers are kept in sync by the remember* / refresh paths.
- * Callers should never reach below the public surface; the cascade and
- * storage details are intentionally hidden.
+ * Memory is authoritative for the current process. SQLite is a rebuildable,
+ * best-effort snapshot: failures degrade into a bounded retry queue and are
+ * exposed through persistenceStatus instead of rolling back observations.
  */
 export class IdentityService {
   // ─── Self identity ───
@@ -126,6 +150,17 @@ export class IdentityService {
   private inTransaction = false;
   private fetcher: IdentityFetcher | null = null;
   private readonly log: Logger;
+  private readonly pendingWrites_: PendingIdentityWrite[] = [];
+  private retryTimer_: ReturnType<typeof setTimeout> | null = null;
+  private retryAttempt_ = 0;
+  private nextRetryAt_: number | null = null;
+  private lastFailedLabel_ = '';
+  private lastError_ = '';
+  private lastFailureAt_: number | null = null;
+  private abandonedWrites_ = 0;
+  private skippedWrites_ = 0;
+  private persistenceSuspended_ = false;
+  private closed_ = false;
 
   constructor(uin: string, dbPath: string | null) {
     this.uin_ = uin;
@@ -166,11 +201,66 @@ export class IdentityService {
   }
 
   close(): void {
-    this.db?.close();
+    if (this.closed_) return;
+    if (this.retryTimer_) {
+      clearTimeout(this.retryTimer_);
+      this.retryTimer_ = null;
+      this.nextRetryAt_ = null;
+    }
+    this.flushPendingWrites(false);
+    const pendingAtClose = this.pendingWrites_.length;
+    if (pendingAtClose > 0) {
+      this.log.warn(
+        'identity persistence close with pending writes: uin=%s label=%s pending=%d retry=%d err=%s',
+        this.uin_, this.lastFailedLabel_, pendingAtClose, this.retryAttempt_, this.lastError_,
+      );
+    }
+
+    try {
+      this.db?.close();
+    } catch (err) {
+      this.lastError_ = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      this.lastFailureAt_ = Date.now();
+      this.log.error(
+        'identity persistence close failed: uin=%s label=%s pending=%d retry=%d err=%s',
+        this.uin_, this.lastFailedLabel_, this.pendingWrites_.length, this.retryAttempt_, this.lastError_,
+      );
+      this.schedulePersistenceRetry();
+      throw err;
+    }
+
+    if (pendingAtClose > 0) {
+      this.abandonedWrites_ += pendingAtClose;
+      this.pendingWrites_.length = 0;
+    }
+    this.closed_ = true;
+    this.stmtCache_.clear();
   }
 
   get persistent(): boolean {
     return this.db !== null;
+  }
+
+  get persistenceStatus(): IdentityPersistenceStatus {
+    let state: IdentityPersistenceState;
+    if (this.closed_) state = 'closed';
+    else if (!this.db) state = 'memory-only';
+    else if (this.persistenceSuspended_ || this.pendingWrites_.length > 0) state = 'degraded';
+    else state = 'healthy';
+
+    return {
+      state,
+      suspended: this.persistenceSuspended_,
+      pendingWrites: this.pendingWrites_.length,
+      queueCapacity: PERSISTENCE_QUEUE_CAPACITY,
+      lastFailedLabel: this.lastFailedLabel_,
+      lastError: this.lastError_,
+      lastFailureAt: this.lastFailureAt_,
+      retryAttempt: this.retryAttempt_,
+      nextRetryAt: this.nextRetryAt_,
+      abandonedWrites: this.abandonedWrites_,
+      skippedWrites: this.skippedWrites_,
+    };
   }
 
   setFetcher(fetcher: IdentityFetcher): void {
@@ -182,12 +272,18 @@ export class IdentityService {
   get uin(): string { return this.uin_; }
 
   get nickname(): string { return this.nickname_; }
-  set nickname(v: string) { this.nickname_ = v; }
+  set nickname(v: string) {
+    this.assertOpen('nickname');
+    this.nickname_ = v;
+  }
 
   get selfProfile(): UserProfileInfo | null { return this.selfProfile_; }
   get selfUid(): string | null { return this.selfProfile_?.uid ?? null; }
 
-  setSelfProfile(info: UserProfileInfo): void { this.selfProfile_ = info; }
+  setSelfProfile(info: UserProfileInfo): void {
+    this.assertOpen('self profile');
+    this.selfProfile_ = { ...info };
+  }
 
   // ─── Domain object reads ───
 
@@ -212,10 +308,15 @@ export class IdentityService {
   }
 
   updateGroupMember(groupId: number, member: GroupMemberInfo): void {
+    this.assertOpen('group member update');
     const g = this.groups_.get(groupId);
     if (!g) return;
-    g.members.set(member.uin, member);
-    this.rememberUidUin(member.uid, member.uin);
+    this.assertPersistenceCapacity('group member update');
+    const observed = { ...member };
+    const persisted: MemberInput = { groupId, ...observed, active: true };
+    g.members.set(observed.uin, observed);
+    this.rememberUidUin(observed.uid, observed.uin);
+    this.runWrite('group member update', () => this.transaction(() => this.upsertGroupMember(persisted)));
   }
 
   // ─── ID translation ───
@@ -268,13 +369,14 @@ export class IdentityService {
          LIMIT 1`,
       ).get(groupId, normalized) as { uin: number | null } | undefined;
       const uin = normalizeUin(row?.uin);
-      if (uin !== null) return uin;
+      if (uin !== null && this.isDatabaseMappingCurrent(normalized, uin)) return uin;
     }
 
     const row = this.pstmt(
       'SELECT uin FROM users WHERE uid = ? AND uin IS NOT NULL LIMIT 1',
     ).get(normalized) as { uin: number | null } | undefined;
-    return normalizeUin(row?.uin);
+    const uin = normalizeUin(row?.uin);
+    return uin !== null && this.isDatabaseMappingCurrent(normalized, uin) ? uin : null;
   }
 
   findUidByUin(uin: number, groupId?: number): string | null {
@@ -297,52 +399,60 @@ export class IdentityService {
          LIMIT 1`,
       ).get(groupId, normalized) as { uid: string | null } | undefined;
       const uid = normalizeUid(row?.uid);
-      if (uid) return uid;
+      if (uid && this.isDatabaseMappingCurrent(uid, normalized)) return uid;
     }
 
     const row = this.pstmt(
       'SELECT uid FROM users WHERE uin = ? AND uid IS NOT NULL LIMIT 1',
     ).get(normalized) as { uid: string | null } | undefined;
-    return normalizeUid(row?.uid) || null;
+    const uid = normalizeUid(row?.uid);
+    return uid && this.isDatabaseMappingCurrent(uid, normalized) ? uid : null;
   }
 
   // ─── Observation (write side) ───
 
   rememberFriends(friends: FriendInfo[]): void {
-    this.friends_ = friends;
-    for (const friend of friends) this.rememberUidUin(friend.uid, friend.uin);
+    this.beginObservation('friends');
+    const observed = friends.map((friend) => ({ ...friend }));
+    const persisted = observed.map((friend): UserInput => ({
+      uid: friend.uid,
+      uin: friend.uin,
+      nickname: friend.nickname,
+      remark: friend.remark,
+      isFriend: true,
+      source: 'friend',
+    }));
+    this.friends_ = observed;
+    for (const friend of observed) this.rememberUidUin(friend.uid, friend.uin);
     this.runWrite('friends', () => this.transaction(() => {
       this.pstmt('UPDATE users SET is_friend = 0, updated_at = ? WHERE is_friend = 1')
         .run(nowSeconds());
-      for (const friend of friends) {
-        this.upsertUser({
-          uid: friend.uid,
-          uin: friend.uin,
-          nickname: friend.nickname,
-          remark: friend.remark,
-          isFriend: true,
-          source: 'friend',
-        });
-      }
+      for (const friend of persisted) this.upsertUser(friend);
     }));
   }
 
   rememberGroups(groups: QQGroupInfo[]): void {
-    this.setGroupsInMemory(groups);
+    this.beginObservation('groups');
+    const observed = groups.map((group): QQGroupInfo => ({
+      ...group,
+      members: new Map(
+        [...(group.members ?? new Map<number, GroupMemberInfo>())]
+          .map(([uin, member]) => [uin, { ...member }] as const),
+      ),
+    }));
+    const persisted = observed.map((group): GroupInput => ({
+      groupId: group.groupId,
+      groupName: group.groupName,
+      remark: group.remark,
+      memberCount: group.memberCount,
+      memberMax: group.memberMax,
+    }));
+    this.setGroupsInMemory(observed);
     this.runWrite('groups', () => this.transaction(() => {
       this.pstmt('UPDATE groups SET active = 0, updated_at = ? WHERE active = 1')
         .run(nowSeconds());
-      for (const group of groups) {
-        this.upsertGroup({
-          groupId: group.groupId,
-          groupName: group.groupName,
-          remark: group.remark,
-          memberCount: group.memberCount,
-          memberMax: group.memberMax,
-        });
-      }
+      for (const group of persisted) this.upsertGroup(group);
     }));
-    this.hydrateActiveMembersForGroups(groups.map((group) => group.groupId));
   }
 
   /**
@@ -352,6 +462,7 @@ export class IdentityService {
    * doesn't resurrect on the next load (the server refetch won't include it).
    */
   forgetGroup(groupId: number): void {
+    this.beginObservation('forget group');
     this.groups_.delete(groupId);
     this.runWrite('forget group', () => {
       this.pstmt('UPDATE groups SET active = 0, updated_at = ? WHERE group_id = ?')
@@ -360,49 +471,45 @@ export class IdentityService {
   }
 
   rememberGroupMembers(groupId: number, members: GroupMemberInfo[]): void {
-    this.setGroupMembersInMemory(groupId, members);
-    for (const member of members) this.rememberUidUin(member.uid, member.uin);
+    this.beginObservation('group members');
+    const observed = members.map((member) => ({ ...member }));
+    const persisted = observed.map((member): MemberInput => ({
+      groupId,
+      ...member,
+      active: true,
+    }));
+    this.setGroupMembersInMemory(groupId, observed);
+    for (const member of observed) this.rememberUidUin(member.uid, member.uin);
     this.runWrite('group members', () => this.transaction(() => {
-      this.upsertGroup({ groupId, memberCount: members.length });
+      this.upsertGroup({ groupId, memberCount: persisted.length });
       this.pstmt('UPDATE group_members SET active = 0, updated_at = ? WHERE group_id = ?')
         .run(nowSeconds(), groupId);
-      for (const member of members) {
-        this.upsertGroupMember({
-          groupId,
-          uid: member.uid,
-          uin: member.uin,
-          nickname: member.nickname,
-          card: member.card,
-          role: member.role,
-          level: member.level,
-          title: member.title,
-          joinTime: member.joinTime,
-          lastSentTime: member.lastSentTime,
-          shutUpTime: member.shutUpTime,
-          active: true,
-        });
-      }
+      for (const member of persisted) this.upsertGroupMember(member);
     }));
   }
 
   rememberUserProfile(info: UserProfileInfo): void {
-    this.userProfiles_.set(info.uin, info);
-    const selfUin = parseInt(this.uin_, 10) || 0;
-    if (info.uin === selfUin) this.selfProfile_ = info;
-    this.rememberUidUin(info.uid, info.uin);
-    this.runWrite('user profile', () => this.transaction(() => this.upsertUser({
-      uid: info.uid,
-      uin: info.uin,
-      nickname: info.nickname,
-      remark: info.remark,
+    this.beginObservation('user profile');
+    const observed = { ...info };
+    const persisted: UserInput = {
+      uid: observed.uid,
+      uin: observed.uin,
+      nickname: observed.nickname,
+      remark: observed.remark,
       source: 'profile',
-    })));
+    };
+    this.userProfiles_.set(observed.uin, observed);
+    const selfUin = parseInt(this.uin_, 10) || 0;
+    if (observed.uin === selfUin) this.selfProfile_ = { ...observed };
+    this.rememberUidUin(observed.uid, observed.uin);
+    this.runWrite('user profile', () => this.transaction(() => this.upsertUser(persisted)));
   }
 
   /** Remember the approval msgseq carried by a private "qun.invite" card's
    *  jumpUrl, keyed by group. `set_group_add_request` reads it back to approve
    *  a bot self-invite via 0x10c8 (eventType=2). See issue #125. */
   rememberGroupInviteCardSequence(groupUin: number, sequence: number): void {
+    this.assertOpen('group invite sequence');
     if (groupUin > 0 && sequence > 0) this.groupInviteCardSeqs_.set(groupUin, sequence);
   }
 
@@ -419,13 +526,15 @@ export class IdentityService {
   }
 
   rememberGroupRequests(requests: GroupRequestInfo[]): void {
-    for (const request of requests) {
+    this.beginObservation('group requests');
+    const observed = requests.map((request) => ({ ...request }));
+    for (const request of observed) {
       this.rememberUidUin(request.targetUid, request.targetUin);
       this.rememberUidUin(request.invitorUid, request.invitorUin);
       this.rememberUidUin(request.operatorUid, request.operatorUin);
     }
     this.runWrite('group requests', () => this.transaction(() => {
-      for (const request of requests) {
+      for (const request of observed) {
         this.upsertGroup({ groupId: request.groupId, groupName: request.groupName });
         this.upsertUser({
           uid: request.targetUid,
@@ -452,14 +561,16 @@ export class IdentityService {
   rememberRequestIdentity(
     identity: { groupId?: number; uid?: string; uin?: number; nickname?: string; source?: string },
   ): void {
-    this.rememberUidUin(identity.uid, identity.uin);
+    this.beginObservation('request identity');
+    const observed = { ...identity };
+    this.rememberUidUin(observed.uid, observed.uin);
     this.runWrite('request identity', () => this.transaction(() => {
-      if (identity.groupId !== undefined) this.upsertGroup({ groupId: identity.groupId });
+      if (observed.groupId !== undefined) this.upsertGroup({ groupId: observed.groupId });
       this.upsertUser({
-        uid: identity.uid,
-        uin: identity.uin,
-        nickname: identity.nickname,
-        source: identity.source || 'request',
+        uid: observed.uid,
+        uin: observed.uin,
+        nickname: observed.nickname,
+        source: observed.source || 'request',
       });
     }));
   }
@@ -468,21 +579,25 @@ export class IdentityService {
     groupId: number,
     identity: { uid?: string; uin?: number; nickname?: string; card?: string },
   ): void {
-    this.rememberUidUin(identity.uid, identity.uin);
+    this.beginObservation('group member identity');
+    const observed = { ...identity };
+    this.rememberUidUin(observed.uid, observed.uin);
     this.runWrite('group member identity', () => this.transaction(() => this.upsertGroupMember({
       groupId,
-      uid: identity.uid,
-      uin: identity.uin,
-      nickname: identity.nickname,
-      card: identity.card,
+      uid: observed.uid,
+      uin: observed.uin,
+      nickname: observed.nickname,
+      card: observed.card,
       active: true,
     })));
   }
 
   markGroupMemberInactive(groupId: number, identity: { uid?: string; uin?: number }): void {
+    this.beginObservation('group member inactive');
+    const observed = { ...identity };
     this.runWrite('group member inactive', () => {
-      const uid = normalizeUid(identity.uid);
-      const uin = normalizeUin(identity.uin);
+      const uid = normalizeUid(observed.uid);
+      const uin = normalizeUin(observed.uin);
       if (!uid && uin === null) return;
       const rows = this.findMemberRows(groupId, uid, uin);
       const updatedAt = nowSeconds();
@@ -510,6 +625,20 @@ export class IdentityService {
     if (oldUin !== undefined && oldUin !== normalizedUin) this.uidByUin.delete(oldUin);
     this.uinByUid.set(normalizedUid, normalizedUin);
     this.uidByUin.set(normalizedUin, normalizedUid);
+  }
+
+  private isDatabaseMappingCurrent(uid: string, uin: number): boolean {
+    const currentUin = this.uinByUid.get(uid);
+    const currentUid = this.uidByUin.get(uin);
+    const current = (currentUin === undefined || currentUin === uin)
+      && (currentUid === undefined || currentUid === uid);
+    if (!current) {
+      this.log.warn(
+        'identity stale database mapping rejected: uin=%s candidateUid=%s candidateUin=%d currentUid=%s currentUin=%s',
+        this.uin_, uid, uin, currentUid ?? '', currentUin ?? '',
+      );
+    }
+    return current;
   }
 
   private setGroupsInMemory(groups: QQGroupInfo[]): void {
@@ -673,10 +802,10 @@ export class IdentityService {
     const merged = {
       uid: uid || primary?.uid || null,
       uin: uin ?? primary?.uin ?? null,
-      nickname: normalizeText(input.nickname) || primary?.nickname || '',
-      remark: normalizeText(input.remark) || primary?.remark || '',
+      nickname: mergeOptionalText(input.nickname, primary?.nickname ?? ''),
+      remark: mergeOptionalText(input.remark, primary?.remark ?? ''),
       isFriend: input.isFriend === true ? 1 : (primary?.is_friend ?? 0),
-      source: normalizeText(input.source) || primary?.source || '',
+      source: mergeOptionalText(input.source, primary?.source ?? ''),
       updatedAt: nowSeconds(),
     };
 
@@ -739,8 +868,8 @@ export class IdentityService {
          updated_at = excluded.updated_at`,
     ).run(
       input.groupId,
-      normalizeText(input.groupName) || existing?.group_name || '',
-      normalizeText(input.remark) || existing?.remark || '',
+      mergeOptionalText(input.groupName, existing?.group_name ?? ''),
+      mergeOptionalText(input.remark, existing?.remark ?? ''),
       normalizeNonNegative(input.memberCount, existing?.member_count ?? 0),
       normalizeNonNegative(input.memberMax, existing?.member_max ?? 0),
       nowSeconds(),
@@ -767,11 +896,11 @@ export class IdentityService {
     const merged = {
       uid: uid || primary?.uid || null,
       uin: uin ?? primary?.uin ?? null,
-      nickname: normalizeText(input.nickname) || primary?.nickname || '',
-      card: normalizeText(input.card) || primary?.card || '',
-      role: normalizeText(input.role) || primary?.role || 'member',
+      nickname: mergeOptionalText(input.nickname, primary?.nickname ?? ''),
+      card: mergeOptionalText(input.card, primary?.card ?? ''),
+      role: mergeOptionalText(input.role, primary?.role ?? 'member'),
       level: normalizeNonNegative(input.level, primary?.level ?? 0),
-      title: normalizeText(input.title) || primary?.title || '',
+      title: mergeOptionalText(input.title, primary?.title ?? ''),
       joinTime: normalizeNonNegative(input.joinTime, primary?.join_time ?? 0),
       lastSentTime: normalizeNonNegative(input.lastSentTime, primary?.last_sent_time ?? 0),
       shutUpTime: normalizeNonNegative(input.shutUpTime, primary?.shut_up_time ?? 0),
@@ -883,13 +1012,22 @@ export class IdentityService {
   private transaction<T>(fn: () => T): T {
     if (!this.db || this.inTransaction) return fn();
     this.inTransaction = true;
-    this.db.exec('BEGIN');
     try {
+      this.db.exec('BEGIN');
       const result = fn();
       this.db.exec('COMMIT');
       return result;
     } catch (err) {
-      try { this.db.exec('ROLLBACK'); } catch { /* ignore */ }
+      try {
+        this.db.exec('ROLLBACK');
+      } catch (rollbackErr) {
+        const transactionMessage = err instanceof Error ? err.message : String(err);
+        const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+        throw new AggregateError(
+          [err, rollbackErr],
+          `identity transaction failed: ${transactionMessage}; rollback failed: ${rollbackMessage}`,
+        );
+      }
       throw err;
     } finally {
       this.inTransaction = false;
@@ -898,11 +1036,143 @@ export class IdentityService {
 
   private runWrite(label: string, fn: () => void): void {
     if (!this.db) return;
+    if (this.persistenceSuspended_) {
+      this.recordSkippedWrite(label);
+      return;
+    }
+    if (this.pendingWrites_.length > 0) {
+      this.assertPersistenceCapacity(label);
+      this.pendingWrites_.push({ label, write: fn });
+      return;
+    }
     try {
       fn();
     } catch (err) {
-      this.log.error('identity db write failed [%s]: %s', label, err instanceof Error ? (err.stack ?? err.message) : String(err));
+      this.pendingWrites_.push({ label, write: fn });
+      this.recordPersistenceFailure(label, err);
+      this.schedulePersistenceRetry();
     }
+  }
+
+  private assertOpen(label: string): void {
+    if (!this.closed_) return;
+    throw new Error(`IdentityService is closed; cannot observe ${label}`);
+  }
+
+  private beginObservation(label: string): void {
+    this.assertOpen(label);
+    this.assertPersistenceCapacity(label);
+  }
+
+  private assertPersistenceCapacity(label: string): void {
+    if (
+      !this.db
+      || this.persistenceSuspended_
+      || this.pendingWrites_.length < PERSISTENCE_QUEUE_CAPACITY
+    ) return;
+    const message = `identity persistence retry queue full: ${this.pendingWrites_.length}/${PERSISTENCE_QUEUE_CAPACITY}`;
+    this.lastFailedLabel_ = label;
+    this.lastError_ = message;
+    this.lastFailureAt_ = Date.now();
+    this.log.error(
+      'identity persistence queue full: uin=%s label=%s pending=%d retry=%d capacity=%d',
+      this.uin_, label, this.pendingWrites_.length, this.retryAttempt_, PERSISTENCE_QUEUE_CAPACITY,
+    );
+    throw new Error(message);
+  }
+
+  private recordPersistenceFailure(label: string, err: unknown): void {
+    this.lastFailedLabel_ = label;
+    this.lastError_ = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    this.lastFailureAt_ = Date.now();
+    this.retryAttempt_ += 1;
+    this.log.error(
+      'identity persistence write failed: uin=%s label=%s pending=%d retry=%d err=%s',
+      this.uin_, label, this.pendingWrites_.length, this.retryAttempt_, this.lastError_,
+    );
+  }
+
+  private schedulePersistenceRetry(): void {
+    if (
+      this.closed_
+      || this.persistenceSuspended_
+      || !this.db
+      || this.pendingWrites_.length === 0
+      || this.retryTimer_
+    ) return;
+    if (this.retryAttempt_ > PERSISTENCE_RETRY_DELAYS_MS.length) {
+      this.suspendPersistence();
+      return;
+    }
+    const delay = PERSISTENCE_RETRY_DELAYS_MS[
+      Math.min(Math.max(this.retryAttempt_ - 1, 0), PERSISTENCE_RETRY_DELAYS_MS.length - 1)
+    ];
+    this.nextRetryAt_ = Date.now() + delay;
+    this.log.warn(
+      'identity persistence degraded: uin=%s label=%s pending=%d retry=%d nextRetryMs=%d',
+      this.uin_, this.lastFailedLabel_, this.pendingWrites_.length, this.retryAttempt_, delay,
+    );
+    this.retryTimer_ = setTimeout(() => {
+      this.retryTimer_ = null;
+      this.nextRetryAt_ = null;
+      this.flushPendingWrites();
+    }, delay);
+    this.retryTimer_.unref?.();
+  }
+
+  private flushPendingWrites(scheduleRetry = true): void {
+    if (
+      this.closed_
+      || this.persistenceSuspended_
+      || !this.db
+      || this.pendingWrites_.length === 0
+    ) return;
+    const pendingAtStart = this.pendingWrites_.length;
+    while (this.pendingWrites_.length > 0) {
+      const next = this.pendingWrites_[0];
+      try {
+        next.write();
+        this.pendingWrites_.shift();
+      } catch (err) {
+        this.recordPersistenceFailure(next.label, err);
+        if (scheduleRetry) this.schedulePersistenceRetry();
+        return;
+      }
+    }
+
+    const attempts = this.retryAttempt_;
+    this.retryAttempt_ = 0;
+    this.nextRetryAt_ = null;
+    this.log.info(
+      'identity persistence recovered: uin=%s flushed=%d pending=0 retries=%d',
+      this.uin_, pendingAtStart, attempts,
+    );
+  }
+
+  private suspendPersistence(): void {
+    if (this.persistenceSuspended_) return;
+    if (this.retryTimer_) {
+      clearTimeout(this.retryTimer_);
+      this.retryTimer_ = null;
+    }
+    this.nextRetryAt_ = null;
+    const abandoned = this.pendingWrites_.length;
+    this.persistenceSuspended_ = true;
+    this.abandonedWrites_ += abandoned;
+    this.log.error(
+      'identity persistence suspended: uin=%s label=%s pending=%d retry=%d abandoned=%d err=%s',
+      this.uin_, this.lastFailedLabel_, abandoned, this.retryAttempt_, abandoned, this.lastError_,
+    );
+    this.pendingWrites_.length = 0;
+  }
+
+  private recordSkippedWrite(label: string): void {
+    this.skippedWrites_ += 1;
+    this.abandonedWrites_ += 1;
+    this.log.warn(
+      'identity persistence write skipped: uin=%s label=%s pending=0 retry=%d skipped=%d abandoned=%d',
+      this.uin_, label, this.retryAttempt_, this.skippedWrites_, this.abandonedWrites_,
+    );
   }
 }
 
@@ -953,6 +1223,10 @@ function normalizeUin(uin: unknown): number | null {
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function mergeOptionalText(value: unknown, fallback: string): string {
+  return value === undefined ? fallback : normalizeText(value);
 }
 
 function normalizeNonNegative(value: unknown, fallback: number): number {
