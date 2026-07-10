@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadOneBotConfig, makeDefaultOneBotConfig, saveOneBotConfig, STATUS_COMMAND_TRIGGER_MAX_LENGTH } from '../src/config';
+import {
+  assertValidOneBotConfig,
+  loadOneBotConfig,
+  makeDefaultOneBotConfig,
+  saveOneBotConfig,
+  STATUS_COMMAND_TRIGGER_MAX_LENGTH,
+} from '../src/config';
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -26,6 +32,190 @@ describe('makeDefaultOneBotConfig', () => {
     expect(config.networks.wsClients).toEqual([]);
     expect(config.statusCommand).toEqual({ enabled: true, swallow: false, cooldownSeconds: 5, trigger: '#sl' });
     expect(config.notifications).toEqual({ channelIds: [] });
+  });
+});
+
+describe('assertValidOneBotConfig', () => {
+  it('rejects duplicate adapter names across different kinds', () => {
+    const config = makeDefaultOneBotConfig();
+    config.networks.httpClients.push({
+      name: 'http-default',
+      url: 'http://127.0.0.1:5700',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+
+    expect(() => assertValidOneBotConfig(config)).toThrow(
+      /duplicated in httpServers and httpClients/,
+    );
+  });
+
+  it('allows a disabled client draft with an empty URL', () => {
+    const config = makeDefaultOneBotConfig();
+    config.networks.httpClients.push({
+      name: 'disabled-draft',
+      enabled: false,
+      url: '',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+
+    expect(() => assertValidOneBotConfig(config)).not.toThrow();
+  });
+
+  it('rejects enabled clients with malformed or wrong-protocol URLs', () => {
+    const http = makeDefaultOneBotConfig();
+    http.networks.httpClients.push({
+      name: 'bad-http',
+      url: 'not a url',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+    expect(() => assertValidOneBotConfig(http)).toThrow(/valid absolute URL/);
+
+    const ws = makeDefaultOneBotConfig();
+    ws.networks.wsClients.push({
+      name: 'bad-ws',
+      url: 'https://example.com/socket',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+    expect(() => assertValidOneBotConfig(ws)).toThrow(/protocol must be one of ws:, wss:/);
+  });
+
+  it('rejects enabled servers with the same normalized host and port', () => {
+    const config = makeDefaultOneBotConfig();
+    config.networks.wsServers.push({
+      name: 'conflicting-ws',
+      host: '0.0.0.0',
+      port: 3000,
+      path: '/different-path',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+
+    expect(() => assertValidOneBotConfig(config)).toThrow(
+      /conflicts with networks\.httpServers\[0\] on server binding 0\.0\.0\.0:3000/,
+    );
+  });
+
+  it('rejects blank hosts and wildcard/specific listeners on the same port', () => {
+    const blank = makeDefaultOneBotConfig();
+    blank.networks.httpServers[0].host = '   ';
+    expect(() => assertValidOneBotConfig(blank)).toThrow(/\.host/);
+
+    const wildcard = makeDefaultOneBotConfig();
+    wildcard.networks.wsServers.push({
+      name: 'specific-ws',
+      host: '127.0.0.1',
+      port: 3000,
+      path: '/ws',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+    expect(() => assertValidOneBotConfig(wildcard)).toThrow(/wildcard server port 3000/);
+  });
+
+  it('rejects timer values that Node would clamp to a 1ms loop', () => {
+    const http = makeDefaultOneBotConfig();
+    http.networks.httpClients.push({
+      name: 'overflow-http',
+      url: 'http://127.0.0.1:5700',
+      timeoutMs: 1e100,
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+    expect(() => assertValidOneBotConfig(http)).toThrow(/timeoutMs/);
+
+    const ws = makeDefaultOneBotConfig();
+    ws.networks.wsClients.push({
+      name: 'overflow-ws',
+      url: 'ws://127.0.0.1:5700',
+      reconnectIntervalMs: 2_147_483_648,
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+    expect(() => assertValidOneBotConfig(ws)).toThrow(/reconnectIntervalMs/);
+  });
+
+  it('rejects server paths that cannot match a URL pathname', () => {
+    for (const invalidPath of ['api', '/api?token=x', '/api#fragment', ' /api']) {
+      const config = makeDefaultOneBotConfig();
+      config.networks.httpServers[0].path = invalidPath;
+      expect(() => assertValidOneBotConfig(config), invalidPath).toThrow(/\.path/);
+    }
+    const valid = makeDefaultOneBotConfig();
+    valid.networks.httpServers[0].path = '';
+    expect(() => assertValidOneBotConfig(valid)).not.toThrow();
+  });
+});
+
+describe('saveOneBotConfig validation boundary', () => {
+  it('does not write an invalid enabled-client URL to disk', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snowluma-onebot-invalid-save-'));
+    const previous = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const config = makeDefaultOneBotConfig();
+      config.networks.wsClients.push({
+        name: 'bad-client',
+        url: 'javascript:alert(1)',
+        messageFormat: 'array',
+        reportSelfMessage: false,
+      });
+
+      expect(() => saveOneBotConfig('10001', config)).toThrow(/protocol must be one of ws:, wss:/);
+      expect(fs.existsSync(path.join(tempDir, 'config', 'onebot_10001.json'))).toBe(false);
+    } finally {
+      process.chdir(previous);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not write a deterministic server bind conflict to disk', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snowluma-onebot-bind-conflict-'));
+    const previous = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const config = makeDefaultOneBotConfig();
+      config.networks.wsServers.push({
+        name: 'same-bind',
+        port: 3000,
+        path: '/ws',
+        messageFormat: 'array',
+        reportSelfMessage: false,
+      });
+
+      expect(() => saveOneBotConfig('10001', config)).toThrow(/server binding 0\.0\.0\.0:3000/);
+      expect(fs.existsSync(path.join(tempDir, 'config', 'onebot_10001.json'))).toBe(false);
+    } finally {
+      process.chdir(previous);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the previous desired config when the atomic rename fails', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snowluma-onebot-atomic-save-'));
+    const previous = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const original = makeDefaultOneBotConfig();
+      saveOneBotConfig('10001', original);
+      const changed = structuredClone(original);
+      changed.networks.httpServers[0].port = 3999;
+      const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw new Error('injected rename failure');
+      });
+      expect(() => saveOneBotConfig('10001', changed)).toThrow(/injected rename failure/);
+      rename.mockRestore();
+
+      expect(loadOneBotConfig('10001').networks.httpServers[0].port).toBe(3000);
+      expect(fs.readdirSync(path.join(tempDir, 'config')).some((name) => name.endsWith('.tmp'))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      process.chdir(previous);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -145,6 +335,52 @@ describe('loadOneBotConfig', () => {
     expect(reloaded.networks.httpClients[0].name).toBe('self-mirror');
     expect(reloaded.networks.httpClients[0].messageFormat).toBe('string');
     expect(reloaded.networks.httpClients[0].reportSelfMessage).toBe(true);
+  });
+
+  it('replays a saved per-UIN snapshot without reviving deleted global adapters', () => {
+    const dir = path.join(tempDir, 'config');
+    fs.mkdirSync(dir, { recursive: true });
+    const global = makeDefaultOneBotConfig();
+    global.networks.httpServers[0].name = 'inherited';
+    fs.writeFileSync(path.join(dir, 'onebot.json'), JSON.stringify(global), 'utf8');
+
+    const config = loadOneBotConfig('10004');
+    expect(config.networks.httpServers.map((item) => item.name)).toContain('inherited');
+    config.networks.httpServers = [];
+    config.networks.wsServers.push({
+      name: 'inherited',
+      host: '127.0.0.1',
+      port: 3998,
+      path: '/',
+      role: 'Universal',
+      messageFormat: 'array',
+      reportSelfMessage: false,
+    });
+    saveOneBotConfig('10004', config);
+
+    const reloaded = loadOneBotConfig('10004');
+    expect(reloaded.networks.httpServers).toEqual([]);
+    expect(reloaded.networks.wsServers.map((item) => item.name)).toContain('inherited');
+    const disk = JSON.parse(fs.readFileSync(path.join(dir, 'onebot_10004.json'), 'utf8'));
+    expect(disk.mode).toBe('snapshot');
+  });
+
+  it('fails fast instead of replacing a corrupt per-UIN desired config with defaults', () => {
+    const dir = path.join(tempDir, 'config');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'onebot_10005.json'), '{broken', 'utf8');
+
+    expect(() => loadOneBotConfig('10005', { persistDefaults: true })).toThrow(/is corrupt/);
+    expect(fs.readFileSync(path.join(dir, 'onebot_10005.json'), 'utf8')).toBe('{broken');
+  });
+
+  it('treats a valid JSON non-object root as corrupt desired state', () => {
+    const dir = path.join(tempDir, 'config');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'onebot_10006.json'), '[]', 'utf8');
+
+    expect(() => loadOneBotConfig('10006', { persistDefaults: true })).toThrow(/root must be an object/);
+    expect(fs.readFileSync(path.join(dir, 'onebot_10006.json'), 'utf8')).toBe('[]');
   });
 
   it('fills new statusCommand fields with defaults when absent', () => {
@@ -337,4 +573,3 @@ describe('OneBotConfig.notifications (per-UIN channel opt-in)', () => {
     expect(onDisk.notifications).toEqual({ channelIds: ['discord', 'serverchan'] });
   });
 });
-
