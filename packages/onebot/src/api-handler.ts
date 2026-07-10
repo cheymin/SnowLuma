@@ -1,8 +1,12 @@
 import { renderParamsVerbose, summarizeParams } from '@snowluma/common/log-summary';
 import { createLogger, getLogLevel, nextRequestId, runWithRequestId, type Logger } from '@snowluma/common/logger';
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
-import { ALL_ACTIONS } from './actions';
-import { registerActions } from './action-kit';
+import {
+  ACTION_REGISTRY,
+  HANDLE_QUICK_OPERATION_ACTION,
+  type CompiledActionKind,
+  type CompiledActionRegistry,
+} from './actions';
 import type { ForwardPreviewMeta } from './modules/message-actions';
 import type { JsonObject, JsonValue, MessageMeta } from './types';
 import { RETCODE, failedResponse, okResponse } from './types';
@@ -75,6 +79,12 @@ export interface ApiActionContext {
 
 type ActionHandler = (params: JsonObject, sink?: StreamSink) => Promise<import('./types').ApiResponse>;
 
+interface RegisteredHandler {
+  readonly handler: ActionHandler;
+  readonly canonical: string;
+  readonly kind: CompiledActionKind;
+}
+
 /** A handled-action record handed to debug observers. */
 export interface ActionRecord {
   action: string;
@@ -85,10 +95,11 @@ export interface ActionRecord {
 export type ActionObserver = (rec: ActionRecord) => void;
 
 export class ApiHandler {
-  private readonly handlers = new Map<string, ActionHandler>();
-  /** Names that answer with a multi-frame Stream API response (#163). The
-   *  network adapter consults this BEFORE dispatch to pick streaming output. */
-  private readonly streamActions = new Set<string>();
+  /** Handler + dispatch kind live in one record so stream classification can
+   *  never outlive or drift from the handler it describes. */
+  private readonly handlers = new Map<string, RegisteredHandler>();
+  private readonly registry: CompiledActionRegistry;
+  private registrationOpen = true;
   private readonly log: Logger;
   /** Debug-stream taps — notified after every handled action. Attached
    *  on-demand (ref-counted) by the WebUI debug stream. */
@@ -100,43 +111,106 @@ export class ApiHandler {
     return () => { this.observers.delete(cb); };
   }
 
-  constructor(context: ApiActionContext, uin?: number) {
+  constructor(
+    context: ApiActionContext,
+    uin?: number,
+    registry: CompiledActionRegistry = ACTION_REGISTRY,
+  ) {
+    this.registry = registry;
     this.log = typeof uin === 'number' && uin > 0 ? moduleLog.child({ uin }) : moduleLog;
-    registerActions(this, context, ALL_ACTIONS);
+    try {
+      registry.register(this, context);
 
-    // The one non-ActionSpec handler: `.handle_quick_operation` needs the
-    // ApiHandler itself (to re-drive actions via executeQuickOperation), which
-    // ActionSpec.run's (params, ctx) signature can't supply — so it's the sole
-    // raw registration, kept here rather than in an action file's footer.
-    this.registerAction('.handle_quick_operation', async (params) => {
-      const opContext = params.context as JsonObject | undefined;
-      const operation = params.operation as Record<string, unknown> | undefined;
-      if (!opContext || !operation) return failedResponse(RETCODE.BAD_REQUEST, 'context and operation are required');
-      const { executeQuickOperation } = await import('./network/quick-operation');
-      await executeQuickOperation(opContext, operation, this);
-      return okResponse();
-    });
+      // The one non-ActionSpec handler: `.handle_quick_operation` needs the
+      // ApiHandler itself (to re-drive actions via executeQuickOperation), which
+      // ActionSpec.run's (params, ctx) signature can't supply — so it's the sole
+      // raw registration, kept here rather than in an action file's footer.
+      this.registerRawAction(HANDLE_QUICK_OPERATION_ACTION, async (params) => {
+        const opContext = params.context as JsonObject | undefined;
+        const operation = params.operation as Record<string, unknown> | undefined;
+        if (!opContext || !operation) return failedResponse(RETCODE.BAD_REQUEST, 'context and operation are required');
+        const { executeQuickOperation } = await import('./network/quick-operation');
+        await executeQuickOperation(opContext, operation, this);
+        return okResponse();
+      });
+      this.assertRegistryFullyBound();
+    } finally {
+      // registerAction/registerStreamAction are the constructor-time port used
+      // by ActionSpec. Once construction finishes (successfully or not), the
+      // runtime namespace is immutable and cannot bypass the compiled registry.
+      this.registrationOpen = false;
+    }
   }
 
   registerAction(action: string, handler: ActionHandler): void {
-    this.handlers.set(action, handler);
+    this.registerHandler(action, handler, 'normal');
   }
 
   /** Register a Stream API action — dispatched exactly like a normal action,
    *  but flagged so adapters stream its frames (the handler receives a sink). */
   registerStreamAction(action: string, handler: ActionHandler): void {
-    this.handlers.set(action, handler);
-    this.streamActions.add(action);
+    this.registerHandler(action, handler, 'stream');
+  }
+
+  private registerRawAction(action: string, handler: ActionHandler): void {
+    this.registerHandler(action, handler, 'raw');
+  }
+
+  private registerHandler(action: string, handler: ActionHandler, kind: CompiledActionKind): void {
+    if (!this.registrationOpen) {
+      throw new Error(
+        `Action registry is sealed; cannot register canonical "${action}" (name "${action}", kind ${kind})`,
+      );
+    }
+    const claim = this.registry.resolve(action);
+    if (!claim) {
+      throw new Error(
+        `Action registration is not declared by the compiled registry: `
+        + `canonical "${action}" (name "${action}", kind ${kind})`,
+      );
+    }
+    const canonical = claim.canonical;
+    const existing = this.handlers.get(action);
+    if (existing) {
+      throw new Error(
+        `Action handler conflict for executable name "${action}": `
+        + `canonical "${existing.canonical}" (name "${action}", kind ${existing.kind}) conflicts with `
+        + `canonical "${canonical}" (name "${action}", kind ${kind})`,
+      );
+    }
+    if (claim.kind !== kind) {
+      throw new Error(
+        `Action handler kind mismatch for canonical "${canonical}" (name "${action}"): `
+        + `registry kind ${claim.kind}, registration kind ${kind}`,
+      );
+    }
+    this.handlers.set(action, { handler, canonical, kind });
+  }
+
+  private assertRegistryFullyBound(): void {
+    for (const claim of this.registry.executableNames) {
+      if (this.handlers.has(claim.name)) continue;
+      throw new Error(
+        `Action registry claim has no handler: canonical "${claim.canonical}" `
+        + `(name "${claim.name}", kind ${claim.kind})`,
+      );
+    }
+    if (this.handlers.size !== this.registry.executableNames.length) {
+      throw new Error(
+        `Action registry binding count mismatch: ${this.handlers.size} handlers for `
+        + `${this.registry.executableNames.length} executable names`,
+      );
+    }
   }
 
   /** Whether `action` answers with a multi-frame Stream API response. */
   isStreamAction(action: string): boolean {
-    return this.streamActions.has(action);
+    return this.handlers.get(action)?.kind === 'stream';
   }
 
   async handle(action: string, params: JsonObject, sink?: StreamSink): Promise<import('./types').ApiResponse> {
-    const handler = this.handlers.get(action);
-    if (!handler) {
+    const registered = this.handlers.get(action);
+    if (!registered) {
       this.log.debug('unknown action %s', action);
       return failedResponse(RETCODE.UNKNOWN_ACTION, 'unknown action');
     }
@@ -146,9 +220,9 @@ export class ApiHandler {
     // the wrap + id allocation when trace is actually live, so the default
     // path stays allocation-free.
     if (getLogLevel() !== 'trace') {
-      return this.runAction(action, handler, params, sink);
+      return this.runAction(action, registered.handler, params, sink);
     }
-    return runWithRequestId(nextRequestId(), () => this.runAction(action, handler, params, sink));
+    return runWithRequestId(nextRequestId(), () => this.runAction(action, registered.handler, params, sink));
   }
 
   private async runAction(

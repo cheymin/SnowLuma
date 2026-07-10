@@ -5,13 +5,12 @@
 // from blowing the line width.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ApiHandler } from '../src/api-handler';
 import { OidbError } from '@snowluma/protocol/oidb-service';
 import { subscribeLogs, type LogEntry } from '@snowluma/common/logger';
 import { summarizeParams } from '@snowluma/common/log-summary';
+import { createCompiledTestHandler, testAction } from './helpers/compiled-action-handler';
 
-// Minimal context — we never reach the real action handlers; we
-// register our own via registerAction.
+// Minimal context — isolated test ActionSpecs never call these dependencies.
 function emptyContext(): any {
   return {
     bridge: {},
@@ -79,8 +78,9 @@ describe('summarizeParams', () => {
 
 describe('ApiHandler dispatch logging', () => {
   it('emits a debug entry under [Bridge.Action] when an action is called', async () => {
-    const handler = new ApiHandler(emptyContext(), 12345);
-    handler.registerAction('echo', async () => ({ status: 'ok', retcode: 0, data: null }));
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('echo', async () => ({ status: 'ok', retcode: 0, data: null })),
+    ], 12345);
 
     await handler.handle('echo', { group_id: 67890, message: [1, 2, 3] });
 
@@ -93,10 +93,9 @@ describe('ApiHandler dispatch logging', () => {
   });
 
   it('emits a warn line with the error stack when the handler throws', async () => {
-    const handler = new ApiHandler(emptyContext(), 12345);
-    handler.registerAction('boom', async () => {
-      throw new Error('kapow');
-    });
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('boom', async () => { throw new Error('kapow'); }),
+    ], 12345);
 
     const result = await handler.handle('boom', {});
     expect(result.status).toBe('failed');
@@ -113,16 +112,18 @@ describe('ApiHandler dispatch logging', () => {
   // maps to ONE policy here — ACTION_FAILED (100) + the error message —
   // instead of each action hand-rolling its own inconsistent try/catch.
   it('maps any handler throw to ACTION_FAILED (100) with the error message', async () => {
-    const handler = new ApiHandler(emptyContext(), 12345);
-    handler.registerAction('kaboom', async () => { throw new Error('permission denied'); });
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('kaboom', async () => { throw new Error('permission denied'); }),
+    ], 12345);
 
     const result = await handler.handle('kaboom', {});
     expect(result).toMatchObject({ status: 'failed', retcode: 100, wording: 'permission denied' });
   });
 
   it('surfaces the OidbError code + server message through error.message (no special-casing)', async () => {
-    const handler = new ApiHandler(emptyContext(), 12345);
-    handler.registerAction('oidb_boom', async () => { throw new OidbError(34, 'no permission', 0x11ec, 2); });
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('oidb_boom', async () => { throw new OidbError(34, 'no permission', 0x11ec, 2); }),
+    ], 12345);
 
     const result = await handler.handle('oidb_boom', {});
     expect(result).toMatchObject({ status: 'failed', retcode: 100 });
@@ -131,15 +132,16 @@ describe('ApiHandler dispatch logging', () => {
   });
 
   it('renders a non-Error throw via String()', async () => {
-    const handler = new ApiHandler(emptyContext(), 12345);
-    handler.registerAction('weird', async () => { throw 'just a string'; });
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('weird', async () => { throw 'just a string'; }),
+    ], 12345);
 
     const result = await handler.handle('weird', {});
     expect(result).toMatchObject({ status: 'failed', retcode: 100, wording: 'just a string' });
   });
 
   it('logs unknown actions at debug level', async () => {
-    const handler = new ApiHandler(emptyContext(), 99);
+    const handler = createCompiledTestHandler(emptyContext(), [], 99);
     await handler.handle('not_a_real_action', {});
 
     const entry = captured.find((e) => e.scope === 'Bridge.Action' && e.message.includes('unknown action'));
@@ -148,8 +150,9 @@ describe('ApiHandler dispatch logging', () => {
   });
 
   it('falls back to the module-level logger (no uin slot) when uin is omitted', async () => {
-    const handler = new ApiHandler(emptyContext());
-    handler.registerAction('ping', async () => ({ status: 'ok', retcode: 0, data: null }));
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('ping', async () => ({ status: 'ok', retcode: 0, data: null })),
+    ]);
 
     await handler.handle('ping', {});
 

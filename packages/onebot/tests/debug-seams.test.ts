@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OneBotNetworkManager } from '../src/network/network-manager';
-import { ApiHandler, type ApiActionContext } from '../src/api-handler';
+import type { ApiActionContext } from '../src/api-handler';
+import { createCompiledTestHandler, testAction } from './helpers/compiled-action-handler';
 
 // ApiHandler's register* only define handlers (closures) at construction — they
 // don't touch ctx — so a throwing proxy is a safe minimal context.
@@ -39,8 +40,9 @@ describe('OneBotNetworkManager.subscribeDebug', () => {
 
 describe('ApiHandler.setObserver', () => {
   it('fires after a successful action with {action, params, response, ms}', async () => {
-    const h = new ApiHandler(fakeCtx());
-    h.registerAction('ping', async () => ({ status: 'ok', retcode: 0, data: 'pong' }));
+    const h = createCompiledTestHandler(fakeCtx(), [
+      testAction('ping', async () => ({ status: 'ok', retcode: 0, data: 'pong' })),
+    ]);
     const recs: Array<{ action: string; response: { status: string } }> = [];
     h.setObserver((r) => recs.push(r as any));
     const res = await h.handle('ping', { x: 1 });
@@ -51,8 +53,9 @@ describe('ApiHandler.setObserver', () => {
   });
 
   it('fires on a thrown action with the failure response', async () => {
-    const h = new ApiHandler(fakeCtx());
-    h.registerAction('boom', async () => { throw new Error('kaboom'); });
+    const h = createCompiledTestHandler(fakeCtx(), [
+      testAction('boom', async () => { throw new Error('kaboom'); }),
+    ]);
     const recs: any[] = [];
     h.setObserver((r) => recs.push(r));
     await h.handle('boom', {});
@@ -61,8 +64,9 @@ describe('ApiHandler.setObserver', () => {
   });
 
   it('unsubscribe stops observation', async () => {
-    const h = new ApiHandler(fakeCtx());
-    h.registerAction('ping', async () => ({ status: 'ok', retcode: 0 }));
+    const h = createCompiledTestHandler(fakeCtx(), [
+      testAction('ping', async () => ({ status: 'ok', retcode: 0 })),
+    ]);
     const cb = vi.fn();
     const off = h.setObserver(cb);
     await h.handle('ping', {});
@@ -72,8 +76,9 @@ describe('ApiHandler.setObserver', () => {
   });
 
   it('a throwing observer does not break handle', async () => {
-    const h = new ApiHandler(fakeCtx());
-    h.registerAction('ping', async () => ({ status: 'ok', retcode: 0 }));
+    const h = createCompiledTestHandler(fakeCtx(), [
+      testAction('ping', async () => ({ status: 'ok', retcode: 0 })),
+    ]);
     h.setObserver(() => { throw new Error('observer boom'); });
     await expect(h.handle('ping', {})).resolves.toMatchObject({ status: 'ok' });
   });

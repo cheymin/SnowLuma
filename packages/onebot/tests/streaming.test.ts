@@ -4,30 +4,30 @@
 // `stream:'stream-action'`), normal actions stay single-frame, and failures
 // terminate with an error frame. Wire format mirrors NapCat's Stream API.
 import { describe, it, expect } from 'vitest';
-import { ApiHandler, type ApiActionContext } from '../src/api-handler';
-import { defineAction, defineStreamAction, f } from '../src/action-kit';
+import type { ApiHandler, ApiActionContext } from '../src/api-handler';
+import { defineAction, defineStreamAction, f, type RegisteredActionSpec } from '../src/action-kit';
 import { okResponse, failedResponse } from '../src/types';
 import { wrapStreamFrame, wrapStreamTerminal, STREAM_MARK } from '../src/streaming';
+import { createCompiledTestHandler } from './helpers/compiled-action-handler';
 
-function newHandler(): ApiHandler {
-  // The real register* run lazily (handlers capture ctx, never call it at
-  // registration), so an empty ctx is enough to exercise the dispatch seam.
-  return new ApiHandler({} as ApiActionContext);
+function newHandler(...specs: RegisteredActionSpec[]): ApiHandler {
+  // ActionSpecs bind during the constructor but call ctx only when dispatched.
+  return createCompiledTestHandler({} as ApiActionContext, specs);
 }
 
 const parse = (frames: string[]) => frames.map((f) => JSON.parse(f) as Record<string, unknown>);
 
 describe('Stream API plumbing', () => {
   it('streams N intermediate frames + a terminal frame, all echo-tagged', async () => {
-    const h = newHandler();
-    defineStreamAction({
+    const action = defineStreamAction({
       name: 'demo_stream',
       params: { n: f.uint() },
       run: async (p, _ctx, _raw, sink) => {
         for (let i = 0; i < p.n; i++) await sink.send({ type: 'stream', index: i });
         return okResponse({ type: 'response', total: p.n });
       },
-    }).register(h, {} as ApiActionContext);
+    });
+    const h = newHandler(action);
 
     const frames: string[] = [];
     await h.processStreamRequest(
@@ -43,17 +43,17 @@ describe('Stream API plumbing', () => {
   });
 
   it('marks the action as a stream action; normal actions are not', () => {
-    const h = newHandler();
-    defineStreamAction({ name: 'demo_stream', params: {}, run: () => okResponse({ type: 'response' }) }).register(h, {} as ApiActionContext);
-    defineAction({ name: 'demo_normal', params: {}, run: () => okResponse({ ok: true }) }).register(h, {} as ApiActionContext);
+    const streamAction = defineStreamAction({ name: 'demo_stream', params: {}, run: () => okResponse({ type: 'response' }) });
+    const normalAction = defineAction({ name: 'demo_normal', params: {}, run: () => okResponse({ ok: true }) });
+    const h = newHandler(streamAction, normalAction);
     expect(h.isStreamAction('demo_stream')).toBe(true);
     expect(h.isStreamAction('demo_normal')).toBe(false);
     expect(h.isStreamAction('nope')).toBe(false);
   });
 
   it('a normal action through processStreamRequest emits exactly one un-marked frame', async () => {
-    const h = newHandler();
-    defineAction({ name: 'demo_normal', params: {}, run: () => okResponse({ ok: true }) }).register(h, {} as ApiActionContext);
+    const action = defineAction({ name: 'demo_normal', params: {}, run: () => okResponse({ ok: true }) });
+    const h = newHandler(action);
 
     const frames: string[] = [];
     await h.processStreamRequest(JSON.stringify({ action: 'demo_normal', params: {}, echo: 'e2' }), (j) => frames.push(j));
@@ -65,12 +65,12 @@ describe('Stream API plumbing', () => {
   });
 
   it('a throwing stream action terminates with a single error frame', async () => {
-    const h = newHandler();
-    defineStreamAction({
+    const action = defineStreamAction({
       name: 'demo_boom',
       params: {},
       run: async () => { throw new Error('boom'); },
-    }).register(h, {} as ApiActionContext);
+    });
+    const h = newHandler(action);
 
     const frames: string[] = [];
     await h.processStreamRequest(JSON.stringify({ action: 'demo_boom', params: {}, echo: 'e3' }), (j) => frames.push(j));
@@ -82,15 +82,15 @@ describe('Stream API plumbing', () => {
   });
 
   it('emits already-sent frames before the terminal error when a stream throws mid-way', async () => {
-    const h = newHandler();
-    defineStreamAction({
+    const action = defineStreamAction({
       name: 'demo_partial',
       params: {},
       run: async (_p, _ctx, _raw, sink) => {
         await sink.send({ type: 'stream', index: 0 });
         throw new Error('mid');
       },
-    }).register(h, {} as ApiActionContext);
+    });
+    const h = newHandler(action);
 
     const frames: string[] = [];
     await h.processStreamRequest(JSON.stringify({ action: 'demo_partial', params: {} }), (j) => frames.push(j));
@@ -102,8 +102,8 @@ describe('Stream API plumbing', () => {
   });
 
   it('stream param validation fails terminate with an error frame', async () => {
-    const h = newHandler();
-    defineStreamAction({ name: 'demo_needs', params: { n: f.uint() }, run: () => okResponse({ type: 'response' }) }).register(h, {} as ApiActionContext);
+    const action = defineStreamAction({ name: 'demo_needs', params: { n: f.uint() }, run: () => okResponse({ type: 'response' }) });
+    const h = newHandler(action);
 
     const frames: string[] = [];
     await h.processStreamRequest(JSON.stringify({ action: 'demo_needs', params: {} }), (j) => frames.push(j));
@@ -112,16 +112,16 @@ describe('Stream API plumbing', () => {
   });
 
   it('aborts a stream when isAlive turns false (client disconnect)', async () => {
-    const h = newHandler();
     let sent = 0;
-    defineStreamAction({
+    const action = defineStreamAction({
       name: 'demo_abort',
       params: {},
       run: async (_p, _ctx, _raw, sink) => {
         for (let i = 0; i < 5; i++) { await sink.send({ type: 'stream', index: i }); sent++; }
         return okResponse({ type: 'response' });
       },
-    }).register(h, {} as ApiActionContext);
+    });
+    const h = newHandler(action);
 
     const frames: string[] = [];
     let alive = true;

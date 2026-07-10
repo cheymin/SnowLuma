@@ -447,12 +447,18 @@ type Handler = (params: JsonObject) => Promise<ApiResponse>;
  * both kinds in one flat list without coupling to either concrete generic.
  */
 export interface RegisteredActionSpec {
+  /** Runtime dispatch kind. Kept on the spec so the compiled registry can
+   *  validate the executable namespace without inferring behavior from docs. */
+  readonly kind: 'normal' | 'stream';
+  /** Canonical name first, followed by every executable alias. */
+  readonly names: readonly string[];
   describe(): ActionDoc;
   register(h: ApiHandler, ctx: ApiActionContext): void;
 }
 
 export interface ActionSpec<S extends Spec> extends RegisteredActionSpec {
-  readonly names: string[];
+  readonly kind: 'normal';
+  readonly names: readonly string[];
   readonly params: S;
   /** Pure: coerce + validate + cross-field, no ctx, no I/O. The test surface. */
   parse(raw: JsonObject): CoerceResult<InferParams<S>>;
@@ -482,7 +488,7 @@ interface ActionDef<S extends Spec> {
 const wording = (e: Err): string => (e.field ? `${e.field}: ${e.reason}` : e.reason);
 
 export function defineAction<S extends Spec>(def: ActionDef<S>): ActionSpec<S> {
-  const names = typeof def.name === 'string' ? [def.name] : [...def.name];
+  const names = Object.freeze(typeof def.name === 'string' ? [def.name] : [...def.name]);
   const rules: readonly CrossFieldRule[] = def.rules
     ? def.rules(RULES as unknown as RuleBuilders<InferParams<S>>)
     : [];
@@ -510,6 +516,7 @@ export function defineAction<S extends Spec>(def: ActionDef<S>): ActionSpec<S> {
   };
 
   return {
+    kind: 'normal',
     names,
     params: def.params,
     parse,
@@ -567,7 +574,8 @@ interface StreamActionDef<S extends Spec> {
 }
 
 export interface StreamActionSpec<S extends Spec> extends RegisteredActionSpec {
-  readonly names: string[];
+  readonly kind: 'stream';
+  readonly names: readonly string[];
   readonly params: S;
   parse(raw: JsonObject): CoerceResult<InferParams<S>>;
 }
@@ -587,6 +595,7 @@ export function defineStreamAction<S extends Spec>(def: StreamActionDef<S>): Str
   });
 
   return {
+    kind: 'stream',
     names: base.names,
     params: def.params,
     parse: base.parse,
