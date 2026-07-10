@@ -30,6 +30,9 @@ interface ForwardConn {
 export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
   private wss: WebSocketServer | null = null;
   private listening = false;
+  private closePromise: Promise<void> | null = null;
+  private acceptingActions = false;
+  private readonly inFlightActions = new Set<Promise<void>>();
   private connections = new Map<WebSocket, ForwardConn>();
   private options: EventReportOptions;
 
@@ -38,15 +41,22 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
     this.options = resolveReportOptions(config);
   }
 
-  open(): void {
-    if (this.isEnabled) return;
+  async open(): Promise<void> {
+    if (this.isEnabled && this.listening) return;
     if (this.config.enabled === false) return;
-    this.startServer();
+    if (this.wss) throw new Error(`WebSocket adapter [${this.name}] still owns a previous server`);
+    await this.startServer();
     this.isEnabled = true;
+    this.clearApplyFailure();
   }
 
-  close(): void {
-    if (!this.isEnabled && this.connections.size === 0 && !this.wss) return;
+  async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    if (!this.isEnabled && this.connections.size === 0 && !this.wss && this.inFlightActions.size === 0) return;
+    const wasEnabled = this.isEnabled;
+    const wasListening = this.listening;
+    const wasAcceptingActions = this.acceptingActions;
+    this.acceptingActions = false;
     // Final lifecycle broadcast before tearing down so attached event clients
     // see the disable transition.
     const lifecycle = this.ctx.buildLifecycleEvent('disable');
@@ -63,8 +73,31 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
       safeClose(conn.socket);
     }
     this.connections.clear();
-    this.wss?.close();
-    this.wss = null;
+    const wss = this.wss;
+    const releaseResult: Promise<{ error?: Error }> = wss
+      ? new Promise<{ error?: Error }>((resolve) => {
+        wss.close((error) => resolve(error && !isAlreadyClosedError(error) ? { error } : {}));
+      })
+      : Promise.resolve({});
+    const attempt = (async () => {
+      await Promise.all(this.inFlightActions);
+      const release = await releaseResult;
+      if (release.error) throw release.error;
+    })();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      if (wss && this.wss === wss) this.wss = null;
+    } catch (error) {
+      // A failed close callback leaves release ambiguous. Retain the server
+      // reference and active binding state so a later shutdown can retry.
+      this.isEnabled = wasEnabled;
+      this.listening = wasListening;
+      this.acceptingActions = wasAcceptingActions;
+      throw error;
+    } finally {
+      this.closePromise = null;
+    }
   }
 
   override describeStatus(): AdapterStatus {
@@ -92,34 +125,67 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
     }
   }
 
-  private startServer(): void {
-    const wss = new WebSocketServer({
-      host: this.config.host ?? '0.0.0.0',
-      port: this.config.port,
-      path: this.config.path ?? '/',
-    });
-    this.wss = wss;
+  private startServer(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let wss: WebSocketServer;
+      try {
+        wss = new WebSocketServer({
+          host: this.config.host ?? '0.0.0.0',
+          port: this.config.port,
+          path: normalizePath(this.config.path),
+        });
+      } catch (error) {
+        this.recordTransportFailure(error);
+        reject(error);
+        return;
+      }
+      this.wss = wss;
+      let opening = true;
 
-    wss.on('listening', () => {
-      this.listening = true;
-      this.log.success(
-        '[%s] listening %s:%d%s',
-        this.name,
-        this.config.host ?? '0.0.0.0',
-        this.config.port,
-        this.config.path ?? '/',
-      );
-    });
+      wss.once('listening', () => {
+        opening = false;
+        if (this.wss !== wss || this.closePromise) {
+          wss.close();
+          reject(new Error(`WebSocket adapter [${this.name}] was closed while binding`));
+          return;
+        }
+        this.listening = true;
+        this.isEnabled = true;
+        this.acceptingActions = true;
+        this.log.success(
+          '[%s] listening %s:%d%s',
+          this.name,
+          this.config.host ?? '0.0.0.0',
+          this.config.port,
+          this.config.path ?? '/',
+        );
+        resolve();
+      });
 
-    wss.on('error', (err: Error) => {
-      this.listening = false;
-      this.log.warn('[%s] server error: %s', this.name, err instanceof Error ? err.message : String(err));
-    });
+      wss.on('error', (error: Error) => {
+        if (this.wss === wss) {
+          this.listening = false;
+          this.isEnabled = false;
+          this.acceptingActions = false;
+          this.recordTransportFailure(error);
+          if (opening) this.wss = null;
+        }
+        this.log.error('[%s] server error: %s', this.name, error instanceof Error ? error.message : String(error));
+        if (opening) {
+          opening = false;
+          reject(error);
+        }
+      });
 
-    wss.on('connection', (socket: WebSocket, request: IncomingMessage) => this.onConnection(socket, request));
+      wss.on('connection', (socket: WebSocket, request: IncomingMessage) => this.onConnection(socket, request));
+    });
   }
 
   private onConnection(socket: WebSocket, request: IncomingMessage): void {
+    if (!this.acceptingActions || this.ctx.api.isAcceptingActions === false) {
+      safeClose(socket, 1012, 'server closing');
+      return;
+    }
     if (!isAuthorized(request, this.config.accessToken ?? '')) {
       safeClose(socket, 1008, 'invalid access token');
       return;
@@ -138,9 +204,7 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
     this.connections.set(socket, conn);
 
     socket.on('message', (raw: Buffer) => {
-      void this.handleApiMessage(socket, role, raw).catch((err) => {
-        this.log.warn('[%s] handleApiMessage threw: %s', this.name, err instanceof Error ? (err.stack ?? err.message) : String(err));
-      });
+      this.trackInboundAction(() => this.handleApiMessage(socket, role, raw));
     });
     socket.on('close', () => {
       stopHeartbeat();
@@ -170,9 +234,35 @@ export class WsServerAdapter extends IOneBotNetworkAdapter<WsServerNetwork> {
     );
   }
 
+  private trackInboundAction(start: () => Promise<void>): void {
+    if (!this.acceptingActions || this.ctx.api.isAcceptingActions === false) {
+      this.log.warn('[%s] rejected inbound action while adapter is closing', this.name);
+      return;
+    }
+    let action: Promise<void>;
+    try {
+      action = start();
+    } catch (error) {
+      this.log.error('[%s] inbound action start failed: %s', this.name, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      return;
+    }
+    const tracked = action.then(
+      () => undefined,
+      (error) => {
+        this.log.error('[%s] inbound action failed: %s', this.name, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      },
+    );
+    this.inFlightActions.add(tracked);
+    void tracked.then(() => { this.inFlightActions.delete(tracked); });
+  }
+
   private sendBootstrapMetaEvents(socket: WebSocket): void {
     for (const frame of this.bootstrapMetaFrames(this.options)) safeSend(socket, frame);
   }
+}
+
+function isAlreadyClosedError(error: Error): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING';
 }
 
 function classifyForwardRole(request: IncomingMessage): WsRole {

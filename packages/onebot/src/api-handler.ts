@@ -101,6 +101,10 @@ export class ApiHandler {
   private readonly handlers = new Map<string, RegisteredHandler>();
   private readonly registry: CompiledActionRegistry;
   private registrationOpen = true;
+  /** Sticky instance-lifecycle gate. A failed transport close may restore its
+   *  own listener for retry, but it must never reopen execution against a
+   *  retiring Bridge/store generation. */
+  private acceptingActions = true;
   private readonly log: Logger;
   /** Debug-stream taps — notified after every handled action. Attached
    *  on-demand (ref-counted) by the WebUI debug stream. */
@@ -209,7 +213,30 @@ export class ApiHandler {
     return this.handlers.get(action)?.kind === 'stream';
   }
 
+  /** Whether the owning OneBot instance still accepts new Action execution. */
+  get isAcceptingActions(): boolean {
+    return this.acceptingActions;
+  }
+
+  /** Permanently reject new Actions for this handler generation.
+   *
+   * Existing calls have already been admitted and are drained by their owning
+   * transport/instance. There is intentionally no resume operation: hot reload
+   * keeps the same live generation open, while teardown creates a new handler
+   * only after the previous generation has fully retired. */
+  quiesce(): void {
+    if (!this.acceptingActions) return;
+    this.acceptingActions = false;
+    this.log.info('Action ingress quiesced');
+  }
+
   async handle(action: string, params: JsonObject, sink?: StreamSink): Promise<import('./types').ApiResponse> {
+    if (!this.acceptingActions) {
+      const response = failedResponse(RETCODE.ACTION_FAILED, 'OneBot instance is shutting down');
+      this.log.warn('rejected Action %s after instance quiesce', action);
+      this.notifyObservers(action, params, response, 0);
+      return response;
+    }
     const registered = this.handlers.get(action);
     if (!registered) {
       this.log.debug('unknown action %s', action);

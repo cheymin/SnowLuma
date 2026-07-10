@@ -163,6 +163,7 @@ describe('WsServerAdapter — bootstrap on connect + disable on close (character
   it('sends the bootstrap triplet to a new Event connection', () => {
     const adapter = new WsServerAdapter('wss', cfg(), ctx());
     adapter.open();
+    servers[0].emit('listening');
     const sock = new FakeWebSocket();
     servers[0].simulateConnection(sock, req);
 
@@ -174,6 +175,7 @@ describe('WsServerAdapter — bootstrap on connect + disable on close (character
   it('broadcasts a single disable lifecycle to connected event clients on close()', () => {
     const adapter = new WsServerAdapter('wss', cfg(), ctx());
     adapter.open();
+    servers[0].emit('listening');
     const sock = new FakeWebSocket();
     servers[0].simulateConnection(sock, req);
     sock.sent.length = 0; // drop the bootstrap frames; we only care about close
@@ -192,6 +194,7 @@ describe('WsServerAdapter — bootstrap on connect + disable on close (character
     // the disable broadcast — the close()-side Api guard the lift reroutes.
     const adapter = new WsServerAdapter('wss', cfg({ role: undefined }), ctx());
     adapter.open();
+    servers[0].emit('listening');
     const eventSock = new FakeWebSocket();
     const apiSock = new FakeWebSocket();
     servers[0].simulateConnection(eventSock, { headers: {}, url: '/event' });

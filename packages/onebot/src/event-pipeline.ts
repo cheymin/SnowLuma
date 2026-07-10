@@ -9,53 +9,114 @@ import { deliverPttTransText, pttTransKey } from './modules/ptt-trans-waiter';
 
 const moduleLog = createLogger('Event');
 
-export function registerEventPipeline(ctx: OneBotInstanceContext): () => void {
+/** Lifecycle handle for the asynchronous bridge-event pipeline.
+ *
+ * `stop()` is synchronous and idempotent: it removes every subscription so no
+ * new conversion can start. `drain()` resolves only after conversions that had
+ * already started have settled. Instance teardown must call them in that order
+ * before closing stores used by conversion/backfill/dispatch. */
+export interface EventPipelineHandle {
+  stop(): void;
+  drain(): Promise<void>;
+}
+
+export function registerEventPipeline(ctx: OneBotInstanceContext): EventPipelineHandle {
   const uinNum = Number.parseInt(ctx.uin, 10);
   const log = Number.isFinite(uinNum) && uinNum > 0 ? moduleLog.child({ uin: uinNum }) : moduleLog;
   const disposers: Array<() => void> = [];
+  const inFlight = new Set<Promise<void>>();
+  let accepting = true;
+
+  const track = (
+    kind: QQEventVariant['kind'],
+    start: () => void | Promise<void>,
+  ): Promise<void> => {
+    if (!accepting) return Promise.resolve();
+    let operation: Promise<void>;
+    try {
+      operation = Promise.resolve(start());
+    } catch (error) {
+      operation = Promise.reject(error);
+    }
+    const tracked = operation.then(
+      () => undefined,
+      (error) => {
+        log.error(
+          'event pipeline handler failed kind=%s: %s',
+          kind,
+          error instanceof Error ? (error.stack ?? error.message) : String(error),
+        );
+      },
+    );
+    inFlight.add(tracked);
+    void tracked.then(() => { inFlight.delete(tracked); });
+    return tracked;
+  };
+
   disposers.push(
-    ctx.bridge.events.on('group_message', async (event) => {
+    ctx.bridge.events.on('group_message', (event) => track(event.kind, async () => {
       cacheGroupMessageMeta(ctx, event);
       await convertAndDispatch(ctx, log, event);
-    }),
+    })),
   );
   disposers.push(
-    ctx.bridge.events.on('friend_message', async (event) => {
+    ctx.bridge.events.on('friend_message', (event) => track(event.kind, async () => {
       cachePrivateMessageMeta(ctx, event.senderUin, event.msgSeq, event.time, event.msgId);
       await convertAndDispatch(ctx, log, event);
-    }),
+    })),
   );
   disposers.push(
-    ctx.bridge.events.on('temp_message', async (event) => {
+    ctx.bridge.events.on('temp_message', (event) => track(event.kind, async () => {
       cachePrivateMessageMeta(ctx, event.senderUin, event.msgSeq, event.time, 0);
       // Record this group temp session so a later reply is limited to sessions
       // the peer opened.
       ctx.tempSessions.record(event.senderUin, event.groupId);
       await convertAndDispatch(ctx, log, event);
-    }),
+    })),
   );
   for (const kind of NOTICE_KINDS) {
     disposers.push(
-      ctx.bridge.events.on(kind, async (event) => {
+      ctx.bridge.events.on(kind, (event) => track(event.kind, async () => {
         if (event.kind === 'group_msg_emoji_like') {
           cacheReaction(ctx, event);
         }
         await convertAndDispatch(ctx, log, event);
-      }),
+      })),
     );
   }
   // Internal-only: voice-to-text result push. Not converted to a OneBot event —
   // it just unblocks the fetch_ptt_text call waiting on this msgId.
   disposers.push(
-    ctx.bridge.events.on('ptt_trans_result', (event) => {
+    ctx.bridge.events.on('ptt_trans_result', (event) => track(event.kind, () => {
       deliverPttTransText(pttTransKey(event.selfUin, event.msgId), event.text);
-    }),
+    })),
   );
 
-  return () => {
+  const stop = (): void => {
+    if (!accepting) return;
+    accepting = false;
     for (const dispose of disposers) {
-      try { dispose(); } catch { /* ignore */ }
+      try {
+        dispose();
+      } catch (error) {
+        log.error(
+          'event pipeline unsubscribe failed: %s',
+          error instanceof Error ? (error.stack ?? error.message) : String(error),
+        );
+      }
     }
+  };
+
+  return {
+    stop,
+    async drain(): Promise<void> {
+      // `stop()` makes the set monotonic: no later event can be admitted while
+      // this snapshot is settling.
+      if (accepting) {
+        throw new Error('event pipeline must be stopped before it can be drained');
+      }
+      await Promise.allSettled([...inFlight]);
+    },
   };
 }
 
@@ -110,7 +171,15 @@ async function runConvertAndDispatch(ctx: OneBotInstanceContext, log: Logger, ev
   // back-fill failure block delivery of the live message.
   try {
     await backfillReplyTarget(ctx, event);
-  } catch { /* best-effort — dispatch the live event regardless */ }
+  } catch (error) {
+    // Best-effort — dispatch the live event regardless, but keep the failure
+    // attributable so a repeated store/server miss is diagnosable.
+    log.warn(
+      'reply backfill failed kind=%s: %s',
+      event.kind,
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    );
+  }
   ctx.dispatchEvent(converted);
   log.trace(() => [`recv ${event.kind} ⇒ ${String(converted.post_type ?? '?')} (${Date.now() - startedAt}ms)`]);
 }

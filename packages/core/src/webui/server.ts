@@ -2,7 +2,11 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { HookManager, HookProcessInfo } from '@snowluma/bridge';
 import { createLogger, getLogLevel, getRecentLogs, LOG_LEVELS, setLogLevel, subscribeLogs } from '@snowluma/common/logger';
-import { loadOneBotConfig, saveOneBotConfig } from '@snowluma/onebot/config';
+import {
+  loadOneBotConfig,
+  OneBotConfigValidationError,
+  saveOneBotConfig,
+} from '@snowluma/onebot/config';
 import { loadGlobalSettings, saveGlobalSettings } from '@snowluma/onebot/global-config';
 import type { OneBotManager } from '@snowluma/onebot/manager';
 import type { OneBotConfig, JsonObject as OneBotJsonObject } from '@snowluma/onebot/types';
@@ -347,10 +351,11 @@ export async function initWebUI(
   // `pickComparable` strips `adapter.detail` — that's a localised human
   // string assembled with HH:MM:SS timestamps from the last webhook
   // delivery; including it in the diff would make every webhook event
-  // produce a publish (defeating the diff). We compare ONLY name + kind +
-  // status, which captures every transition the dashboard actually
-  // renders differently. The SSE handler still ships the FULL snapshot
-  // (with `detail`) — it's only the diff key that's pruned.
+  // produce a publish (defeating the diff). We compare name + kind + status,
+  // plus the structured `lastErrorAt`: a new apply failure must refresh its
+  // error/time even when the adapter was already degraded. The SSE handler
+  // still ships the FULL snapshot (with `detail` and `lastError`) — it's only
+  // the diff key that's pruned.
   //
   // Trade-off: the rendered detail string (e.g. "3 个客户端", "上次推送
   // 14:53:01") only refreshes on the next SSE push or on the 30s REST
@@ -375,9 +380,9 @@ export async function initWebUI(
           // if the snapshot shape ever drifts.
           adapters: Array.isArray(acc.adapters)
             ? acc.adapters.map((a: unknown) => {
-                const o = a as { name?: string; kind?: string; status?: string };
-                return { name: o.name, kind: o.kind, status: o.status };
-              })
+              const o = a as { name?: string; kind?: string; status?: string; lastErrorAt?: number };
+              return { name: o.name, kind: o.kind, status: o.status, lastErrorAt: o.lastErrorAt };
+            })
             : [],
         }));
       },
@@ -1134,19 +1139,69 @@ export async function initWebUI(
   app.post('/api/config/:uin', async (c) => {
     const uin = c.req.param('uin');
     if (!UIN_REGEX.test(uin)) return c.json({ success: false, message: 'invalid uin' }, 400);
+    let body: unknown;
     try {
-      const body = (await c.req.json()) as OneBotConfig;
-      saveOneBotConfig(uin, body);
-      const reloaded = oneBotManager.reloadConfig(uin);
-      log.info('Updated OneBot config for UIN: %s%s', uin, reloaded ? ' and reloaded' : '');
+      body = await c.req.json();
+    } catch {
+      return c.json({ success: false, saved: false, applied: false, message: '请求格式错误' }, 400);
+    }
+
+    try {
+      saveOneBotConfig(uin, body as OneBotConfig);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof OneBotConfigValidationError) {
+        log.warn('reject invalid config for uin=%s: %s', uin, message);
+        return c.json({ success: false, saved: false, applied: false, message }, 400);
+      }
+      log.error('persist config for uin=%s failed: %s', uin, message);
+      return c.json({ success: false, saved: false, applied: false, message: '配置保存失败，请检查服务器日志' }, 500);
+    }
+
+    try {
+      // Apply the exact validated value that was persisted above. Re-reading
+      // the path here would race concurrent POSTs (request A could load B and
+      // falsely report that A was applied).
+      const apply = await oneBotManager.reloadConfig(uin, body as OneBotConfig);
+      const message = !apply.online
+        ? '配置保存成功，当前会话未在线，将在下次连接时生效。'
+        : apply.applied
+          ? '配置保存成功，已热重载当前会话。'
+          : '配置已保存，但部分网络节点未能应用；旧节点已尽力恢复，请查看错误详情。';
+      log.info(
+        'Updated OneBot config for UIN=%s saved=true online=%s applied=%s failures=%d',
+        uin,
+        String(apply.online),
+        String(apply.applied),
+        apply.errors.length,
+      );
       return c.json({
         success: true,
-        reloaded,
-        message: reloaded ? '配置保存成功，已热重载当前会话。' : '配置保存成功，当前会话未在线，将在下次连接时生效。',
+        saved: true,
+        applied: apply.applied,
+        online: apply.online,
+        errors: apply.errors,
+        adapters: apply.adapters,
+        config: body,
+        // Legacy compatibility: this field used to mean "a live instance was
+        // asked to reload". It now only claims success after the awaitable
+        // reconcile actually completed.
+        reloaded: apply.online && apply.applied,
+        message,
       });
     } catch (err) {
-      log.warn('save config for uin=%s failed: %s', uin, err instanceof Error ? err.message : String(err));
-      return c.json({ success: false, message: '配置保存失败，请检查服务器日志' }, 400);
+      const message = err instanceof Error ? err.message : String(err);
+      log.error('config saved but apply crashed for uin=%s: %s', uin, message);
+      return c.json({
+        success: true,
+        saved: true,
+        applied: false,
+        online: oneBotManager.getInstance(uin) !== null,
+        reloaded: false,
+        errors: [{ name: 'network-manager', phase: 'reload', message, at: Date.now() }],
+        config: body,
+        message: '配置已保存，但热重载失败，请检查服务器日志。',
+      });
     }
   });
 

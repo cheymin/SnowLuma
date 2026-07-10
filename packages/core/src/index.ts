@@ -82,14 +82,32 @@ async function main() {
 
   // Graceful shutdown: dispose managers, await log flush, then exit.
   // SIGINT (Ctrl-C) and SIGTERM (Docker/systemd) take the same path.
+  let shutdownStarted = false;
   const shutdown = (signal: string) => async () => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
     log.warn(`Shutting down (${signal})...`);
-    oneBotManager.dispose();
-    notificationManager.dispose();
-    hookManager.dispose();
-    stateWiring.dispose();
+    let exitCode = 0;
+    try {
+      await oneBotManager.dispose();
+    } catch (error) {
+      exitCode = 1;
+      log.error('OneBot shutdown failed: %s', error instanceof Error ? (error.stack ?? error.message) : String(error));
+    }
+    try { notificationManager.dispose(); } catch (error) {
+      exitCode = 1;
+      log.error('notification shutdown failed: %s', error instanceof Error ? (error.stack ?? error.message) : String(error));
+    }
+    try { hookManager.dispose(); } catch (error) {
+      exitCode = 1;
+      log.error('hook shutdown failed: %s', error instanceof Error ? (error.stack ?? error.message) : String(error));
+    }
+    try { stateWiring.dispose(); } catch (error) {
+      exitCode = 1;
+      log.error('state wiring shutdown failed: %s', error instanceof Error ? (error.stack ?? error.message) : String(error));
+    }
     await closeLogger();
-    process.exit(0);
+    process.exit(exitCode);
   };
   process.on('SIGINT', shutdown('SIGINT'));
   process.on('SIGTERM', shutdown('SIGTERM'));

@@ -17,7 +17,7 @@ export enum NetworkReloadType {
   Opened = 3,
 }
 
-export type AdapterStatusLevel = 'ok' | 'warn' | 'down' | 'disabled';
+export type AdapterStatusLevel = 'ok' | 'warn' | 'down' | 'disabled' | 'degraded';
 
 /** Live runtime status of a single network adapter, surfaced to the WebUI
  *  dashboard (and the per-node config cards) so the gateway's own
@@ -28,6 +28,11 @@ export interface AdapterStatus {
   kind: 'httpServer' | 'httpClient' | 'wsServer' | 'wsClient';
   status: AdapterStatusLevel;
   detail: string;
+  /** Present when the desired config could not be applied or the bound
+   *  transport later failed. The adapter may still be serving its restored
+   *  previous config; `degraded` describes reconciliation, not only liveness. */
+  lastError?: string;
+  lastErrorAt?: number;
 }
 
 export abstract class IOneBotNetworkAdapter<C extends NetworkBase> {
@@ -36,6 +41,7 @@ export abstract class IOneBotNetworkAdapter<C extends NetworkBase> {
   protected readonly ctx: NetworkAdapterContext;
   protected readonly log: Logger;
   protected isEnabled = false;
+  private applyFailure: { message: string; at: number } | null = null;
 
   constructor(name: string, config: C, ctx: NetworkAdapterContext, moduleLog?: Logger) {
     this.name = name;
@@ -50,6 +56,8 @@ export abstract class IOneBotNetworkAdapter<C extends NetworkBase> {
 
   get currentConfig(): Readonly<C> { return this.config; }
 
+  get hasApplyFailure(): boolean { return this.applyFailure !== null; }
+
   abstract open(): void | Promise<void>;
   abstract close(): void | Promise<void>;
 
@@ -57,6 +65,35 @@ export abstract class IOneBotNetworkAdapter<C extends NetworkBase> {
 
   /** Report live connection health for the WebUI dashboard. */
   abstract describeStatus(): AdapterStatus;
+
+  /** Status with the manager-owned desired/live mismatch overlaid. Concrete
+   *  adapters continue to describe transport health; reconciliation failures
+   *  are kept here so a successfully restored old binding is still visible. */
+  describeManagedStatus(): AdapterStatus {
+    const status = this.describeStatus();
+    if (!this.applyFailure) return status;
+    return {
+      ...status,
+      status: 'degraded',
+      detail: `应用失败：${this.applyFailure.message}`,
+      lastError: this.applyFailure.message,
+      lastErrorAt: this.applyFailure.at,
+    };
+  }
+
+  /** NetworkManager lifecycle seam. A failure is cleared only after a later
+   *  reconciliation reaches the desired state. */
+  markApplyFailure(error: unknown, at = Date.now()): void {
+    this.applyFailure = { message: errorMessage(error), at };
+  }
+
+  clearApplyFailure(): void {
+    this.applyFailure = null;
+  }
+
+  protected recordTransportFailure(error: unknown, at = Date.now()): void {
+    this.markApplyFailure(error, at);
+  }
 
   // ── meta-event framing: shared by the connection-oriented adapters ─────
   //
@@ -99,9 +136,10 @@ export abstract class IOneBotNetworkAdapter<C extends NetworkBase> {
   // three things that genuinely differ per adapter are the hooks below.
   //
   // NOTE: the returned `NetworkReloadType` is a *test-observability* seam.
-  // The sole production caller (`instance.applyConfigDiff`) discards it —
-  // it exists so tests can assert "which transition did this config cause"
-  // without poking private state. Behaviour, not the label, is the contract.
+  // OneBotNetworkManager awaits the transition but derives apply truth from
+  // success/failure rather than this label. Tests use it to assert "which
+  // transition did this config cause" without poking private state.
+  // Behaviour, not the label, is the contract.
 
   /** Stable string identity of the bound resource (host:port / url / token …).
    *  A change here means the live binding must be torn down and re-opened. */
@@ -121,27 +159,36 @@ export abstract class IOneBotNetworkAdapter<C extends NetworkBase> {
     const prevSig = this.bindingSignature(this.config);
     const wasEnabled = this.isEnabled;
     const willEnable = this.willEnable(next);
-
-    this.config = structuredClone(next);
-    this.onConfigReplaced(next);
-
     const sigChanged = prevSig !== this.bindingSignature(next);
-    if (sigChanged && wasEnabled) {
+
+    // Keep currentConfig truthful while the old live resource is being
+    // released. Only publish the desired config after close succeeds; an
+    // opening adapter necessarily sees the new config, while a close failure
+    // leaves the previous config intact for recovery and diagnostics.
+    if (wasEnabled && (sigChanged || !willEnable)) {
       await this.close();
+      this.replaceConfig(next);
       if (willEnable) {
         await this.open();
         return NetworkReloadType.Reopened;
       }
       return NetworkReloadType.Closed;
     }
+
+    this.replaceConfig(next);
     if (!wasEnabled && willEnable) {
       await this.open();
       return NetworkReloadType.Opened;
     }
-    if (wasEnabled && !willEnable) {
-      await this.close();
-      return NetworkReloadType.Closed;
-    }
     return NetworkReloadType.Normal;
   }
+
+  private replaceConfig(next: C): void {
+    this.config = structuredClone(next);
+    this.onConfigReplaced(next);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

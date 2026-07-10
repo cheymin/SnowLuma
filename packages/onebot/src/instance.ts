@@ -4,7 +4,7 @@ import { formatGroup, formatMessageSegments, formatReply, formatUser } from '@sn
 import path from 'path';
 import { ApiHandler, type ActionObserver } from './api-handler';
 import type { ConverterContext } from './event-converter';
-import { registerEventPipeline } from './event-pipeline';
+import { registerEventPipeline, type EventPipelineHandle } from './event-pipeline';
 import { buildApiContext, type OneBotInstanceContext } from './instance-context';
 import { TempSessionStore } from './temp-session-store';
 import { RKeyCache } from './instance-rkey';
@@ -23,10 +23,13 @@ import {
   WsClientAdapter,
   WsServerAdapter,
   type AdapterStatus,
+  type DesiredNetworkAdapter,
   type NetworkAdapterContext,
+  type NetworkReconcileResult,
+  type NetworkShutdownResult,
 } from './network';
 import { ReactionStore } from './reaction-store';
-import type { ApiResponse, JsonObject, JsonValue, MessageMeta, NetworkBase, OneBotConfig } from './types';
+import type { ApiResponse, JsonObject, JsonValue, MessageMeta, OneBotConfig } from './types';
 
 const moduleLog = createLogger('Event');
 
@@ -40,13 +43,25 @@ export class OneBotInstance {
   private readonly mediaStore: MediaStore;
   private readonly reactionStore: ReactionStore;
   private readonly networkManager: OneBotNetworkManager;
+  private readonly networkReady: Promise<NetworkReconcileResult>;
+  private lifecycleTail: Promise<void>;
   private readonly rkeyCache: RKeyCache;
   private readonly ctx: OneBotInstanceContext;
   /** Process-uptime baseline for the `#sl` status reply. */
   private readonly startedAt = Date.now();
   /** Per-conversation last-reply timestamp for the `#sl` cooldown. */
   private readonly statusCommandCooldown = new Map<string, number>();
-  private disposeEventPipeline: (() => void) | null = null;
+  private eventPipeline: EventPipelineHandle | null = null;
+  private eventPipelineDrain: Promise<void> = Promise.resolve();
+  private disposePromise: Promise<NetworkShutdownResult> | null = null;
+  private disposeRequested = false;
+  private acceptingActions = true;
+  private readonly inFlightActions = new Set<Promise<void>>();
+  private readonly storeCloseState = {
+    message: false,
+    media: false,
+    reaction: false,
+  };
 
   private readonly pids = new Set<number>();
   private online = true;
@@ -72,7 +87,7 @@ export class OneBotInstance {
   }
   /** Invoke an OneBot action against this account (debug tester). */
   invokeAction(action: string, params: JsonObject): Promise<ApiResponse> {
-    return this.apiHandler.handle(action, params);
+    return this.trackAction(`debug action ${action}`, () => this.apiHandler.handle(action, params));
   }
   /** Drive an action through the streaming seam (debug tester, stream actions).
    *  `rawRequest` is a `{action, params, echo?}` JSON string; `emit` receives
@@ -82,7 +97,7 @@ export class OneBotInstance {
     emit: (json: string) => void | Promise<void>,
     isAlive?: () => boolean,
   ): Promise<void> {
-    return this.apiHandler.processStreamRequest(rawRequest, emit, isAlive);
+    return this.trackAction('debug stream action', () => this.apiHandler.processStreamRequest(rawRequest, emit, isAlive));
   }
 
   constructor(uin: string, bridge: BridgeInterface, config: OneBotConfig, globalSettings: GlobalSettings) {
@@ -127,23 +142,34 @@ export class OneBotInstance {
     this.ctx = ctx;
 
     this.apiHandler = new ApiHandler(buildApiContext(ctx), uinNum > 0 ? uinNum : undefined);
-    this.networkManager = new OneBotNetworkManager();
-    this.installAdaptersFromConfig(config);
-    void this.networkManager.openAll().catch((err) => {
-      this.log.warn('openAll failed: %s', err instanceof Error ? (err.stack ?? err.message) : String(err));
-    });
+    const networkCtx = this.buildNetworkContext();
+    this.networkManager = new OneBotNetworkManager((desired) => this.createNetworkAdapter(desired, networkCtx));
+    this.networkReady = this.networkManager.reconcile(config);
+    this.lifecycleTail = this.networkReady.then(
+      () => undefined,
+      () => undefined,
+    );
 
     this.startHeartbeat();
     this.rkeyCache.warmUp(this.bridge, this.uin);
-    this.disposeEventPipeline = registerEventPipeline(ctx);
+    this.eventPipeline = registerEventPipeline(ctx);
   }
 
-  reloadConfig(config: OneBotConfig): void {
-    // Keep the shared context's config in sync so live readers (e.g. the
-    // `#sl` handler reading `statusCommand`) pick up edits without a restart.
-    this.ctx.config = config;
-    void this.applyConfigDiff(config).catch((err) => {
-      this.log.warn('applyConfigDiff failed: %s', err instanceof Error ? (err.stack ?? err.message) : String(err));
+  waitUntilNetworkReady(): Promise<NetworkReconcileResult> {
+    return this.networkReady;
+  }
+
+  reloadConfig(config: OneBotConfig): Promise<NetworkReconcileResult> {
+    if (this.disposeRequested) return Promise.reject(new Error(`OneBot instance UIN=${this.uin} is disposing`));
+    const snapshot = structuredClone(config);
+    // Validate before entering the FIFO so deterministic errors fail fast.
+    this.networkManager.compileDesiredPlan(snapshot);
+    return this.enqueueLifecycle(async () => {
+      // Keep the shared context's config in sync for exactly the same ordered
+      // snapshot the network manager is applying. Concurrent POSTs therefore
+      // linearize as A then B instead of publishing B while A is reconciling.
+      this.ctx.config = snapshot;
+      return this.networkManager.reconcile(snapshot);
     });
   }
 
@@ -154,17 +180,75 @@ export class OneBotInstance {
     this.ctx.musicSignUrl = globalSettings.musicSignUrl;
   }
 
-  dispose(): void {
+  /** Synchronously stop every ingress seam for this instance generation.
+   *
+   * This operation is sticky and idempotent. It is intentionally separate
+   * from the asynchronous resource release so the manager can quiesce all
+   * generations before waiting for older lifecycle work to settle. */
+  quiesce(): void {
+    if (this.disposeRequested) return;
+    this.disposeRequested = true;
+    this.acceptingActions = false;
+    this.apiHandler.quiesce();
     this.online = false;
     this.stopHeartbeat();
-    this.disposeEventPipeline?.();
-    this.disposeEventPipeline = null;
-    void this.networkManager.closeAll().catch((err) => {
-      this.log.warn('closeAll failed: %s', err instanceof Error ? (err.stack ?? err.message) : String(err));
+    const pipeline = this.eventPipeline;
+    if (pipeline) {
+      pipeline.stop();
+      this.eventPipeline = null;
+      this.eventPipelineDrain = pipeline.drain();
+    }
+  }
+
+  dispose(): Promise<NetworkShutdownResult> {
+    if (this.disposePromise) return this.disposePromise;
+    this.quiesce();
+    const attempt = this.enqueueLifecycle(async () => {
+      await Promise.all([
+        Promise.all(this.inFlightActions),
+        this.eventPipelineDrain,
+      ]);
+      const shutdown = await this.networkManager.shutdown();
+      if (!shutdown.closed) {
+        throw new AggregateError(
+          shutdown.errors.map((error) => new Error(
+            `adapter ${error.name} ${error.phase} failed: ${error.message}`,
+          )),
+          `network shutdown incomplete for UIN=${this.uin}; stores remain open`,
+        );
+      }
+      // Stores are intentionally closed only after every queued network
+      // reconcile and every transport have actually closed.
+      const closeErrors: unknown[] = [];
+      const stores = [
+        ['message', () => this.messageStore.close()],
+        ['media', () => this.mediaStore.close()],
+        ['reaction', () => this.reactionStore.close()],
+      ] as const;
+      for (const [name, close] of stores) {
+        if (this.storeCloseState[name]) continue;
+        try {
+          close();
+          this.storeCloseState[name] = true;
+        } catch (error) {
+          closeErrors.push(error);
+        }
+      }
+      if (closeErrors.length > 0) {
+        throw new AggregateError(closeErrors, `failed to close OneBot stores for UIN=${this.uin}`);
+      }
+      return shutdown;
     });
-    this.messageStore.close();
-    this.mediaStore.close();
-    this.reactionStore.close();
+    this.disposePromise = attempt;
+    void attempt.then(
+      () => undefined,
+      () => {
+        // Network-close and per-store completion state are retained. Let a
+        // later dispose call retry only the meaningful unfinished remainder.
+        if (this.disposePromise === attempt) this.disposePromise = null;
+      },
+    );
+    return attempt;
   }
 
   addPid(pid: number): void {
@@ -219,9 +303,7 @@ export class OneBotInstance {
     const now = Date.now();
     if (statusCooldownElapsed(this.statusCommandCooldown.get(key), now, cfg.cooldownSeconds)) {
       this.statusCommandCooldown.set(key, now);
-      void this.replyStatus(isGroup, sessionId).catch((err) => {
-        this.log.warn('status command reply failed: %s', err instanceof Error ? err.message : String(err));
-      });
+      void this.trackAction('status command reply', () => this.replyStatus(isGroup, sessionId));
     }
     return cfg.swallow;
   }
@@ -246,70 +328,51 @@ export class OneBotInstance {
     };
   }
 
-  private installAdaptersFromConfig(config: OneBotConfig): void {
-    const ctx = this.buildNetworkContext();
-    for (const net of config.networks.httpServers) {
-      if (net.enabled === false) continue;
-      this.networkManager.register(new HttpServerAdapter(net.name, net, ctx));
-    }
-    for (const net of config.networks.httpClients) {
-      if (net.enabled === false || !net.url) continue;
-      this.networkManager.register(new HttpPostAdapter(net.name, net, ctx));
-    }
-    for (const net of config.networks.wsServers) {
-      if (net.enabled === false) continue;
-      this.networkManager.register(new WsServerAdapter(net.name, net, ctx));
-    }
-    for (const net of config.networks.wsClients) {
-      if (net.enabled === false || !net.url) continue;
-      this.networkManager.register(new WsClientAdapter(net.name, net, ctx));
+  private createNetworkAdapter(desired: DesiredNetworkAdapter, ctx: NetworkAdapterContext) {
+    switch (desired.kind) {
+      case 'httpServer': return new HttpServerAdapter(desired.name, desired.config, ctx);
+      case 'httpClient': return new HttpPostAdapter(desired.name, desired.config, ctx);
+      case 'wsServer': return new WsServerAdapter(desired.name, desired.config, ctx);
+      case 'wsClient': return new WsClientAdapter(desired.name, desired.config, ctx);
     }
   }
 
-  private async applyConfigDiff(next: OneBotConfig): Promise<void> {
-    const ctx = this.buildNetworkContext();
-    const desired = new Map<string, NetworkBase>();
-    const factories = new Map<string, () => void>();
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycleTail.then(operation);
+    this.lifecycleTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
-    for (const net of next.networks.httpServers) {
-      desired.set(net.name, net);
-      factories.set(net.name, () => this.networkManager.register(new HttpServerAdapter(net.name, net, ctx)));
+  private trackAction<T>(label: string, start: () => Promise<T>): Promise<T> {
+    if (!this.acceptingActions) {
+      return this.rejectedAction(label, new Error(`OneBot instance UIN=${this.uin} is disposing; ${label} rejected`));
     }
-    for (const net of next.networks.httpClients) {
-      desired.set(net.name, net);
-      factories.set(net.name, () => this.networkManager.register(new HttpPostAdapter(net.name, net, ctx)));
+    let action: Promise<T>;
+    try {
+      action = start();
+    } catch (error) {
+      return this.rejectedAction(label, error);
     }
-    for (const net of next.networks.wsServers) {
-      desired.set(net.name, net);
-      factories.set(net.name, () => this.networkManager.register(new WsServerAdapter(net.name, net, ctx)));
-    }
-    for (const net of next.networks.wsClients) {
-      desired.set(net.name, net);
-      factories.set(net.name, () => this.networkManager.register(new WsClientAdapter(net.name, net, ctx)));
-    }
+    const tracked = action.then(
+      () => undefined,
+      (error) => {
+        this.log.error('%s failed: %s', label, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      },
+    );
+    this.inFlightActions.add(tracked);
+    void tracked.then(() => { this.inFlightActions.delete(tracked); });
+    return action;
+  }
 
-    // Close adapters whose entry has been removed entirely.
-    for (const adapter of this.networkManager.list()) {
-      if (!desired.has(adapter.name)) {
-        await this.networkManager.closeOne(adapter.name);
-      }
-    }
-    for (const [name, net] of desired) {
-      const existing = this.networkManager.get(name);
-      if (existing) {
-        try {
-          await existing.reload(net);
-        } catch (err) {
-          this.log.warn('reload [%s] failed: %s', name, err instanceof Error ? err.message : String(err));
-        }
-      } else if (net.enabled !== false) {
-        const factory = factories.get(name);
-        if (factory) {
-          factory();
-          await this.networkManager.get(name)?.open();
-        }
-      }
-    }
+  private rejectedAction<T>(label: string, error: unknown): Promise<T> {
+    const rejected = Promise.reject<T>(error);
+    void rejected.catch((reason) => {
+      this.log.error('%s rejected: %s', label, reason instanceof Error ? (reason.stack ?? reason.message) : String(reason));
+    });
+    return rejected;
   }
 
   private logReceivedMessage(event: JsonObject): void {
