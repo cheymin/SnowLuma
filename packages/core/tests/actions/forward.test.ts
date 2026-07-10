@@ -51,7 +51,11 @@ function recvLongMsgResp(bodies: PushMsgBody[]) {
     action: [{ actionCommand: 'MultiMsg', actionData: { msgBody: bodies } }],
   };
   const gz = gzipSync(Buffer.from(protobuf_encode<LongMsgResult>(longMsg)));
-  const resp = protobuf_encode<RecvLongMsgResp>({ result: { payload: new Uint8Array(gz) } });
+  return recvCompressedLongMsgResp(gz);
+}
+
+function recvCompressedLongMsgResp(payload: Uint8Array) {
+  const resp = protobuf_encode<RecvLongMsgResp>({ result: { payload } });
   return { success: true, gotResponse: true, errorCode: 0, errorMessage: '', responseData: Buffer.from(resp) };
 }
 
@@ -167,6 +171,21 @@ describe('actions/forward', () => {
     });
     await expect(new ForwardApi(bridge as any).fetch('cold-cache-miss'))
       .rejects.toThrow(/download forward message failed|down/);
+  });
+
+  it('bounds long-message gunzip output and reports decompression context', async () => {
+    // This is one byte beyond the production 32 MiB ceiling but compresses to
+    // a small response, modelling an otherwise cheap gzip bomb from QQ.
+    const expandedBytes = (32 * 1024 * 1024) + 1;
+    const payload = gzipSync(Buffer.alloc(expandedBytes, 0x61));
+    const resId = 'oversized-compressed-forward';
+    const bridge = mockBridge({
+      sendRawPacket: vi.fn(async () => recvCompressedLongMsgResp(payload)) as any,
+    });
+
+    await expect(new ForwardApi(bridge as any).fetch(resId)).rejects.toThrow(
+      /download forward message decompression failed .*res_id=oversized-compressed-forward.*max_output_bytes=33554432/,
+    );
   });
 
   it('uploadForwardNodes recursively uploads nested innerForward chains (NapCat piggyback model)', async () => {

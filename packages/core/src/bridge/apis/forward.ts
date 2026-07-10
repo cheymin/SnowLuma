@@ -1,5 +1,6 @@
 import type { PacketInfo } from '@snowluma/common/protocol-types';
 import { mapWithConcurrency } from '@snowluma/common/concurrency';
+import { createLogger } from '@snowluma/common/logger';
 import type {
   LongMsgResult,
   RecvLongMsgReq,
@@ -24,6 +25,14 @@ function asBridge(ctx: BridgeContext): Bridge { return ctx as unknown as Bridge;
 // of the process — that's enough because OneBot clients typically
 // resolve a forward immediately after receiving the parent message.
 const forwardResCache = new Map<string, ForwardNodePayload[]>();
+
+const log = createLogger('Bridge.Forward');
+
+// Forward bodies are gzip-compressed by QQ. Bound decompression while zlib is
+// producing output so a small server response cannot expand until the process
+// exhausts its heap. 32 MiB leaves ample room for legitimate merged forwards
+// while making the maximum per-fetch allocation explicit.
+const FORWARD_LONG_MSG_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 /** QQ's placeholder when it doesn't hand back a real sender name — treated as
  *  "missing" so #174's enrichment resolves the real nickname. */
@@ -577,7 +586,27 @@ export class ForwardApi {
       throw new Error('download forward message payload is empty');
     }
 
-    const inflate = gunzipSync(Buffer.from(payload));
+    let inflate: Buffer;
+    try {
+      inflate = gunzipSync(Buffer.from(payload), {
+        maxOutputLength: FORWARD_LONG_MSG_MAX_OUTPUT_BYTES,
+      });
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      log.warn(
+        'forward long-msg decompression failed: res_id=%s compressed_bytes=%d max_output_bytes=%d error=%s',
+        resId,
+        payload.byteLength,
+        FORWARD_LONG_MSG_MAX_OUTPUT_BYTES,
+        reason,
+      );
+      throw new Error(
+        `download forward message decompression failed ` +
+          `(res_id=${resId}, compressed_bytes=${payload.byteLength}, ` +
+          `max_output_bytes=${FORWARD_LONG_MSG_MAX_OUTPUT_BYTES}): ${reason}`,
+        { cause },
+      );
+    }
     const longMsg = protobuf_decode<LongMsgResult>(inflate);
     const actions = Array.isArray(longMsg?.action) ? longMsg!.action! : [];
     const mainAction = actions.find(item => item?.actionCommand === 'MultiMsg');
