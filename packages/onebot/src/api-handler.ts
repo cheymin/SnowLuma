@@ -218,22 +218,24 @@ export class ApiHandler {
     emit: (json: string) => void | Promise<void>,
     isAlive?: () => boolean,
   ): Promise<void> {
-    const bad = (): void => { void emit(JSON.stringify(failedResponse(RETCODE.BAD_REQUEST, 'bad request'))); };
-    if (!rawRequest.trim()) { bad(); return; }
+    const bad = (): Promise<void> => Promise.resolve(
+      emit(JSON.stringify(failedResponse(RETCODE.BAD_REQUEST, 'bad request'))),
+    );
+    if (!rawRequest.trim()) { await bad(); return; }
 
     let action: string;
     let params: JsonObject;
     let echo: JsonValue | undefined;
     try {
       const parsed = JSON.parse(rawRequest) as unknown;
-      if (!isJsonObject(parsed)) { bad(); return; }
+      if (!isJsonObject(parsed)) { await bad(); return; }
       const a = asString(parsed.action);
-      if (!a) { bad(); return; }
+      if (!a) { await bad(); return; }
       action = a;
       params = isJsonObject(parsed.params) ? parsed.params : {};
       echo = parsed.echo !== undefined ? toJsonValue(parsed.echo) : undefined;
     } catch {
-      bad();
+      await bad();
       return;
     }
 

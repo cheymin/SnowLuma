@@ -164,4 +164,20 @@ describe('Stream API plumbing', () => {
     expect(frames).toHaveLength(3);
     for (const f of parse(frames)) expect(f).toMatchObject({ status: 'failed' });
   });
+
+  it('waits for an async bad-request frame to flush', async () => {
+    const h = newHandler();
+    let release!: () => void;
+    const flushed = new Promise<void>((resolve) => { release = resolve; });
+    let completed = false;
+
+    const request = h.processStreamRequest('', async () => flushed);
+    void request.then(() => { completed = true; });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+
+    release();
+    await request;
+    expect(completed).toBe(true);
+  });
 });
