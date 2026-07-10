@@ -383,6 +383,19 @@ describe('convertEvent — message elements (13 segment types)', () => {
     });
   });
 
+  it('image: preserves the flash marker on the OneBot segment', async () => {
+    const seg = await segment({
+      type: 'image',
+      fileId: 'fid',
+      imageUrl: 'http://x',
+      flash: true,
+    });
+    expect(seg).toMatchObject({
+      type: 'image',
+      data: { type: 'flash' },
+    });
+  });
+
   it('at: targetUin -> qq string', async () => {
     const seg = await segment({ type: 'at', targetUin: PEER_UIN });
     expect(seg).toEqual({ type: 'at', data: { qq: String(PEER_UIN) } });

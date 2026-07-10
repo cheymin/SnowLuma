@@ -6,7 +6,7 @@ import type {
   MediaUrlResolver,
   MessageIdResolver,
 } from './index';
-import { ELEMENT_CODECS } from './element-codecs';
+import { getElementCodec } from './element-codecs';
 import { createLogger } from '@snowluma/common/logger';
 
 const log = createLogger('OneBot');
@@ -47,7 +47,7 @@ async function elementToSegment(
   mediaSegmentSink?: MediaSegmentSink | null,
 ): Promise<JsonObject> {
   // S 收·转：按 element.type 查 codec 表；缺条目则走 default 透传（保持原兜底）。
-  const codec = ELEMENT_CODECS[element.type];
+  const codec = getElementCodec(element.type);
   if (codec?.toSegment) {
     return codec.toSegment(element, {
       isGroup,
@@ -58,5 +58,6 @@ async function elementToSegment(
       mediaSegmentSink,
     });
   }
+  log.warn('segment convert fallback type=%s reason=no receive-side codec', element.type);
   return { type: element.type, data: {} };
 }

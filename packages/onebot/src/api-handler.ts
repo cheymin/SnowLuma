@@ -1,6 +1,7 @@
 import { renderParamsVerbose, summarizeParams } from '@snowluma/common/log-summary';
 import { createLogger, getLogLevel, nextRequestId, runWithRequestId, type Logger } from '@snowluma/common/logger';
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
 import {
   ACTION_REGISTRY,
   HANDLE_QUICK_OPERATION_ACTION,
@@ -244,23 +245,23 @@ export class ApiHandler {
       response = await handler(params, sink);
       this.log.trace(() => [`${action} ⇒ ${response.status} (${Date.now() - startedAt}ms)`]);
     } catch (error) {
-      // Single error seam: any throw from a handler (bridge/OIDB business
-      // failure or an unexpected internal fault) maps here to one policy —
-      // ACTION_FAILED (100) + the error's message. Action `run` bodies
-      // shouldn't need to hand-roll their own try/catch → failedResponse:
-      // doing so only produced inconsistent retcodes (100 vs 1200) for the same
-      // kind of failure. The remaining per-action catches (qzone / group-album,
-      // still returning 1200) are being removed in a follow-up phase — until
-      // then their failures never reach this seam. `OidbError.message` already
-      // carries the QQ server code, so no special-casing is needed. warn (not
-      // error) keeps the log file a useful signal without drowning it in
-      // expected client-side failures.
+      // Single error seam: typed message-contract failures are caller errors
+      // and therefore map to BAD_REQUEST. Bridge/OIDB business failures and
+      // unexpected internal faults retain the shared ACTION_FAILED policy.
+      // Action `run` bodies should not hand-roll their own catch/response
+      // mapping: central classification keeps every transport consistent.
+      // `OidbError.message` already carries the QQ server code, so it needs no
+      // special casing. warn (not error) keeps the log file useful without
+      // drowning it in expected client-side failures.
       this.log.warn('%s failed: %s\n%s',
         action,
         error instanceof Error ? error.message : String(error),
         error instanceof Error ? (error.stack ?? '') : '');
       const message = error instanceof Error ? error.message : String(error);
-      response = failedResponse(RETCODE.ACTION_FAILED, message);
+      const retcode = error instanceof MessageElementValidationError
+        ? RETCODE.BAD_REQUEST
+        : RETCODE.ACTION_FAILED;
+      response = failedResponse(retcode, message);
     }
     this.notifyObservers(action, params, response, Date.now() - startedAt);
     return response;

@@ -1,5 +1,10 @@
 import { createLogger } from '@snowluma/common/logger';
-import type { MessageElement } from '@snowluma/protocol/events';
+import type {
+  MessageElement,
+  MessageElementOf,
+  MessageElementType,
+} from '@snowluma/protocol/events';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
 import type { JsonObject } from '../types';
 import type { ParseMessageOptions } from '../message-parser';
 import type {
@@ -22,7 +27,7 @@ import { resolveReplyId } from './utils';
 // 见 element-manifest.ts 的说明。纯 OneBot 输入糖（骰子/分享/…）也不进表，留在
 // message-parser 当前置 normalize。
 //
-// 行为对 to-segment / message-parser 的原实现 byte 级不变——仅把分支体平移到此。
+// 每条目由判别类型精确约束：S 读错字段或 P 产出错 discriminant 会在 typecheck 报错。
 // ─────────────────────────────────────────────────────────────────────────
 
 const log = createLogger('MsgParser');
@@ -37,27 +42,58 @@ export interface ToSegmentContext {
   mediaSegmentSink?: MediaSegmentSink | null;
 }
 
-export interface ElementCodec {
+// The image segment is the one intentional triangular mapping: an image with
+// emoji_id normalizes to a market-face element so it can round-trip as the
+// original wire type. Every other codec emits its own discriminant.
+type CodecOutput<T extends MessageElementType> = T extends 'image'
+  ? MessageElementOf<'image'> | MessageElementOf<'mface'>
+  : MessageElementOf<T>;
+
+export interface ElementCodec<T extends MessageElementType = MessageElementType> {
   /** S 收·转：MessageElement → OneBot 段。 */
-  toSegment?: (element: MessageElement, ctx: ToSegmentContext) => Promise<JsonObject>;
-  /** P 发·解：OneBot 段 data → MessageElement（null = 丢弃该段）。 */
-  fromSegment?: (data: Record<string, unknown>, options?: ParseMessageOptions) => Promise<MessageElement | null>;
+  toSegment?: (element: MessageElementOf<T>, ctx: ToSegmentContext) => Promise<JsonObject>;
+  /** P 发·解：OneBot 段 data → MessageElement（null = 无法构造，parser 会 typed reject）。 */
+  fromSegment?: (data: Record<string, unknown>, options?: ParseMessageOptions) => Promise<CodecOutput<T> | null>;
 }
+
+type ElementCodecMap = Partial<{
+  readonly [T in MessageElementType]: ElementCodec<T>;
+}>;
 
 // ── 共享低层工具（原在 message-parser，移来供本表与 message-parser 的输入糖共用）──
 
 export function intOr(value: unknown, fallback = 0): number {
   if (value === undefined || value === null) return fallback;
-  if (typeof value === 'number') return Number.isFinite(value) ? Math.trunc(value) : fallback;
-  const n = parseInt(String(value), 10);
-  return Number.isFinite(n) ? n : fallback;
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value)) return value;
+    throw new MessageElementValidationError(
+      'INVALID_FIELD',
+      `numeric message segment field must be a safe integer, received ${String(value)}`,
+    );
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return fallback;
+    if (!/^[+-]?\d+$/.test(text)) {
+      throw new MessageElementValidationError(
+        'INVALID_FIELD',
+        `numeric message segment field must contain only an integer, received ${JSON.stringify(value)}`,
+      );
+    }
+    const parsed = Number(text);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  throw new MessageElementValidationError(
+    'INVALID_FIELD',
+    `numeric message segment field must be a safe integer, received ${String(value)}`,
+  );
 }
 
 /** Build a market-face (`mface`) element from an OneBot segment's data.
  *  Shared by the dedicated `mface` segment and the `image`-with-`emoji_id`
  *  round-trip path. `emojiId` is the hex GUID the wire builder converts back
  *  to `MarketFace.faceId`. */
-export function marketFaceElement(emojiId: string, data: Record<string, unknown>): MessageElement {
+export function marketFaceElement(emojiId: string, data: Record<string, unknown>): MessageElementOf<'mface'> {
   return {
     type: 'mface',
     text: String(data.summary ?? data.name ?? ''),
@@ -95,7 +131,7 @@ export function pickMediaSource(data: Record<string, unknown>): string {
 
 // ── codec 表：一种元素类型一条，键即 element.type（收·转）/ 段 type（发·解，二者同名）──
 
-export const ELEMENT_CODECS: Record<string, ElementCodec> = {
+export const ELEMENT_CODECS = {
   text: {
     async toSegment(element) {
       return { type: 'text', data: { text: element.text ?? '' } };
@@ -190,6 +226,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
         sub_type: element.subType ?? 0,
         summary: element.summary ?? '',
       };
+      if (element.flash) data.type = 'flash';
       if (ctx.mediaSegmentSink) ctx.mediaSegmentSink('image', element, data, ctx.isGroup, ctx.sessionId);
       return { type: 'image', data };
     },
@@ -203,7 +240,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
         type: 'image',
         url: pickMediaSource(data),
         flash: data.type === 'flash',
-        subType: intOr(data.subType, 0),
+        subType: intOr(data.sub_type ?? data.subType, 0),
         summary: data.summary ? String(data.summary) : undefined,
       };
     },
@@ -276,7 +313,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
       return {
         type: 'xml',
         text: String(data.data ?? ''),
-        subType: intOr(data.id, 0),
+        subType: intOr(data.resid ?? data.id, 0),
       };
     },
   },
@@ -306,14 +343,16 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
       };
     },
     async fromSegment(data) {
-      const fileId = String(data.file_id ?? data.fileId ?? '').trim();
-      const source = String(data.file ?? data.url ?? data.path ?? '').trim();
+      const fileId = String(data.file_id ?? data.fileId ?? data.id ?? '').trim();
+      // Reuse the media-source rule: a bare `file` token is commonly only the
+      // display filename/internal id and must not mask a loadable HTTP URL.
+      const source = pickMediaSource(data);
       if (!fileId && !source) {
         log.warn('[MsgParser] file segment without file_id or file/url is unsupported');
         return null;
       }
       const fileName = String(data.name ?? data.filename ?? data.fileName ?? '').trim();
-      const fileSize = intOr(data.size ?? data.fileSize, 0);
+      const fileSize = intOr(data.file_size ?? data.size ?? data.fileSize, 0);
       const md5Hex = String(data.md5 ?? data.md5Hex ?? '').trim();
       const sha1Hex = String(data.sha1 ?? data.sha1Hex ?? '').trim();
       const fileHash = String(data.file_hash ?? data.fileHash ?? '').trim();
@@ -375,9 +414,10 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
       };
     },
     async fromSegment(data) {
+      if (data.type === undefined && data.id === undefined) return null;
       return {
         type: 'poke',
-        faceId: intOr(data.type ?? data.id, 0),
+        subType: intOr(data.type ?? data.id, 0),
       };
     },
   },
@@ -422,4 +462,13 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
       };
     },
   },
-};
+} satisfies ElementCodecMap;
+
+/**
+ * Dynamic lookup boundary. Each table entry is checked against its precise
+ * discriminant above; callers with a runtime type receive the safe union view.
+ */
+export function getElementCodec(type: string): ElementCodec | undefined {
+  if (!Object.hasOwn(ELEMENT_CODECS, type)) return undefined;
+  return (ELEMENT_CODECS as unknown as Record<string, ElementCodec>)[type];
+}

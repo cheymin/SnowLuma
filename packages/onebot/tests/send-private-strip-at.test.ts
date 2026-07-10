@@ -7,11 +7,7 @@
 // broken-looking wire message (the recipient sees a phantom "@QQ号"
 // that can't be clicked).
 //
-// Fix: `sendPrivateMessage` now strips all `at` elements before
-// handing the array to the protocol layer.  When the message also
-// contains a `reply` segment the strip is silent (it's the normal
-// OneBot convention and the caller didn't do anything wrong); without
-// a `reply` the strip still happens but a warn is logged.
+// Fix: every private at is rejected before anything reaches the bridge.
 
 import { describe, expect, it, vi } from 'vitest';
 import type { BridgeInterface } from '../../src/bridge/bridge-interface';
@@ -47,34 +43,26 @@ function makeCtx(bridge: BridgeInterface): OneBotInstanceContext {
   } as unknown as OneBotInstanceContext;
 }
 
-describe('send_private_msg strips at segments', () => {
-  it('reply + at + text → only reply + text reach the wire', async () => {
-    const sendPrivate = vi.fn(async (_uin: number, elements: any[]) => {
-      // Verify no `at` element reaches the bridge
-      const types = elements.map((e: any) => e.type);
-      expect(types).not.toContain('at');
-      return goodReceipt;
-    });
+describe('send_private_msg rejects at segments', () => {
+  it('reply + at + text rejects the whole message', async () => {
+    const sendPrivate = vi.fn(async (_uin: number, _elements: any[]) => goodReceipt);
     const bridge = fakeBridge({
       apis: { message: { sendPrivate } } as any,
       resolveUserUid: vi.fn(async () => 'u_peer'),
     } as any);
     const ctx = makeCtx(bridge);
 
-    await sendPrivateMessage(ctx, 67890, [
+    await expect(sendPrivateMessage(ctx, 67890, [
       { type: 'reply', data: { id: '-2050237785' } },
       { type: 'at', data: { qq: '67890' } },
       { type: 'text', data: { text: ' ' } },
       { type: 'text', data: { text: 'quoted reply text' } },
-    ] as any, false);
+    ] as any, false)).rejects.toMatchObject({ code: 'UNSENDABLE_TYPE', elementType: 'at' });
 
-    expect(sendPrivate).toHaveBeenCalledOnce();
-    const sentElements = sendPrivate.mock.calls[0]![1] as any[];
-    const sentTypes = sentElements.map(e => e.type);
-    expect(sentTypes).toEqual(['reply', 'text', 'text']);
+    expect(sendPrivate).not.toHaveBeenCalled();
   });
 
-  it('at-only message (no reply) is also stripped, throws "message is empty"', async () => {
+  it('at-only message (no reply) is rejected as unsendable', async () => {
     const sendPrivate = vi.fn();
     const bridge = fakeBridge({
       apis: { message: { sendPrivate } } as any,
@@ -84,12 +72,15 @@ describe('send_private_msg strips at segments', () => {
 
     await expect(sendPrivateMessage(ctx, 67890, [
       { type: 'at', data: { qq: '67890' } },
-    ] as any, false)).rejects.toThrow('message is empty');
+    ] as any, false)).rejects.toMatchObject({
+      code: 'UNSENDABLE_TYPE',
+      elementType: 'at',
+    });
 
     expect(sendPrivate).not.toHaveBeenCalled();
   });
 
-  it('text + at (without reply) strips at and sends remaining text', async () => {
+  it('text + at (without reply) rejects the whole message', async () => {
     const sendPrivate = vi.fn(async (_uin: number, _elements: any[]) => goodReceipt);
     const bridge = fakeBridge({
       apis: { message: { sendPrivate } } as any,
@@ -97,17 +88,15 @@ describe('send_private_msg strips at segments', () => {
     } as any);
     const ctx = makeCtx(bridge);
 
-    await sendPrivateMessage(ctx, 67890, [
+    await expect(sendPrivateMessage(ctx, 67890, [
       { type: 'text', data: { text: 'hello' } },
       { type: 'at', data: { qq: '67890' } },
-    ] as any, false);
+    ] as any, false)).rejects.toMatchObject({ code: 'UNSENDABLE_TYPE', elementType: 'at' });
 
-    expect(sendPrivate).toHaveBeenCalledOnce();
-    const sentElements = sendPrivate.mock.calls[0]![1] as any[];
-    expect(sentElements).toEqual([{ type: 'text', text: 'hello' }]);
+    expect(sendPrivate).not.toHaveBeenCalled();
   });
 
-  it('multiple at segments are all stripped', async () => {
+  it('multiple at segments reject the whole message', async () => {
     const sendPrivate = vi.fn(async (_uin: number, _elements: any[]) => goodReceipt);
     const bridge = fakeBridge({
       apis: { message: { sendPrivate } } as any,
@@ -115,26 +104,21 @@ describe('send_private_msg strips at segments', () => {
     } as any);
     const ctx = makeCtx(bridge);
 
-    await sendPrivateMessage(ctx, 67890, [
+    await expect(sendPrivateMessage(ctx, 67890, [
       { type: 'reply', data: { id: '123' } },
       { type: 'at', data: { qq: '67890' } },
       { type: 'at', data: { qq: '12345' } },
       { type: 'text', data: { text: 'hi' } },
-    ] as any, false);
+    ] as any, false)).rejects.toMatchObject({ code: 'UNSENDABLE_TYPE', elementType: 'at' });
 
-    expect(sendPrivate).toHaveBeenCalledOnce();
-    const sentElements = sendPrivate.mock.calls[0]![1] as any[];
-    const sentTypes = sentElements.map((e: any) => e.type);
-    expect(sentTypes).not.toContain('at');
-    expect(sentTypes).toContain('reply');
-    expect(sentTypes).toContain('text');
+    expect(sendPrivate).not.toHaveBeenCalled();
   });
 
   it('group messages are NOT affected (at segments preserved)', async () => {
     // Sanity: import sendGroupMessage and verify at segments pass through
     const { sendGroupMessage } = await import('../src/modules/message-actions');
 
-    const sendGroup = vi.fn(async (_groupId: number, elements: any[]) => {
+    const sendGroup = vi.fn(async (_groupId: number, _elements: any[]) => {
       return goodReceipt;
     });
     const bridge = fakeBridge({

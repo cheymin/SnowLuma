@@ -9,6 +9,10 @@ import { deflateSync } from 'zlib';
 import type { BridgeContext } from './bridge-context';
 import { sysFaceStore } from './sys-face-store';
 import type { MessageElement } from './events';
+import {
+  assertValidMessageElements,
+  MessageElementValidationError,
+} from './element-manifest';
 import { uploadImageMsgInfo } from './highway/image-upload';
 import { hexToBytes } from './highway/pipeline';
 import { uploadPttMsgInfo } from './highway/ptt-upload';
@@ -435,6 +439,27 @@ async function makeVideoElem(ctx: SendContext, element: MessageElement): Promise
  * Image, record and video elements trigger NTV2 highway upload via the SendContext.
  */
 export async function buildSendElems(elements: MessageElement[], ctx?: SendContext): Promise<ProtoElem[]> {
+  // Validate the whole message before the first upload or packet build. This
+  // preserves all-or-nothing semantics: a malformed later segment cannot make
+  // an earlier media segment perform side effects before the send is rejected.
+  assertValidMessageElements(elements, 'W');
+  for (const element of elements) {
+    if ((element.type === 'image' || element.type === 'record' || element.type === 'video') && !ctx) {
+      throw new MessageElementValidationError(
+        'MISSING_FIELD',
+        `message element "${element.type}" requires SendContext`,
+        element.type,
+      );
+    }
+    if (element.type === 'file' && !ctx?.forwardFake) {
+      throw new MessageElementValidationError(
+        'UNSENDABLE_TYPE',
+        'message element "file" must use the group/private file upload pipeline',
+        element.type,
+      );
+    }
+  }
+
   const result: ProtoElem[] = [];
   // A user-supplied @ that lands immediately after a reply's srcMsg isn't
   // honored by the QQ NT group server (the @ shows but never notifies, #129).
@@ -446,15 +471,15 @@ export async function buildSendElems(elements: MessageElement[], ctx?: SendConte
   for (const elem of elements) {
     switch (elem.type) {
       case 'text':
-        if (elem.text) result.push(makeTextElem(elem.text));
+        result.push(makeTextElem(elem.text));
         break;
 
       case 'face':
-        if (elem.faceId !== undefined) result.push(makeFaceElem(elem.faceId, ctx));
+        result.push(makeFaceElem(elem.faceId, ctx));
         break;
 
       case 'mface':
-        if (elem.emojiId) result.push(makeMarketFaceElem(elem));
+        result.push(makeMarketFaceElem(elem));
         break;
 
       case 'at':
@@ -462,53 +487,39 @@ export async function buildSendElems(elements: MessageElement[], ctx?: SendConte
         break;
 
       case 'reply':
-        if (elem.replySeq) {
-          result.push(makeReplyElem(elem));
-          if (hasUserAt && ctx?.groupId !== undefined && elem.replySenderUin) {
-            const replyMention = await makeReplyMentionElem(ctx, elem.replySenderUin);
-            if (replyMention) result.push(replyMention);
-          }
+        result.push(makeReplyElem(elem));
+        if (hasUserAt && ctx?.groupId !== undefined && elem.replySenderUin) {
+          const replyMention = await makeReplyMentionElem(ctx, elem.replySenderUin);
+          if (replyMention) result.push(replyMention);
         }
         break;
 
       case 'json':
-        if (elem.text) result.push(makeJsonElem(elem));
+        result.push(makeJsonElem(elem));
         break;
 
       case 'xml':
-        if (elem.text) result.push(makeXmlElem(elem));
+        result.push(makeXmlElem(elem));
         break;
 
       case 'markdown':
-        if (elem.text) result.push(makeMarkdownElem(elem));
+        result.push(makeMarkdownElem(elem));
         break;
 
       case 'image':
-        if (ctx) {
-          result.push(await makeImageElem(ctx, elem));
-        } else {
-          console.warn('[ElemBuilder] image send requires SendContext');
-        }
+        result.push(await makeImageElem(ctx!, elem));
         break;
 
       case 'forward':
-        if (elem.resId) result.push(makeForwardElem(elem));
+        result.push(makeForwardElem(elem));
         break;
 
       case 'record':
-        if (ctx) {
-          result.push(await makePttElem(ctx, elem));
-        } else {
-          console.warn('[ElemBuilder] record send requires SendContext');
-        }
+        result.push(await makePttElem(ctx!, elem));
         break;
 
       case 'video':
-        if (ctx) {
-          result.push(await makeVideoElem(ctx, elem));
-        } else {
-          console.warn('[ElemBuilder] video send requires SendContext');
-        }
+        result.push(await makeVideoElem(ctx!, elem));
         break;
 
       case 'file':
@@ -523,8 +534,8 @@ export async function buildSendElems(elements: MessageElement[], ctx?: SendConte
         //      * group: split → `bridge.sendGroupFileMessage`
         //        (OIDB 0x6d9_4 publish).
         //    The QQ-NT server REJECTS outgoing PbSendMsg with a
-        //    transElem(24) (result=79), so an element reaching here
-        //    in live-send mode is a routing bug — drop with a warn.
+        //    transElem(24) (result=79), so the all-message preflight above
+        //    raises a typed validation error when a live file reaches here.
         //
         // 2. FORWARD-FAKE upload (long-msg) — `ctx.forwardFake===true`.
         //    The long-msg service stores the gzipped protobuf verbatim
@@ -536,20 +547,21 @@ export async function buildSendElems(elements: MessageElement[], ctx?: SendConte
         //                the file segment off and writes msgContent
         //                separately (because RichText.notOnlineFile +
         //                FileExtra both live outside elems[]).
-        if (ctx && ctx.forwardFake) {
-          if (ctx.groupId !== undefined) {
-            result.push(makeGroupFileElem(elem, ctx));
-          }
-          // c2c forwardFake intentionally falls through — handled by
-          // the forward-builder at the msgContent level.
-        } else {
-          console.warn('[ElemBuilder] BUG: {type:"file"} reached element-builder — must be split out at the OneBot layer (see modules/message-actions.ts::sendPrivateMessage / ::sendGroupMessage)');
+        if (!ctx?.forwardFake) {
+          throw new Error('element-builder file routing invariant failed after preflight');
         }
+        if (ctx.groupId !== undefined) {
+          result.push(makeGroupFileElem(elem, ctx));
+        }
+        // c2c forwardFake intentionally emits no Elem — handled by the
+        // forward-builder at the msgContent level.
         break;
 
       default:
-        console.warn(`[ElemBuilder] unsupported element type for send: ${elem.type}`);
-        break;
+        // assertValidMessageElements above rejects every non-W type before any
+        // side effect. Reaching this branch means the manifest and dispatcher
+        // drifted despite their reconciliation test.
+        throw new Error(`element-builder dispatch invariant failed: ${elem.type}`);
     }
   }
 

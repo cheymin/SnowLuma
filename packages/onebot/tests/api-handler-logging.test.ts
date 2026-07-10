@@ -5,6 +5,7 @@
 // from blowing the line width.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
 import { OidbError } from '@snowluma/protocol/oidb-service';
 import { subscribeLogs, type LogEntry } from '@snowluma/common/logger';
 import { summarizeParams } from '@snowluma/common/log-summary';
@@ -118,6 +119,25 @@ describe('ApiHandler dispatch logging', () => {
 
     const result = await handler.handle('kaboom', {});
     expect(result).toMatchObject({ status: 'failed', retcode: 100, wording: 'permission denied' });
+  });
+
+  it('maps typed outbound message-contract failures to BAD_REQUEST', async () => {
+    const handler = createCompiledTestHandler(emptyContext(), [
+      testAction('bad_message', async () => {
+        throw new MessageElementValidationError(
+          'UNKNOWN_TYPE',
+          'unknown message segment type: surprise',
+          'surprise',
+        );
+      }),
+    ], 12345);
+
+    const result = await handler.handle('bad_message', {});
+    expect(result).toMatchObject({
+      status: 'failed',
+      retcode: 1400,
+      wording: 'unknown message segment type: surprise',
+    });
   });
 
   it('surfaces the OidbError code + server message through error.message (no special-casing)', async () => {

@@ -10,7 +10,8 @@ import type {
 } from '@snowluma/proto-defs/longmsg';
 import type { FileExtra, PushMsg, PushMsgBody } from '@snowluma/proto-defs/message';
 import { buildSendElems } from '@snowluma/protocol/element-builder';
-import type { ForwardNodePayload, MessageElement } from '@snowluma/protocol/events';
+import type { ForwardNodePayload, MessageElement, MessageElementOf } from '@snowluma/protocol/events';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
 import { parseMsgPush } from '@snowluma/protocol/msg-push';
 import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import { randomUUID } from 'crypto';
@@ -242,8 +243,8 @@ function cloneNodeWithElements(node: ForwardNodePayload, elements: MessageElemen
   };
 }
 
-function stripFileSource(element: MessageElement): MessageElement {
-  const next: MessageElement = { ...element };
+function stripFileSource(element: MessageElementOf<'file'>): MessageElementOf<'file'> {
+  const next: MessageElementOf<'file'> = { ...element };
   delete next.url;
   return next;
 }
@@ -267,10 +268,28 @@ function fileNameForUpload(element: MessageElement, cached?: UploadedFileMeta): 
   return (element.fileName ?? cached?.fileName ?? '').trim();
 }
 
+function assertPrivateForwardFileCapacity(nodes: ForwardNodePayload[]): void {
+  for (const node of nodes) {
+    const fileCount = node.elements.filter((element) => element.type === 'file').length;
+    if (fileCount > 1) {
+      throw new MessageElementValidationError(
+        'UNSENDABLE_TYPE',
+        'a private forward node can contain at most one file element',
+        'file',
+      );
+    }
+    if (node.innerForward) assertPrivateForwardFileCapacity(node.innerForward);
+  }
+}
+
 export class ForwardApi {
   constructor(private readonly ctx: BridgeContext) { }
 
   async upload(nodes: ForwardNodePayload[], groupId?: number, userId?: number): Promise<string> {
+    // A c2c RichText owns exactly one msgContent/FileExtra payload. Validate
+    // the entire recursive tree before any file/media/long-message upload so a
+    // second file cannot be uploaded and then silently discarded.
+    if (groupId === undefined) assertPrivateForwardFileCapacity(nodes);
     const { resId } = await this.uploadRecursive(nodes, groupId, userId);
     return resId;
   }
@@ -290,7 +309,7 @@ export class ForwardApi {
     name: string,
     groupId?: number,
     userId?: number,
-  ): Promise<MessageElement> {
+  ): Promise<MessageElementOf<'file'>> {
     if (groupId !== undefined) {
       const uploaded = await this.ctx.apis.groupFile.upload(groupId, source, name, '/', true, false);
       if (!uploaded.fileId) throw new Error('forward group file upload returned no file_id');

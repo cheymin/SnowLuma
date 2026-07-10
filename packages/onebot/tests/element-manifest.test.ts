@@ -34,8 +34,8 @@ describe('element-manifest 对账（onebot 侧：S 收·转 / P 发·解）', ()
     expect(codecTypesWith('fromSegment')).toEqual(sorted(typesForDirection('P')));
   });
 
-  it('输入糖仍由 message-parser 前置处理，未被静默丢弃', () => {
-    // 输入糖（骰子/分享/…）不进 codec 表，留在 message-parser 当前置 normalize。
+  it('OneBot 输入词仍由 message-parser 前置处理或明确拒绝，未被静默丢弃', () => {
+    // 输入词（骰子/分享/node/anonymous/…）不进 codec 表，留在 parser 前置处理。
     // 用源码扫描锁住它们确实存在，防止将来重构时被悄悄删掉。
     const abs = fileURLToPath(new URL('../src/message-parser.ts', import.meta.url));
     const src = readFileSync(abs, 'utf8')
@@ -50,5 +50,14 @@ describe('element-manifest 对账（onebot 侧：S 收·转 / P 发·解）', ()
     // 且 message-parser 不再手写任何真实元素类型的 case（已全部下沉到 codec 表）。
     const realLeftInParser = [...cases].filter((t) => !INPUT_SUGAR_SEGMENTS.has(t));
     expect(realLeftInParser).toEqual([]);
+  });
+
+  it('poke 的 P/S 字段都使用 subType，不再漂移到 faceId', async () => {
+    const parsed = await ELEMENT_CODECS.poke!.fromSegment!({ type: 7 });
+    expect(parsed).toEqual({ type: 'poke', subType: 7 });
+    expect(parsed).not.toHaveProperty('faceId');
+
+    const segment = await ELEMENT_CODECS.poke!.toSegment!(parsed!, {} as never);
+    expect(segment).toEqual({ type: 'poke', data: { type: 7 } });
   });
 });

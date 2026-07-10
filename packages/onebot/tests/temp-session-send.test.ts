@@ -40,4 +40,21 @@ describe('sendPrivateMessage temp-session gate (passive-only)', () => {
       sendPrivateMessage(ref, 1001, [{ type: 'text', data: { text: 'hi' } }], false, 700),
     ).rejects.toThrow(/passive-only|temp session/i);
   });
+
+  it('rejects text + file before sending a partial temp-session message', async () => {
+    const store = new TempSessionStore();
+    store.record(1001, 700);
+    const ref = refWith(store);
+
+    await expect(sendPrivateMessage(ref, 1001, [
+      { type: 'text', data: { text: 'must not be sent' } },
+      { type: 'file', data: { file_id: 'friend-file-id' } },
+    ], false, 700)).rejects.toMatchObject({
+      code: 'UNSENDABLE_TYPE',
+      elementType: 'file',
+    });
+
+    expect((ref.bridge.apis.message as { sendGroupTempMessage: ReturnType<typeof vi.fn> }).sendGroupTempMessage)
+      .not.toHaveBeenCalled();
+  });
 });
