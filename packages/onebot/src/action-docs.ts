@@ -4,27 +4,28 @@
 // structured doc list + a Markdown view. The metadata is carried on the same
 // values that drive runtime validation, so docs cannot drift from behavior.
 //
-// Coverage note: the ~15 genuinely irregular actions in `actions/extended.ts`
-// that remain on the legacy `h.registerAction(...)` path are NOT ActionSpecs
-// and so do not appear here — that is the documented irregular tail.
+// The reserved `.handle_quick_operation` raw handler deliberately has no
+// ActionSpec/doc entry; every catalogued action comes from ACTION_REGISTRY.
 //
 // The serving SURFACE (WebUI panel / OpenAPI export / static markdown) is a
 // deferred product decision; this module produces format-agnostic data plus a
 // Markdown default. Point any renderer at `collectActionDocs()`.
 
 import type { ActionDoc } from './action-kit';
-import { ACTION_GROUPS } from './actions';
+import { ACTION_REGISTRY } from './actions';
 
 /** Every declarative action's doc (with category), sorted by name. */
 export function collectActionDocs(): ActionDoc[] {
-  return ACTION_GROUPS
-    .flatMap(({ category, actions }) => actions.map((s) => ({ ...s.describe(), category })))
+  return ACTION_REGISTRY.actions
+    // Preserve the collector's value semantics: callers may sort/transform
+    // docs without mutating the process-wide compiled registry.
+    .map(({ doc }) => structuredClone(doc))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Distinct categories with action counts. */
 export function collectCategories(): Array<{ category: string; count: number }> {
-  return ACTION_GROUPS.map(({ category, actions }) => ({ category, count: actions.length }));
+  return ACTION_REGISTRY.categories.map(({ category, count }) => ({ category, count }));
 }
 
 function paramRow(p: ActionDoc['params'][number]): string {
@@ -57,7 +58,7 @@ export function renderActionDocsMarkdown(docs: readonly ActionDoc[] = collectAct
     '# OneBot Actions',
     '',
     '> 由 `packages/onebot/src/action-docs.ts` 从各 `ActionSpec.describe()` 自动生成，请勿手改。',
-    '> 仅覆盖声明式 action；`extended.ts` 中少量走 legacy `registerAction` 的不规则 action 不在此列。',
+    '> 覆盖完整声明式 Action registry；保留的 raw `.handle_quick_operation` handler 不生成文档。',
     '',
     `共 ${docs.length} 个声明式 action。`,
     '',

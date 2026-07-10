@@ -20,6 +20,7 @@ export const actions = [
     name: 'set_group_add_request',
     summary: '处理加群请求',
     params: {
+      // Opaque handle from the original request event; callers must echo it.
       flag: f.string({ allowEmpty: false }),
       // sub_type/type pass through with a nested fallback (sub_type → type → 'add');
       // kept raw so the original asString resolution is preserved verbatim.
@@ -35,4 +36,3 @@ export const actions = [
     },
   }),
 ];
-

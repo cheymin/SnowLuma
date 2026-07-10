@@ -21,6 +21,8 @@ const log = createLogger('OneBot.Config');
 const CONFIG_DIR = 'config';
 const DEFAULT_CONFIG_PATH = path.join(CONFIG_DIR, 'onebot.json');
 const DEFAULT_ACCESS_TOKEN_BYTES = 32;
+const NODE_TIMER_MAX_MS = 2_147_483_647;
+const PER_UIN_SNAPSHOT_MARKER = 'snapshot';
 
 const DEFAULT_STATUS_COMMAND: StatusCommandConfig = {
   enabled: true,
@@ -75,31 +77,243 @@ export interface LoadOneBotConfigOptions {
   persistDefaults?: boolean;
 }
 
+/** A deterministic configuration error. Callers may safely return this as a
+ *  4xx without conflating it with filesystem/runtime failures. */
+export class OneBotConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OneBotConfigValidationError';
+  }
+}
+
 export function loadOneBotConfig(uin: string, options: LoadOneBotConfigOptions = {}): OneBotConfig {
   ensureConfigDir();
 
   const perUinPath = path.join(CONFIG_DIR, `onebot_${uin}.json`);
   const globalRaw = tryLoadJson(DEFAULT_CONFIG_PATH);
-  const perUinRaw = tryLoadJson(perUinPath);
+  // A per-account desired config is authoritative state. Corruption must stop
+  // startup instead of silently reviving global/default endpoints.
+  const perUinRaw = tryLoadJson(perUinPath, true);
   const legacy = !!perUinRaw && hasLegacyTopLevel(perUinRaw);
 
   const sources: JsonObject[] = [];
-  if (globalRaw) sources.push(globalRaw);
+  const isCanonicalSnapshot = perUinRaw?.mode === PER_UIN_SNAPSHOT_MARKER;
+  if (globalRaw && !isCanonicalSnapshot) sources.push(globalRaw);
   if (perUinRaw) sources.push(perUinRaw);
 
   const config = fromJson(sources, !perUinRaw && !globalRaw);
 
   if (options.persistDefaults && (!perUinRaw || legacy)) {
-    saveOneBotConfig(uin, config);
+    saveOneBotConfig(uin, config, { mode: globalRaw ? 'overlay' : 'snapshot' });
   }
 
   return config;
 }
 
-export function saveOneBotConfig(uin: string, config: OneBotConfig): void {
+export interface SaveOneBotConfigOptions {
+  /** Snapshot is the WebUI/user-save contract. Overlay is reserved for the
+   *  automatic legacy/global-default materialization path. */
+  mode?: 'snapshot' | 'overlay';
+}
+
+export function saveOneBotConfig(
+  uin: string,
+  config: OneBotConfig,
+  options: SaveOneBotConfigOptions = {},
+): void {
+  assertValidOneBotConfig(config);
   ensureConfigDir();
   const perUinPath = path.join(CONFIG_DIR, `onebot_${uin}.json`);
-  saveJson(perUinPath, toJsonObject(config));
+  saveJson(perUinPath, toJsonObject(config, options.mode ?? 'snapshot'));
+}
+
+/** Validate the normalized, public OneBot configuration shape before it is
+ *  persisted or compiled into a live network plan. Adapter names form one
+ *  process-wide namespace per account, not four independent namespaces. */
+export function assertValidOneBotConfig(value: unknown): asserts value is OneBotConfig {
+  if (!isObject(value)) invalid('configuration must be an object');
+  if (!isObject(value.networks)) invalid('networks must be an object');
+
+  const seen = new Map<string, keyof OneBotNetworks>();
+  const serverBindings = new Map<string, string>();
+  validateNetworkList(value.networks, 'httpServers', seen, (item, at) => {
+    validateServer(item, at);
+    validateServerBinding(item, at, serverBindings);
+  });
+  validateNetworkList(value.networks, 'httpClients', seen, (item, at) => {
+    validateClient(item, at, new Set(['http:', 'https:']));
+    if (
+      item.timeoutMs !== undefined &&
+      (
+        typeof item.timeoutMs !== 'number' ||
+        !Number.isSafeInteger(item.timeoutMs) ||
+        item.timeoutMs <= 0 ||
+        item.timeoutMs > NODE_TIMER_MAX_MS
+      )
+    ) {
+      invalid(`${at}.timeoutMs must be an integer between 1 and ${NODE_TIMER_MAX_MS}`);
+    }
+  });
+  validateNetworkList(value.networks, 'wsServers', seen, (item, at) => {
+    validateServer(item, at);
+    validateServerBinding(item, at, serverBindings);
+    validateRole(item.role, `${at}.role`);
+  });
+  validateNetworkList(value.networks, 'wsClients', seen, (item, at) => {
+    validateClient(item, at, new Set(['ws:', 'wss:']));
+    validateRole(item.role, `${at}.role`);
+    if (
+      item.reconnectIntervalMs !== undefined &&
+      (
+        typeof item.reconnectIntervalMs !== 'number' ||
+        !Number.isSafeInteger(item.reconnectIntervalMs) ||
+        item.reconnectIntervalMs < 1000 ||
+        item.reconnectIntervalMs > NODE_TIMER_MAX_MS
+      )
+    ) {
+      invalid(`${at}.reconnectIntervalMs must be an integer between 1000 and ${NODE_TIMER_MAX_MS}`);
+    }
+  });
+
+  if (!isObject(value.statusCommand)) invalid('statusCommand must be an object');
+  const status = value.statusCommand;
+  if (typeof status.enabled !== 'boolean') invalid('statusCommand.enabled must be a boolean');
+  if (typeof status.swallow !== 'boolean') invalid('statusCommand.swallow must be a boolean');
+  if (
+    typeof status.cooldownSeconds !== 'number' ||
+    !Number.isInteger(status.cooldownSeconds) ||
+    status.cooldownSeconds < 0
+  ) {
+    invalid('statusCommand.cooldownSeconds must be a non-negative integer');
+  }
+  if (
+    typeof status.trigger !== 'string' ||
+    !status.trigger.trim() ||
+    status.trigger.length > STATUS_COMMAND_TRIGGER_MAX_LENGTH ||
+    /[\r\n]/.test(status.trigger)
+  ) {
+    invalid(`statusCommand.trigger must be non-empty, single-line, and <= ${STATUS_COMMAND_TRIGGER_MAX_LENGTH} characters`);
+  }
+
+  if (value.notifications !== undefined) {
+    if (!isObject(value.notifications) || !Array.isArray(value.notifications.channelIds)) {
+      invalid('notifications.channelIds must be an array');
+    }
+    for (const [index, channelId] of value.notifications.channelIds.entries()) {
+      if (typeof channelId !== 'string' || !channelId || channelId.length > 64 || !/^[\w.-]+$/.test(channelId)) {
+        invalid(`notifications.channelIds[${index}] is invalid`);
+      }
+    }
+  }
+}
+
+function validateNetworkList(
+  networks: JsonObject,
+  kind: keyof OneBotNetworks,
+  seen: Map<string, keyof OneBotNetworks>,
+  validateSpecific: (item: JsonObject, at: string) => void,
+): void {
+  const list = networks[kind];
+  if (!Array.isArray(list)) invalid(`networks.${kind} must be an array`);
+  for (let index = 0; index < list.length; index += 1) {
+    const item = list[index];
+    const at = `networks.${kind}[${index}]`;
+    if (!isObject(item)) invalid(`${at} must be an object`);
+    validateNetworkBase(item, at);
+    const name = item.name as string;
+    const previousKind = seen.get(name);
+    if (previousKind !== undefined) {
+      invalid(`network adapter name "${name}" is duplicated in ${previousKind} and ${kind}`);
+    }
+    seen.set(name, kind);
+    validateSpecific(item, at);
+  }
+}
+
+function validateNetworkBase(item: JsonObject, at: string): void {
+  if (typeof item.name !== 'string' || !item.name.trim()) invalid(`${at}.name must be a non-empty string`);
+  if (item.name !== (item.name as string).trim()) invalid(`${at}.name must not have surrounding whitespace`);
+  if (item.enabled !== undefined && typeof item.enabled !== 'boolean') invalid(`${at}.enabled must be a boolean`);
+  if (item.accessToken !== undefined && typeof item.accessToken !== 'string') {
+    invalid(`${at}.accessToken must be a string`);
+  }
+  if (item.messageFormat !== 'array' && item.messageFormat !== 'string') {
+    invalid(`${at}.messageFormat must be "array" or "string"`);
+  }
+  if (typeof item.reportSelfMessage !== 'boolean') invalid(`${at}.reportSelfMessage must be a boolean`);
+}
+
+function validateServer(item: JsonObject, at: string): void {
+  if (!Number.isInteger(item.port) || (item.port as number) <= 0 || (item.port as number) > 65535) {
+    invalid(`${at}.port must be an integer between 1 and 65535`);
+  }
+  if (item.host !== undefined) {
+    if (typeof item.host !== 'string') invalid(`${at}.host must be a string`);
+    if (!item.host.trim()) invalid(`${at}.host must be a non-empty string when provided`);
+    if (item.host !== item.host.trim()) invalid(`${at}.host must not have surrounding whitespace`);
+  }
+  if (item.path !== undefined) {
+    if (typeof item.path !== 'string') invalid(`${at}.path must be a string`);
+    if (item.path !== item.path.trim()) invalid(`${at}.path must not have surrounding whitespace`);
+    const pathValue = item.path || '/';
+    if (!pathValue.startsWith('/')) invalid(`${at}.path must be empty or start with /`);
+    if (pathValue.includes('?') || pathValue.includes('#')) invalid(`${at}.path must not include query or hash`);
+    if (new URL(`http://127.0.0.1${pathValue}`).pathname !== pathValue) {
+      invalid(`${at}.path must already be a normalized URL pathname`);
+    }
+  }
+}
+
+function validateServerBinding(item: JsonObject, at: string, bindings: Map<string, string>): void {
+  if (item.enabled === false) return;
+  const host = typeof item.host === 'string' && item.host.trim()
+    ? item.host.trim().toLowerCase()
+    : '0.0.0.0';
+  const port = item.port as number;
+  const binding = `${host}:${String(port)}`;
+  const exact = bindings.get(binding);
+  if (exact) invalid(`${at} conflicts with ${exact} on server binding ${binding}`);
+
+  // A wildcard listener owns every address in its family. Conservatively
+  // reject any second listener on the same port when either side is a
+  // wildcard; otherwise the saved plan deterministically degrades at bind.
+  const wildcardKey = `*:${String(port)}`;
+  const previousWildcard = bindings.get(wildcardKey);
+  if (previousWildcard) invalid(`${at} conflicts with ${previousWildcard} on wildcard server port ${String(port)}`);
+  const isWildcard = host === '0.0.0.0' || host === '::' || host === '[::]';
+  if (isWildcard) {
+    const previousSamePort = [...bindings.entries()].find(([key]) => key.endsWith(`:${String(port)}`));
+    if (previousSamePort) {
+      invalid(`${at} conflicts with ${previousSamePort[1]} on wildcard server port ${String(port)}`);
+    }
+    bindings.set(wildcardKey, at);
+  }
+  bindings.set(binding, at);
+}
+
+function validateClient(item: JsonObject, at: string, protocols: ReadonlySet<string>): void {
+  if (typeof item.url !== 'string') invalid(`${at}.url must be a string`);
+  if (item.enabled === false) return;
+  if (!item.url.trim()) invalid(`${at}.url must be non-empty while the adapter is enabled`);
+  let parsed: URL;
+  try {
+    parsed = new URL(item.url);
+  } catch {
+    invalid(`${at}.url must be a valid absolute URL`);
+  }
+  if (!protocols.has(parsed.protocol)) {
+    invalid(`${at}.url protocol must be one of ${[...protocols].join(', ')}`);
+  }
+}
+
+function validateRole(value: unknown, at: string): void {
+  if (value !== undefined && value !== 'Api' && value !== 'Event' && value !== 'Universal') {
+    invalid(`${at} must be Api, Event, or Universal`);
+  }
+}
+
+function invalid(message: string): never {
+  throw new OneBotConfigValidationError(message);
 }
 
 function ensureConfigDir(): void {
@@ -138,9 +352,13 @@ export function cleanupInvalidPerUinConfigs(): string[] {
   return removed;
 }
 
-function toJsonObject(config: OneBotConfig): JsonObject {
+function toJsonObject(config: OneBotConfig, mode: 'snapshot' | 'overlay'): JsonObject {
   const nets = config.networks;
   return {
+    // Canonical per-UIN files are complete desired-state snapshots. Older
+    // files without this marker retain the legacy global-overlay migration
+    // behavior until their next successful save.
+    mode,
     networks: {
       httpServers: nets.httpServers.map(httpServerToJson),
       httpClients: nets.httpClients.map(httpClientToJson),
@@ -235,11 +453,13 @@ function fromJson(sources: JsonObject[], freshInstall: boolean): OneBotConfig {
   }
 
   const networks: OneBotNetworks = { httpServers, httpClients, wsServers, wsClients };
-  return {
+  const config: OneBotConfig = {
     networks,
     statusCommand: parseStatusCommand(sources),
     notifications: parseNotifications(sources),
   };
+  assertValidOneBotConfig(config);
+  return config;
 }
 
 /** Last-write-wins merge of `notifications.channelIds` across config sources,
@@ -369,10 +589,11 @@ function parseHttpServer(value: JsonObject, defaults: AdapterDefaults): HttpServ
 
 function parseHttpClient(value: JsonObject, defaults: AdapterDefaults): HttpClientNetwork | null {
   const url = asString(value.url);
-  if (!url) return null;
+  const base = parseBase(value, defaults);
+  if (!url && base.enabled !== false) return null;
   const timeout = asNumber(value.timeoutMs, 0);
   return clean({
-    ...parseBase(value, defaults),
+    ...base,
     url,
     timeoutMs: timeout > 0 ? timeout : undefined,
   });
@@ -392,10 +613,11 @@ function parseWsServer(value: JsonObject, defaults: AdapterDefaults): WsServerNe
 
 function parseWsClient(value: JsonObject, defaults: AdapterDefaults): WsClientNetwork | null {
   const url = asString(value.url);
-  if (!url) return null;
+  const base = parseBase(value, defaults);
+  if (!url && base.enabled !== false) return null;
   const reconnectIntervalMs = asNumber(value.reconnectIntervalMs, 5000);
   return clean({
-    ...parseBase(value, defaults),
+    ...base,
     url,
     role: asRole(value.role, 'Universal'),
     reconnectIntervalMs: Math.max(1000, reconnectIntervalMs),
@@ -448,21 +670,45 @@ function asNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
-function tryLoadJson(filePath: string): JsonObject | null {
+function tryLoadJson(filePath: string, failOnCorrupt = false): JsonObject | null {
   if (!fs.existsSync(filePath)) return null;
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
-    return isObject(parsed) ? parsed : null;
+    if (!isObject(parsed)) throw new Error('configuration root must be an object');
+    return parsed;
   } catch (err) {
-    log.warn('config file %s is corrupt and will be ignored: %s', filePath, err instanceof Error ? err.message : String(err));
+    const message = err instanceof Error ? err.message : String(err);
+    if (failOnCorrupt) {
+      throw new Error(`config file ${filePath} is corrupt: ${message}`, { cause: err });
+    }
+    log.warn('config file %s is corrupt and will be ignored: %s', filePath, message);
     return null;
   }
 }
 
 function saveJson(filePath: string, json: JsonObject): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(json, null, 2), 'utf8');
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tempPath = path.join(
+    dir,
+    `.${path.basename(filePath)}.${String(process.pid)}.${randomBytes(6).toString('hex')}.tmp`,
+  );
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(tempPath, 'wx', 0o600);
+    fs.writeFileSync(fd, JSON.stringify(json, null, 2), 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* preserve the primary write error */ }
+    }
+    try { fs.unlinkSync(tempPath); } catch { /* temp may not exist or rename succeeded */ }
+    throw error;
+  }
 }
 
 function isObject(value: unknown): value is JsonObject {

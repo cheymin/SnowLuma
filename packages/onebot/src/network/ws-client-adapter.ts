@@ -27,6 +27,8 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
   private options: EventReportOptions;
   private role: WsRole;
   private explicitlyClosed = false;
+  private acceptingActions = false;
+  private readonly inFlightActions = new Set<Promise<void>>();
   // Stop fn for the CURRENT socket's keepalive, so close()/reload can halt it
   // immediately instead of waiting for the deferred 'close' event. The per-socket
   // closure in connect() still owns the #97 stale-socket case; this is idempotent
@@ -45,11 +47,22 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
     if (!this.config.url) return;
     this.explicitlyClosed = false;
     this.isEnabled = true;
-    this.connect();
+    try {
+      this.connect();
+      this.acceptingActions = true;
+      this.clearApplyFailure();
+    } catch (error) {
+      this.isEnabled = false;
+      this.explicitlyClosed = true;
+      this.acceptingActions = false;
+      this.recordTransportFailure(error);
+      throw error;
+    }
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.explicitlyClosed = true;
+    this.acceptingActions = false;
     this.isEnabled = false;
     this.connected = false;
     this.cancelReconnect();
@@ -59,6 +72,7 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
       safeClose(this.socket);
       this.socket = null;
     }
+    await Promise.all(this.inFlightActions);
   }
 
   override describeStatus(): AdapterStatus {
@@ -131,9 +145,11 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
     });
 
     socket.on('message', (raw: Buffer) => {
-      void this.handleApiMessage(socket, raw).catch((err) => {
-        this.log.warn('[%s] handleApiMessage threw: %s', this.name, err instanceof Error ? (err.stack ?? err.message) : String(err));
-      });
+      if (this.socket !== socket) {
+        this.log.warn('[%s] rejected inbound action from stale socket', this.name);
+        return;
+      }
+      this.trackInboundAction(() => this.handleApiMessage(socket, raw));
     });
 
     socket.on('close', () => {
@@ -193,9 +209,30 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
     );
   }
 
+  private trackInboundAction(start: () => Promise<void>): void {
+    if (!this.acceptingActions || this.ctx.api.isAcceptingActions === false) {
+      this.log.warn('[%s] rejected inbound action while adapter is closing', this.name);
+      return;
+    }
+    let action: Promise<void>;
+    try {
+      action = start();
+    } catch (error) {
+      this.log.error('[%s] inbound action start failed: %s', this.name, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      return;
+    }
+    const tracked = action.then(
+      () => undefined,
+      (error) => {
+        this.log.error('[%s] inbound action failed: %s', this.name, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      },
+    );
+    this.inFlightActions.add(tracked);
+    void tracked.then(() => { this.inFlightActions.delete(tracked); });
+  }
+
   private sendBootstrapMetaEvents(socket: WebSocket): void {
     if (this.role !== 'Event' && this.role !== 'Universal') return;
     for (const frame of this.bootstrapMetaFrames(this.options)) safeSend(socket, frame);
   }
 }
-

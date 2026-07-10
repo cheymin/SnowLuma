@@ -235,6 +235,12 @@ export class ContactsApi {
     return this.ctx.identity.getGroupInviteCardSequence(groupId);
   }
 
+  /** Resolve the group for a private invite-card msgseq. Numeric OneBot flags
+   *  use this path because the card sequence is absent from 0x10C0. */
+  findGroupInviteCardGroupBySequence(sequence: number): number | undefined {
+    return this.ctx.identity.findGroupInviteCardGroupBySequence(sequence);
+  }
+
   async fetchDownloadRKeys(): Promise<DownloadRKeyInfo[]> {
     const resp = await FetchDownloadRkeys.invoke(this.ctx);
 

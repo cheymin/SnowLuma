@@ -51,6 +51,7 @@ export function ConfigPage() {
     cancelSwitch,
     save,
     saveStatus,
+    saveStatusTone,
   } = useOneBotInstanceConfig(qqList, {
     selectedUin,
     onSelectedUinChange: setSelectedUin,
@@ -187,6 +188,7 @@ export function ConfigPage() {
               selectedUin={selectedUin}
               dirty={dirty}
               saveStatus={saveStatus}
+              saveStatusTone={saveStatusTone}
               onSave={immediateSave}
               activeTab={activeTab}
               onCreate={
@@ -262,12 +264,13 @@ interface HeaderBarProps {
   selectedUin: string;
   dirty: boolean;
   saveStatus: string;
+  saveStatusTone: 'idle' | 'saving' | 'success' | 'warning' | 'error';
   onSave: () => void;
   activeTab: TabKey;
   onCreate?: () => void;
 }
 
-function HeaderBar({ selectedUin, dirty, saveStatus, onSave, activeTab, onCreate }: HeaderBarProps) {
+function HeaderBar({ selectedUin, dirty, saveStatus, saveStatusTone, onSave, activeTab, onCreate }: HeaderBarProps) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
@@ -279,11 +282,13 @@ function HeaderBar({ selectedUin, dirty, saveStatus, onSave, activeTab, onCreate
       <div className="flex flex-wrap items-center gap-3">
         {(saveStatus || dirty) && (
           <span className="inline-flex items-center gap-1.5 text-[11px] font-medium">
-            {saveStatus === '保存中...' ? (
+            {saveStatusTone === 'saving' ? (
               <><Loader2 className="size-3.5 animate-spin text-muted-foreground" /><span className="text-muted-foreground">保存中</span></>
-            ) : saveStatus === '保存成功' ? (
-              <><Check className="size-3.5 text-success" /><span className="text-success">已保存</span></>
-            ) : saveStatus ? (
+            ) : saveStatusTone === 'success' ? (
+              <><Check className="size-3.5 text-success" /><span className="text-success">{saveStatus}</span></>
+            ) : saveStatusTone === 'warning' ? (
+              <><span className="size-1.5 rounded-full bg-warning" /><span className="text-warning">{saveStatus}</span></>
+            ) : saveStatusTone === 'error' ? (
               <><span className="size-1.5 rounded-full bg-destructive" /><span className="text-destructive">{saveStatus}</span></>
             ) : (
               <><span className="size-1.5 rounded-full bg-warning" /><span className="text-warning">未保存</span></>

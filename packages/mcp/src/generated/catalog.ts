@@ -7206,6 +7206,15 @@ export const ACTIONS: CatalogAction[] = [
         }
       },
       {
+        "name": "group_id",
+        "type": "int",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      {
         "name": "auto_escape",
         "type": "bool",
         "required": false,
@@ -7226,6 +7235,10 @@ export const ACTIONS: CatalogAction[] = [
         },
         "message": {
           "description": "OneBot message: string | segment[] | object"
+        },
+        "group_id": {
+          "type": "integer",
+          "minimum": 0
         },
         "auto_escape": {
           "type": "boolean",

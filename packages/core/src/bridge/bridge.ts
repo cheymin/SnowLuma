@@ -19,10 +19,15 @@ const log = createLogger('Bridge');
 export class Bridge implements BridgeInterface {
   readonly identity: IdentityService;
   private pids_ = new Set<number>();
+  /** Packet senders keyed by their owning QQ process. Keeping the sender and
+   *  PID together is what makes disconnect fallback deterministic: a sender
+   *  can never outlive the PID that supplied it. */
+  private readonly packetClientsByPid_ = new Map<number, PacketSender>();
   readonly events = new BridgeEventBus();
   readonly apis: ApiHub;
   private readonly pipeline: IncomingPacketPipeline;
   private packetClient_: PacketSender | null = null;
+  private packetClientPid_: number | null = null;
   private static readonly UPLOADED_FILE_CACHE_MAX = 1024;
   private uploadedFileMeta_ = new Map<string, UploadedFileMeta>();
   private clientSeq_ = 100000000 + (Date.now() % 1000000000);
@@ -52,17 +57,38 @@ export class Bridge implements BridgeInterface {
         }
       },
       resolveGroupJoinRequest: async (groupId, uid, subType) => {
-        try {
-          const requests = await this.apis.contacts.fetchGroupRequests();
-          const match = requests.find(r => {
-            if (r.groupId !== groupId) return false;
-            return subType === 'invite' ? r.invitorUid === uid : r.targetUid === uid;
-          });
-          if (!match) return null;
-          return { comment: match.comment, sequence: match.sequence };
-        } catch {
-          return null;
+        const [main, filtered] = await Promise.allSettled([
+          this.apis.contacts.fetchGroupRequests(false),
+          this.apis.contacts.fetchGroupRequests(true),
+        ]);
+        if (main.status === 'rejected') {
+          log.warn('group-request enrichment main inbox failed: group=%d uid=%s err=%s',
+            groupId, uid, main.reason instanceof Error ? main.reason.message : String(main.reason));
         }
+        if (filtered.status === 'rejected') {
+          log.warn('group-request enrichment filtered inbox failed: group=%d uid=%s err=%s',
+            groupId, uid, filtered.reason instanceof Error ? filtered.reason.message : String(filtered.reason));
+        }
+        if (main.status === 'rejected' && filtered.status === 'rejected') {
+          throw new Error('failed to fetch group requests from both inboxes');
+        }
+        const requests = [
+          ...(main.status === 'fulfilled' ? main.value : []),
+          ...(filtered.status === 'fulfilled' ? filtered.value : []),
+        ];
+        return requests.find(r => {
+          if (r.groupId !== groupId) return false;
+          return subType === 'invite' ? r.invitorUid === uid : r.targetUid === uid;
+        }) ?? null;
+      },
+      resolveGroupInviteCardSequence: async (groupId) => {
+        const deadline = Date.now() + 1_000;
+        do {
+          const sequence = this.apis.contacts.getGroupInviteCardSequence(groupId);
+          if (sequence) return sequence;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        } while (Date.now() < deadline);
+        return null;
       },
     });
     this.pipeline.registerCmd(MSG_PUSH_CMD, (pkt, identity) => parseMsgPush(pkt, identity, this.sysMsgDedup_));
@@ -70,12 +96,28 @@ export class Bridge implements BridgeInterface {
   }
 
   dispose(): void {
-    this.identity.close();
-    this.events.clear();
+    this.pids_.clear();
+    this.packetClientsByPid_.clear();
+    this.packetClient_ = null;
+    this.packetClientPid_ = null;
+    try {
+      this.identity.close();
+    } finally {
+      // A close failure must remain visible to the caller, but must not leave
+      // event subscribers attached to a Bridge that Manager already removed.
+      this.events.clear();
+    }
   }
 
+  /** Legacy two-step setter retained for external compatibility. It assigns
+   *  the sender to the most recently attached PID when one exists. New
+   *  BridgeManager code uses bindPid() for an atomic transition. */
   setPacketClient(client: PacketSender): void {
     this.packetClient_ = client;
+    const pids = [...this.pids_];
+    const pid = pids.length > 0 ? pids[pids.length - 1]! : null;
+    this.packetClientPid_ = pid;
+    if (pid !== null) this.packetClientsByPid_.set(pid, client);
   }
 
   registerCmd(cmd: string, parser: CmdParser): void {
@@ -86,17 +128,54 @@ export class Bridge implements BridgeInterface {
     return this.pipeline.handlesCmd(cmd);
   }
 
+  /** Attach a process without a sender. Retained for compatibility; the
+   *  manager uses bindPid() for the atomic PID+sender transition. Re-attaching
+   *  deliberately refreshes recency. */
   attachPid(pid: number): void {
+    this.pids_.delete(pid);
     this.pids_.add(pid);
   }
+
+  /** Atomically attach a process and make its sender the active sender.
+   *  Set insertion order is the recency order used for fallback. */
+  bindPid(pid: number, client: PacketSender): void {
+    this.attachPid(pid);
+    this.packetClientsByPid_.set(pid, client);
+    this.packetClient_ = client;
+    this.packetClientPid_ = pid;
+  }
+
+  /** @internal BridgeManager lookup used when an incoming packet is the first
+   *  observation that a live PID changed UIN. */
+  packetClientForPid(pid: number): PacketSender | null {
+    return this.packetClientsByPid_.get(pid) ?? null;
+  }
+
   detachPid(pid: number): void {
     this.pids_.delete(pid);
+    this.packetClientsByPid_.delete(pid);
+
+    if (this.packetClientPid_ !== pid) {
+      // An unscoped legacy sender cannot be associated with a particular PID.
+      // It is safe to retain while another PID exists, but never after the
+      // Bridge becomes empty.
+      if (this.pids_.size === 0) {
+        this.packetClient_ = null;
+        this.packetClientPid_ = null;
+      }
+      return;
+    }
+
+    this.selectFallbackPacketClient(pid);
   }
   hasPid(pid: number): boolean { return this.pids_.has(pid); }
   get empty(): boolean { return this.pids_.size === 0; }
   get activePid(): number | null {
-    for (const pid of this.pids_) return pid;
-    return null;
+    if (this.packetClientPid_ !== null && this.pids_.has(this.packetClientPid_)) {
+      return this.packetClientPid_;
+    }
+    const pids = [...this.pids_];
+    return pids.length > 0 ? pids[pids.length - 1]! : null;
   }
   onPacket(pkt: PacketInfo): void {
     this.pipeline.process(pkt);
@@ -159,6 +238,36 @@ export class Bridge implements BridgeInterface {
     }
     return result;
   }
+
+  private selectFallbackPacketClient(detachedPid: number): void {
+    const pids = [...this.pids_];
+    for (let index = pids.length - 1; index >= 0; index -= 1) {
+      const fallbackPid = pids[index]!;
+      const fallback = this.packetClientsByPid_.get(fallbackPid);
+      if (!fallback) continue;
+
+      this.packetClient_ = fallback;
+      this.packetClientPid_ = fallbackPid;
+      log.debug(
+        'packet sender fallback: UIN=%s detached PID=%d fallback PID=%d',
+        this.identity.uin,
+        detachedPid,
+        fallbackPid,
+      );
+      return;
+    }
+
+    this.packetClient_ = null;
+    this.packetClientPid_ = null;
+    if (this.pids_.size > 0) {
+      log.warn(
+        'packet sender unavailable after PID detach: UIN=%s detached PID=%d remaining PIDs=%d',
+        this.identity.uin,
+        detachedPid,
+        this.pids_.size,
+      );
+    }
+  }
   async resolveUserUid(uin: number, groupId?: number): Promise<string> {
     return this.identity.resolveUid(uin, groupId);
   }
@@ -203,4 +312,3 @@ export interface ClientKeyInfo {
 }
 export { AiVoiceChatType };
 export type { AiVoiceCategory, StrangerStatus };
-

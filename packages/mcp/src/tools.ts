@@ -15,6 +15,13 @@ import type { ActionClient } from './client.js';
 
 export type Mode = 'docs' | 'read' | 'write';
 
+export function parseMode(raw: string | undefined): Mode | undefined {
+  if (raw === undefined) return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === 'docs' || value === 'read' || value === 'write') return value;
+  throw new Error('SNOWLUMA_MCP_MODE must be one of: docs, read, write');
+}
+
 // name + every alias → action, so lookups accept aliases too.
 const byName = new Map<string, CatalogAction>();
 for (const a of ACTIONS) {
@@ -23,13 +30,13 @@ for (const a of ACTIONS) {
 
 /** Lightweight index entry (keeps list/search payloads small). */
 function lite(a: CatalogAction) {
-  return { name: a.name, category: a.category, summary: a.summary, aliases: a.aliases, readOnly: a.readOnly };
+  return { name: a.name, category: a.category, summary: a.summary, aliases: a.aliases, readOnly: a.readOnly, stream: a.stream ?? false };
 }
 
 const DOCS_TOOLS: Tool[] = [
   {
     name: 'list_actions',
-    description: '列出所有 OneBot action（可按 category 过滤）。返回轻量索引（名称/分类/摘要/别名/是否只读）。',
+    description: '列出所有 OneBot action（可按 category 过滤）。返回轻量索引（名称/分类/摘要/别名/是否只读/是否为 Stream Action）。',
     inputSchema: {
       type: 'object',
       properties: { category: { type: 'string', description: '按分类过滤，如 群管理 / 消息 / 好友' } },
@@ -72,6 +79,17 @@ const EXEC_INPUT_SCHEMA = {
   properties: {
     action: { type: 'string', description: 'action 名（接受别名）。先用 get_action 查它的参数 inputSchema。' },
     params: { type: 'object', description: '该 action 的参数对象', additionalProperties: true },
+    execution: {
+      type: 'object',
+      description: 'MCP 主机侧执行选项（不会发送为 OneBot params）。自动上传本地文件时使用。',
+      properties: {
+        input_file: {
+          type: 'string',
+          description: 'MCP 主机上的文件路径。仅用于 upload_file_stream，且必须位于 SNOWLUMA_MCP_UPLOAD_ROOT。',
+        },
+      },
+      additionalProperties: false,
+    },
   },
   required: ['action'],
   additionalProperties: false,
@@ -89,7 +107,7 @@ function queryTool(): Tool {
 function invokeTool(): Tool {
   return {
     name: 'invoke_action',
-    description: '调用一个 OneBot action（可产生副作用：发消息、改群、改资料等）并返回完整响应。仅在写模式可用。',
+    description: '调用一个 OneBot action（可产生副作用）。Stream 下载会写入 MCP 主机受控目录并只返回文件元数据；upload_file_stream 可用 execution.input_file 自动分块上传。仅在写模式可用。',
     inputSchema: EXEC_INPUT_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   };
@@ -115,6 +133,7 @@ function asError(message: string): ToolResult {
 export interface CallCtx {
   mode: Mode;
   client?: ActionClient;
+  signal?: AbortSignal;
 }
 
 export async function callTool(name: string, args: Record<string, unknown>, ctx: CallCtx): Promise<ToolResult> {
@@ -173,10 +192,36 @@ async function execute(args: Record<string, unknown>, ctx: CallCtx, kind: 'read'
     args.params && typeof args.params === 'object' && !Array.isArray(args.params)
       ? (args.params as Record<string, unknown>)
       : {};
+  let inputFile: string | undefined;
+  if (args.execution !== undefined) {
+    if (!args.execution || typeof args.execution !== 'object' || Array.isArray(args.execution)) {
+      return asError('execution 必须是对象。');
+    }
+    const execution = args.execution as Record<string, unknown>;
+    const unknown = Object.keys(execution).filter((key) => key !== 'input_file');
+    if (unknown.length) return asError(`未知 MCP execution 选项: ${unknown.join(', ')}`);
+    if (execution.input_file !== undefined) {
+      if (typeof execution.input_file !== 'string' || !execution.input_file.trim()) {
+        return asError('execution.input_file 必须是非空字符串。');
+      }
+      inputFile = execution.input_file;
+    }
+  }
+  if (inputFile && cat.name !== 'upload_file_stream') {
+    return asError('execution.input_file 仅可用于 upload_file_stream。');
+  }
+  if (inputFile && !cat.stream) {
+    return asError(`${action} 不是 Stream Action，不能使用 execution.input_file。`);
+  }
   try {
-    const envelope = await ctx.client.call(action, params);
-    return asText(envelope);
+    const result = cat.stream
+      ? await ctx.client.callStream(action, params, {
+        ...(inputFile ? { inputFile } : {}),
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      })
+      : await ctx.client.call(action, params);
+    return asText(result);
   } catch (err) {
-    return asError(`调用失败: ${err instanceof Error ? err.message : String(err)}`);
+    return asError(`调用失败 (${action}): ${err instanceof Error ? err.message : String(err)}`);
   }
 }

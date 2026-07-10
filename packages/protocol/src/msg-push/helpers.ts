@@ -3,24 +3,62 @@ import { inflateSync } from 'zlib';
 import type { IdentityService } from '../identity-service';
 import type { OperatorInfo } from '@snowluma/proto-defs/notify';
 
+export const MAX_RICH_CARD_OUTPUT_BYTES = 4 * 1024 * 1024;
+export const MAX_RICH_CARD_MESSAGE_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+export type DecompressDataResult =
+  | { ok: true; text: string; outputBytes: number }
+  | { ok: false; reason: string };
+
 export function makeImageUrl(origUrl: string): string {
   if (!origUrl) return '';
   if (origUrl.includes('rkey')) return 'https://multimedia.nt.qq.com.cn' + origUrl;
   return 'http://gchat.qpic.cn' + origUrl;
 }
 
-export function decompressData(data: Uint8Array): string {
-  if (!data || data.length === 0) return '';
-  if (data[0] === 0x01 && data.length > 1) {
+export function decompressData(
+  data: Uint8Array,
+  maxOutputBytes = MAX_RICH_CARD_OUTPUT_BYTES,
+): DecompressDataResult {
+  if (!data || data.length === 0) return { ok: false, reason: 'empty_payload' };
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
+    throw new Error(`invalid decompression output limit: ${maxOutputBytes}`);
+  }
+  if ((data[0] === 0x00 || data[0] === 0x01) && data.length === 1) {
+    return { ok: false, reason: 'marker_without_payload' };
+  }
+  if (data[0] === 0x01) {
     try {
-      const inflated = inflateSync(Buffer.from(data.subarray(1)));
-      return inflated.toString('utf8');
-    } catch { return ''; }
+      const inflated = inflateSync(Buffer.from(data.subarray(1)), {
+        maxOutputLength: maxOutputBytes,
+      });
+      return inflated.length > 0
+        ? { ok: true, text: inflated.toString('utf8'), outputBytes: inflated.length }
+        : { ok: false, reason: 'empty_output' };
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? String(error.code)
+        : '';
+      return {
+        ok: false,
+        reason: code === 'ERR_BUFFER_TOO_LARGE'
+          ? 'output_limit_exceeded'
+          : code
+            ? `inflate_failed:${code}`
+            : 'inflate_failed',
+      };
+    }
   }
-  if (data[0] === 0x00 && data.length > 1) {
-    return Buffer.from(data.subarray(1)).toString('utf8');
+  if (data[0] === 0x00) {
+    if (data.length - 1 > maxOutputBytes) return { ok: false, reason: 'output_limit_exceeded' };
+    return {
+      ok: true,
+      text: Buffer.from(data.subarray(1)).toString('utf8'),
+      outputBytes: data.length - 1,
+    };
   }
-  return Buffer.from(data).toString('utf8');
+  if (data.length > maxOutputBytes) return { ok: false, reason: 'output_limit_exceeded' };
+  return { ok: true, text: Buffer.from(data).toString('utf8'), outputBytes: data.length };
 }
 
 export function isNumericUin(value: string): boolean {

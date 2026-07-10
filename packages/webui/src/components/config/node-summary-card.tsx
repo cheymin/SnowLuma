@@ -17,12 +17,14 @@ const LIVE_STYLE: Record<AdapterStatus['status'], string> = {
   ok: 'bg-success/10 text-success',
   warn: 'bg-warning/10 text-warning',
   down: 'bg-destructive/10 text-destructive',
+  degraded: 'bg-destructive/10 text-destructive',
   disabled: 'bg-muted text-muted-foreground',
 };
 const LIVE_LABEL: Record<AdapterStatus['status'], string> = {
   ok: '正常',
   warn: '注意',
   down: '异常',
+  degraded: '应用失败',
   disabled: '未启用',
 };
 
@@ -74,7 +76,9 @@ export function NodeSummaryCard<T extends AdapterCommon>({
           {liveStatus && (
             <span
               className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', LIVE_STYLE[liveStatus.status])}
-              title={liveStatus.detail}
+              title={liveStatus.lastError
+                ? `${liveStatus.detail}\n${liveStatus.lastErrorAt ? new Date(liveStatus.lastErrorAt).toLocaleString() : '时间未知'} · ${liveStatus.lastError}`
+                : liveStatus.detail}
             >
               {LIVE_LABEL[liveStatus.status]} · {liveStatus.detail}
             </span>
@@ -118,4 +122,3 @@ export function NodeSummaryCard<T extends AdapterCommon>({
     </motion.div>
   );
 }
-

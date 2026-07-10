@@ -104,7 +104,7 @@ describe('send_group_msg with {type:"file"} segment', () => {
     expect(fileFileId).toBe('gfid-xyz');
   });
 
-  it('file segment without file_id is skipped (with a warn-level log)', async () => {
+  it('rejects the whole message when a file segment has neither file_id nor url', async () => {
     const sendGroupMessage_bridge = vi.fn(async (_gid: number, _elements: any[]) => goodReceipt);
     const publish = vi.fn();
     const upload = vi.fn();
@@ -117,12 +117,15 @@ describe('send_group_msg with {type:"file"} segment', () => {
     } as any);
     const ctx = makeCtx(bridge);
 
-    await sendGroupMessage(ctx, 12345, [
+    await expect(sendGroupMessage(ctx, 12345, [
       { type: 'text', data: { text: 'with bad file segment' } },
       { type: 'file', data: {} }, // no file_id and no url
-    ] as any, false);
+    ] as any, false)).rejects.toMatchObject({
+      code: 'MISSING_FIELD',
+      elementType: 'file',
+    });
 
-    expect(sendGroupMessage_bridge).toHaveBeenCalledOnce();
+    expect(sendGroupMessage_bridge).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
     expect(upload).not.toHaveBeenCalled();
   });

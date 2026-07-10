@@ -52,13 +52,17 @@ export const actions = [
       auto_escape: f.bool().default(false),
     },
     run: async (p, ctx) => {
-      if (p.message_type === 'group' || p.group_id !== undefined) {
+      // Group temp-session reply: message_type=private with BOTH a user_id and
+      // a group_id (the source group). Detect it first so a group_id here
+      // doesn't get misrouted to a group message.
+      const isTempReply = p.message_type === 'private' && p.user_id !== undefined && p.group_id !== undefined;
+      if (!isTempReply && (p.message_type === 'group' || p.group_id !== undefined)) {
         if (p.group_id === undefined) return failedResponse(RETCODE.BAD_REQUEST, 'group_id is required');
         const result = await ctx.sendGroupMessage(p.group_id, p.message, p.auto_escape);
         return okResponse({ message_id: result.messageId });
       }
       if (p.user_id === undefined) return failedResponse(RETCODE.BAD_REQUEST, 'user_id is required');
-      const result = await ctx.sendPrivateMessage(p.user_id, p.message, p.auto_escape);
+      const result = await ctx.sendPrivateMessage(p.user_id, p.message, p.auto_escape, isTempReply ? p.group_id : undefined);
       return okResponse({ message_id: result.messageId });
     },
   }),
@@ -67,9 +71,19 @@ export const actions = [
     name: 'send_private_msg',
     summary: '发送私聊消息',
     returns: '{ message_id: number }',
-    params: { user_id: f.userId(), message: f.message(), auto_escape: f.bool().default(false) },
+    params: {
+      user_id: f.userId(),
+      message: f.message(),
+      // Optional source group: reply into that group's temp session (临时会话)
+      // instead of a friend chat. int({min:0}) rather than groupId (which
+      // rejects 0): a client that fills every field with group_id:0 must keep
+      // working as a plain private send, so 0/absent means "no temp session".
+      group_id: f.int({ min: 0 }).optional(),
+      auto_escape: f.bool().default(false),
+    },
     run: async (p, ctx) => {
-      const result = await ctx.sendPrivateMessage(p.user_id, p.message, p.auto_escape);
+      const tempGroupId = p.group_id && p.group_id > 0 ? p.group_id : undefined;
+      const result = await ctx.sendPrivateMessage(p.user_id, p.message, p.auto_escape, tempGroupId);
       return okResponse({ message_id: result.messageId });
     },
   }),

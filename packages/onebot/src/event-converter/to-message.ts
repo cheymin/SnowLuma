@@ -34,6 +34,18 @@ async function convertPrivateMessage(
     ctx.messageIdResolver, false, event.senderUin, event.msgSeq, PRIVATE_MESSAGE_EVENT,
   );
   const segments = await toSegments(ctx, event.elements, false, event.senderUin);
+  const sender: JsonObject = {
+    user_id: event.senderUin,
+    nickname: event.senderNick,
+    sex: 'unknown',
+    age: 0,
+  };
+  // A temp (group-originated) message carries its source group so a client can
+  // reply via send_private_msg(user_id, group_id=sender.group_id). Mirrors
+  // go-cqhttp / NapCat, which expose it on sender.group_id.
+  if (subType === 'group' && 'groupId' in event && event.groupId > 0) {
+    sender.group_id = event.groupId;
+  }
   return message(ctx, event, postType, {
     message_type: 'private',
     sub_type: subType,
@@ -43,12 +55,7 @@ async function convertPrivateMessage(
     message: segments,
     raw_message: segmentsToRawMessage(segments),
     font: 0,
-    sender: {
-      user_id: event.senderUin,
-      nickname: event.senderNick,
-      sex: 'unknown',
-      age: 0,
-    },
+    sender,
   });
 }
 
@@ -73,6 +80,7 @@ export async function convertGroupMessage(ctx: ConverterContext, event: GroupMes
     message_id: messageId,
     message_seq: event.msgSeq,
     group_id: event.groupId,
+    group_name: event.groupName,
     user_id: event.senderUin,
     message: segments,
     raw_message: segmentsToRawMessage(segments),

@@ -5,6 +5,7 @@ import type { ApiActionContext } from './api-handler';
 import type { ConverterContext } from './event-converter';
 import type { MediaStore } from './media-store';
 import type { MessageStore } from './message-store';
+import type { TempSessionStore } from './temp-session-store';
 import {
   getDownloadRKeys,
   getFriendList,
@@ -46,6 +47,8 @@ export interface OneBotInstanceContext {
   messageStore: MessageStore;
   mediaStore: MediaStore;
   reactionStore: ReactionStore;
+  /** Group temp-session records — see {@link TempSessionStore}. */
+  tempSessions: TempSessionStore;
   converterCtx: ConverterContext;
   config: OneBotConfig;
   musicSignUrl?: string;
@@ -65,7 +68,7 @@ export function buildApiContext(ref: OneBotInstanceContext): ApiActionContext {
     getMessageMeta: (messageId) => messageStore.findMeta(messageId),
     canSendImage: () => true,
     canSendRecord: () => true,
-    sendPrivateMessage: (userId, message, autoEscape) => sendPrivateMessage(ref, userId, message, autoEscape),
+    sendPrivateMessage: (userId, message, autoEscape, tempGroupId) => sendPrivateMessage(ref, userId, message, autoEscape, tempGroupId),
     sendGroupMessage: (groupId, message, autoEscape) => sendGroupMessage(ref, groupId, message, autoEscape),
     deleteMessage: (_messageId, meta) => deleteMessage(bridge, meta),
     getFriendList: () => getFriendList(bridge),

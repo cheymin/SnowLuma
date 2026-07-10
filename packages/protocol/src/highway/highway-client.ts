@@ -28,6 +28,14 @@ const HIGHWAY_BLOCK_SIZE = 1024 * 1024;
 const HIGHWAY_MAX_CHUNK_ATTEMPTS = 3;
 const HIGHWAY_RETRY_BASE_MS = 300;
 
+// Idle read timeout for a highway response. tcpConnect() clears the socket's
+// own timeout once connected, so a peer that accepts the connection but then
+// neither responds nor FINs would hang the whole upload forever. The single
+// persistent connection (issue #211) keeps a socket alive across the whole
+// file, widening that exposure, so the response reader arms its own idle timer
+// and treats a stall as a retryable transport failure.
+const HIGHWAY_READ_IDLE_MS = 30000;
+
 const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const PRIVATE_IMAGE_CMD_ID = 1003;
@@ -184,7 +192,18 @@ function readHttpResponseBody(socket: net.Socket): Promise<Uint8Array> {
     let totalNeeded = 0;
     let settled = false;
 
+    // Reset on every inbound chunk; fire if the peer goes silent mid-response.
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const armIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () => finish(() => reject(new Error('highway response read timeout (peer idle)'))),
+        HIGHWAY_READ_IDLE_MS,
+      );
+    };
+
     const detach = () => {
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
       socket.off('data', onData);
       socket.off('error', onError);
       socket.off('close', onClose);
@@ -196,6 +215,7 @@ function readHttpResponseBody(socket: net.Socket): Promise<Uint8Array> {
       fn();
     };
     const onData = (chunk: Buffer) => {
+      armIdle();
       chunks.push(chunk);
       const buf = Buffer.concat(chunks);
       if (headerEnd < 0) {
@@ -215,17 +235,30 @@ function readHttpResponseBody(socket: net.Socket): Promise<Uint8Array> {
     const onError = (err: Error) => finish(() => reject(err));
     const onClose = () => finish(() => {
       const buf = Buffer.concat(chunks);
-      if (headerEnd >= 0) resolve(new Uint8Array(buf.subarray(headerEnd)));
-      // QQ 的 highway 边缘节点对单连接多 POST 的 keep-alive 支持不稳定：
-      // 第一次 POST 拿到响应后服务器经常立刻 FIN 关闭，下一次写入的请求体
-      // 走到一个已被对端 close 的 socket 上，触发这里。诊断信息把已收到的
-      // 字节数和是否解析到 header 一起带出来，便于区分 “连接刚握手就被关”
-      // 和 “响应读到一半被截断” 两种情况。
-      else reject(new Error(
-        `connection closed before response (received=${buf.length}B, headerSeen=${headerEnd >= 0})`
-      ));
+      // A fully-received body would already have resolved in onData; reaching
+      // here means the peer FIN'd before the response completed. Only a
+      // close-delimited body (no Content-Length) is legitimately ended by the
+      // FIN — resolve that. A declared-but-unmet Content-Length, or a
+      // half-received header, is a TRUNCATED response: reject it as a
+      // retryable transport failure so the caller's attempt loop reconnects
+      // and re-sends this block, instead of resolving a partial frame that
+      // unpackHighwayFrame would fatally reject OUTSIDE that loop (turning a
+      // recoverable mid-body FIN into a failed upload).
+      //
+      // QQ 的 highway 边缘节点对单连接多 POST 的 keep-alive 支持不稳定，常在
+      // 响应后立刻 FIN；诊断信息带上已收字节数、是否见到 header、需要多少，
+      // 便于区分 “连接刚握手就被关” 和 “响应读到一半被截断”。
+      if (headerEnd >= 0 && contentLength === 0) {
+        resolve(new Uint8Array(buf.subarray(headerEnd)));
+      } else {
+        reject(new Error(
+          `connection closed before full response (received=${buf.length}B, ` +
+          `headerSeen=${headerEnd >= 0}${headerEnd >= 0 ? `, need=${totalNeeded}` : ''})`,
+        ));
+      }
     });
 
+    armIdle();
     socket.on('data', onData);
     socket.on('error', onError);
     socket.on('close', onClose);
@@ -306,26 +339,39 @@ export async function uploadHighwayHttp(
   const pathStr = `/cgi-bin/httpconn?htcmd=0x6FF0087&uin=${bridge.identity.uin}`;
   const totalSize = source.size;
 
-  // 每个 chunk 一个独立的 TCP 连接。
+  // Single-connection, in-order, pipelined upload (issue #211).
   //
-  // 旧实现整个文件复用同一个 socket，依赖 `Connection: keep-alive` 跑多次
-  // POST。但 QQ highway 边缘节点（以及链路上的代理/NAT）经常在第一次响应
-  // 之后立刻 FIN 关闭连接，导致第二个 chunk 写入一个已被对端关闭的 socket，
-  // `readHttpResponseBody` 立刻收到 `close` 事件并抛 `connection closed
-  // before response`。
+  // Blocks are PUT in STRICT offset order over ONE persistent connection,
+  // reused across chunks via HTTP keep-alive. Two properties matter:
+  //   - In order: QQ's highway server reassembles by offset but REJECTS a
+  //     block that arrives after a later one (error_code=102902) — parallel or
+  //     out-of-order PUTs do not work (proven on a real endpoint). Sequential
+  //     send guarantees in-order arrival.
+  //   - One warm connection: reusing the socket keeps the TCP congestion
+  //     window open across the whole file instead of paying slow-start on a
+  //     fresh connection for every 1 MiB block. That per-block cold start was
+  //     the real throughput cap behind #211.
   //
-  // 现象上的体现：≤1 MB 的图片/PTT 因为只发一个 chunk，不会触发；超过 1 MB
-  // 的图片或视频（HIGHWAY_BLOCK_SIZE = 1 MiB）必然失败。
-  //
-  // 改成每 chunk 一连接代价可忽略：
-  //   - 单个 1 MB chunk 的传输时间远大于 TCP 建连开销；
-  //   - QQ 服务端反正也不希望客户端长时间占用连接；
-  //   - 与 NapCat / Lagrange 在大文件上传时的连接生命周期一致。
+  // QQ's edge nodes (and proxies/NAT on the path) sometimes FIN between
+  // chunks — that is what forced the one-connection-per-chunk workaround in
+  // #118. We handle it adaptively: if reusing the socket fails, or the peer
+  // half-closed after a response, we drop it, reconnect, and re-send the SAME
+  // block (re-PUTting an offset is idempotent). Worst case — a server that
+  // closes after every response — degrades to one connection per block: no
+  // worse than the #118 behavior, and still strictly in order (so never
+  // error_code=102902). `connectCount` is logged so a real run reveals which
+  // regime we hit (1 connection = keep-alive honored; ~chunkCount = closed
+  // every time).
   //
   // `source` may buffer the whole file (BufferChunkSource) or stream it from
   // disk (FileChunkSource); either way one chunk is read/held at a time. We
   // own the source and close it exactly once in the `finally` below.
   let succeeded = false;
+  let socket: net.Socket | null = null;
+  let connectCount = 0;
+  const dropSocket = (): void => {
+    if (socket) { socket.destroy(); socket = null; }
+  };
   try {
     let offset = 0;
     while (offset < totalSize) {
@@ -338,39 +384,29 @@ export async function uploadHighwayHttp(
       );
       const frame = packHighwayFrame(head, chunk);
 
-      // Retry the connect + POST for this chunk on transient transport errors
-      // (peer FIN before response, ECONNRESET, connect refused/timeout). Each
-      // attempt uses a fresh connection; re-sending the same offset range is
-      // idempotent on the server.
+      // Send this block, reusing the live connection when there is one. On any
+      // transport failure (peer FIN between chunks, ECONNRESET, connect
+      // refused/timeout) drop the socket, reconnect, and retry THIS block —
+      // re-sending the same offset range is idempotent on the server.
       let responseBody: Uint8Array | undefined;
       for (let attempt = 1; ; attempt++) {
-        let socket: net.Socket;
         try {
-          socket = await tcpConnect(session.host, session.port);
-        } catch (err) {
-          if (attempt >= HIGHWAY_MAX_CHUNK_ATTEMPTS) {
-            throw new Error(
-              `highway connect failed after ${attempt} attempts ` +
-              `(cmdId=${commandId} offset=${offset}/${totalSize}): ${String(err)}`,
-            );
+          if (!socket) {
+            socket = await tcpConnect(session.host, session.port);
+            connectCount += 1;
           }
-          await sleepMs(HIGHWAY_RETRY_BASE_MS * attempt);
-          continue;
-        }
-        try {
           responseBody = await httpPostFrame(socket, session.host, pathStr, frame);
           break;
         } catch (err) {
+          dropSocket();
           if (attempt >= HIGHWAY_MAX_CHUNK_ATTEMPTS) {
             throw new Error(
               `highway upload transport failed after ${attempt} attempts ` +
               `(cmdId=${commandId} chunk=${chunkSize}/${totalSize} offset=${offset}): ${String(err)}`,
             );
           }
-          log.trace('chunk offset=%d attempt %d failed (%s), retrying', offset, attempt, String(err));
+          log.trace('chunk offset=%d attempt %d failed (%s), reconnecting', offset, attempt, String(err));
           await sleepMs(HIGHWAY_RETRY_BASE_MS * attempt);
-        } finally {
-          socket.destroy();
         }
       }
 
@@ -395,13 +431,26 @@ export async function uploadHighwayHttp(
           ` fileMd5=${fileMd5Hex.slice(0, 16)}…)`,
         );
       }
+
+      // If the peer half-closed after sending its response, the socket can no
+      // longer carry the next block — drop it now so the next iteration
+      // reconnects cleanly instead of writing into a dead socket.
+      if (socket && (socket.destroyed || socket.readableEnded || !socket.writable)) {
+        dropSocket();
+      }
+
       offset += chunkSize;
       log.trace('uploaded %d/%d bytes', offset, totalSize);
     }
     succeeded = true;
+    if (totalSize > 0) {
+      log.debug('highway upload done: %d bytes over %d connection(s) (cmdId=%d)',
+        totalSize, connectCount, commandId);
+    }
   } finally {
     // Best-effort close — never mask a primary upload error. A close failure
     // is only surfaced when the upload itself succeeded.
+    dropSocket();
     try {
       await source.close();
     } catch (closeErr) {

@@ -17,7 +17,6 @@ const log = createLogger('Bridge');
 export class BridgeManager {
   private sessions_ = new Map<string, QQSession>();
   private pidToUin_ = new Map<number, string>();
-  private pidPacketClients_ = new Map<number, PacketSender>();
 
   private sessionStartedListeners_: SessionStartedCallback[] = [];
   private sessionClosedListeners_: SessionClosedCallback[] = [];
@@ -55,33 +54,16 @@ export class BridgeManager {
   }
 
   onPidDisconnected(pid: number): void {
-    this.pidPacketClients_.delete(pid);
     const uin = this.pidToUin_.get(pid);
     if (!uin) return;
 
-    this.pidToUin_.delete(pid);
-    const session = this.sessions_.get(uin);
-    if (!session) return;
-
-    session.bridge.detachPid(pid);
-    if (session.bridge.empty) {
-      this.sessions_.delete(uin);
-      log.debug('session closed: UIN=%s', uin);
-      // Fire before dispose() so listeners can still read bridge.identity.
-      this.fireSessionClosed(uin, session.bridge);
-      session.bridge.dispose();
-    }
+    this.detachPidFromSession(pid, uin);
   }
 
   onHookLogin(pid: number, uin: string, packetClient: PacketSender): void {
     if (!isRealUin(uin)) return;
 
-    this.pidPacketClients_.set(pid, packetClient);
-
-    const { session, created } = this.ensureSession(uin);
-    session.bridge.attachPid(pid);
-    session.bridge.setPacketClient(packetClient);
-    this.pidToUin_.set(pid, uin);
+    const { session, created } = this.bindPid(pid, uin, packetClient, 'login');
 
     if (created) {
       log.debug('session started: UIN=%s', uin);
@@ -93,17 +75,13 @@ export class BridgeManager {
     if (!pkt.uin || !isRealUin(pkt.uin)) return;
     const uin = pkt.uin;
 
-    // Ensure session exists
-    const { session, created } = this.ensureSession(uin);
-
-    // Attach PID if known
-    if (pkt.pid && this.pidPacketClients_.has(pkt.pid)) {
-      session.bridge.attachPid(pkt.pid);
-      this.pidToUin_.set(pkt.pid, uin);
-
-      const client = this.pidPacketClients_.get(pkt.pid);
-      if (client) session.bridge.setPacketClient(client);
-    }
+    // A packet may be the first trustworthy observation that a live PID moved
+    // to another UIN. Apply the exact same ownership transition as login so a
+    // PID can never remain attached to two Bridges.
+    const client = pkt.pid > 0 ? this.packetClientForPid(pkt.pid) : null;
+    const { session, created } = client
+      ? this.bindPid(pkt.pid, uin, client, 'packet')
+      : this.ensureSession(uin);
 
     // Notify session started on first real packet
     if (created) {
@@ -113,6 +91,91 @@ export class BridgeManager {
 
     // Dispatch packet to bridge
     session.bridge.onPacket(pkt);
+  }
+
+  /** Bind PID + sender as one state transition. If the PID changed accounts,
+   *  the old Bridge is fully detached (and, when empty, closed) before the new
+   *  Bridge is created. */
+  private bindPid(
+    pid: number,
+    uin: string,
+    packetClient: PacketSender,
+    source: 'login' | 'packet',
+  ): { session: QQSession; created: boolean } {
+    const previousUin = this.pidToUin_.get(pid);
+    if (previousUin && previousUin !== uin) {
+      log.warn(
+        'PID ownership changed: PID=%d UIN=%s -> UIN=%s source=%s',
+        pid,
+        previousUin,
+        uin,
+        source,
+      );
+      this.detachPidFromSession(pid, previousUin);
+    }
+
+    const result = this.ensureSession(uin);
+    result.session.bridge.bindPid(pid, packetClient);
+    this.pidToUin_.set(pid, uin);
+    return result;
+  }
+
+  private packetClientForPid(pid: number): PacketSender | null {
+    const uin = this.pidToUin_.get(pid);
+    if (!uin) return null;
+
+    const session = this.sessions_.get(uin);
+    if (!session) {
+      const message = `BridgeManager invariant violated: PID=${pid} references missing UIN=${uin} session`;
+      log.error(message);
+      throw new Error(message);
+    }
+
+    const packetClient = session.bridge.packetClientForPid(pid);
+    if (packetClient) return packetClient;
+
+    const message = `BridgeManager invariant violated: PID=${pid} has no sender in UIN=${uin} session`;
+    log.error(message);
+    throw new Error(message);
+  }
+
+  private detachPidFromSession(pid: number, uin: string): void {
+    const mappedUin = this.pidToUin_.get(pid);
+    if (mappedUin !== uin) {
+      const message = `BridgeManager invariant violated: PID=${pid} detach expected UIN=${uin}, mapped UIN=${mappedUin ?? 'none'}`;
+      log.error(message);
+      throw new Error(message);
+    }
+
+    const session = this.sessions_.get(uin);
+    if (!session) {
+      const message = `BridgeManager invariant violated: PID=${pid} references missing UIN=${uin} session`;
+      log.error(message);
+      throw new Error(message);
+    }
+
+    if (!session.bridge.hasPid(pid)) {
+      const message = `BridgeManager invariant violated: PID=${pid} is mapped to UIN=${uin}, but Bridge does not own the PID`;
+      log.error(message);
+      throw new Error(message);
+    }
+    if (!session.bridge.packetClientForPid(pid)) {
+      const message = `BridgeManager invariant violated: PID=${pid} is mapped to UIN=${uin}, but Bridge has no sender for the PID`;
+      log.error(message);
+      throw new Error(message);
+    }
+
+    // Validation is complete. Mutate both sides only after the ownership
+    // invariant is known to hold, so a fail-fast error preserves the evidence.
+    this.pidToUin_.delete(pid);
+    session.bridge.detachPid(pid);
+    if (!session.bridge.empty) return;
+
+    this.sessions_.delete(uin);
+    log.debug('session closed: UIN=%s', uin);
+    // Fire before dispose() so listeners can still read bridge.identity.
+    this.fireSessionClosed(uin, session.bridge);
+    session.bridge.dispose();
   }
 
   private ensureSession(uin: string): { session: QQSession; created: boolean } {

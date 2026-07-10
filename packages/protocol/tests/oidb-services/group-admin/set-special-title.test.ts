@@ -32,7 +32,7 @@ describe('SetSpecialTitle namespace', () => {
     expect(env.body?.body?.specialTitle).toBe('crown');
     // uinName (tag 7) must mirror specialTitle or the server silently no-ops.
     expect(env.body?.body?.uinName).toBe('crown');
-    // -1 (int_32) round-trips as 0xFFFFFFFF after the proton decoder reinterprets.
-    expect(env.body?.body?.expireTime).toBe(0xFFFFFFFF);
+    // int_32 preserves the signed -1 sentinel after the wire round-trip.
+    expect(env.body?.body?.expireTime).toBe(-1);
   });
 });

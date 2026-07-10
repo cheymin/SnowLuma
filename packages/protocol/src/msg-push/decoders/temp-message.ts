@@ -17,6 +17,10 @@ export const decodeTempMessage: MsgPushDecoder = (ctx) => {
     ev.groupId = ctx.responseHead.grp.groupUin ?? 0;
     ev.senderNick = ctx.responseHead.grp.memberName ?? '';
   }
+  // A group temp session carries its source group in responseHead.forward.
+  if (ctx.responseHead?.forward?.tempGroupUin) {
+    ev.groupId = ctx.responseHead.forward.tempGroupUin;
+  }
   if (!ev.senderNick) {
     const friend = ctx.identity.findFriend(ctx.fromUin);
     if (friend) ev.senderNick = friend.nickname;

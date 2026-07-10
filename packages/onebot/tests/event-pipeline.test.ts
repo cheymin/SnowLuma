@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { getRecentLogs } from '@snowluma/common/logger';
 import { BridgeEventBus } from '@snowluma/protocol/event-bus';
 
 // Wrap convertEvent in a vi.fn that delegates to the real impl by
@@ -9,9 +10,16 @@ vi.mock('../src/event-converter', async () => {
   return { ...actual, convertEvent: vi.fn(actual.convertEvent) };
 });
 
+vi.mock('../src/modules/message-actions', async () => {
+  const actual = await vi.importActual<typeof import('../src/modules/message-actions')>('../src/modules/message-actions');
+  return { ...actual, backfillReplyTarget: vi.fn(actual.backfillReplyTarget) };
+});
+
 import { convertEvent, type ConverterContext } from '../src/event-converter';
 import { registerEventPipeline } from '../src/event-pipeline';
 import type { OneBotInstanceContext } from '../src/instance-context';
+import { backfillReplyTarget } from '../src/modules/message-actions';
+import { TempSessionStore } from '../src/temp-session-store';
 import type {
   FriendMessage,
   GroupMessage,
@@ -45,7 +53,7 @@ function makeFriendMessage(): FriendMessage {
 
 function makeGroupMessage(): GroupMessage {
   return {
-    kind: 'group_message',
+    kind: 'group_message', groupName: '',
     time: 1700000000,
     selfUin: SELF_ID,
     groupId: GROUP_ID,
@@ -115,6 +123,7 @@ function makeContext(extra: Partial<OneBotInstanceContext> = {}): {
       summarizeMessage: () => [],
       close: () => {},
     } as never,
+    tempSessions: new TempSessionStore(),
     converterCtx,
     config: { networks: { httpServers: [], httpClients: [], wsServers: [], wsClients: [] } } as never,
     cacheMessageMeta: (id, meta) => { metaCalls.push({ id, meta }); },
@@ -177,18 +186,101 @@ describe('registerEventPipeline', () => {
     expect(dispatchCalls[0].notice_type).toBe('group_increase');
   });
 
-  it('returns a disposer that fully unsubscribes', async () => {
+  it('returns a lifecycle handle that fully unsubscribes', async () => {
     const { ctx, bus, metaCalls, dispatchCalls } = makeContext();
-    const dispose = registerEventPipeline(ctx);
+    const pipeline = registerEventPipeline(ctx);
 
     await bus.emit(makeFriendMessage());
     expect(dispatchCalls).toHaveLength(1);
 
-    dispose();
+    pipeline.stop();
+    await pipeline.drain();
     await bus.emit(makeFriendMessage());
-    // No new calls after dispose.
+    // No new calls after stop.
     expect(dispatchCalls).toHaveLength(1);
     expect(metaCalls).toHaveLength(1);
+  });
+
+  it('stops new bridge events and drains a conversion already in flight', async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let releaseConversion!: () => void;
+    const conversionGate = new Promise<void>((resolve) => { releaseConversion = resolve; });
+    vi.mocked(convertEvent).mockImplementationOnce(async () => {
+      markStarted();
+      await conversionGate;
+      return { post_type: 'message', message_type: 'private' };
+    });
+    const { ctx, bus, metaCalls, dispatchCalls } = makeContext();
+    const pipeline = registerEventPipeline(ctx);
+
+    const emitting = bus.emit(makeFriendMessage());
+    await started;
+    pipeline.stop();
+    let drained = false;
+    const draining = pipeline.drain().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    releaseConversion();
+    await emitting;
+    await draining;
+    expect(drained).toBe(true);
+    expect(dispatchCalls).toHaveLength(1);
+
+    await bus.emit(makeFriendMessage());
+    expect(dispatchCalls).toHaveLength(1);
+    expect(metaCalls).toHaveLength(1);
+  });
+
+  it('drains a rejected listener and records its event kind and error', async () => {
+    const marker = `event-pipeline-rejection-${Date.now()}-${Math.random()}`;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let releaseConversion!: () => void;
+    const conversionGate = new Promise<void>((resolve) => { releaseConversion = resolve; });
+    vi.mocked(convertEvent).mockImplementationOnce(async () => {
+      markStarted();
+      await conversionGate;
+      throw new Error(marker);
+    });
+    const { ctx, bus, dispatchCalls } = makeContext();
+    const pipeline = registerEventPipeline(ctx);
+
+    const emitting = bus.emit(makeFriendMessage());
+    await started;
+    pipeline.stop();
+    const draining = pipeline.drain();
+    releaseConversion();
+
+    await emitting;
+    await expect(draining).resolves.toBeUndefined();
+    expect(dispatchCalls).toHaveLength(0);
+    expect(getRecentLogs(1000).some((entry) => (
+      entry.scope === 'Event'
+      && entry.level === 'error'
+      && entry.message.includes('kind=friend_message')
+      && entry.message.includes(marker)
+    ))).toBe(true);
+  });
+
+  it('dispatches the live event and records a reply-backfill failure', async () => {
+    const marker = `reply-backfill-rejection-${Date.now()}-${Math.random()}`;
+    vi.mocked(backfillReplyTarget).mockRejectedValueOnce(new Error(marker));
+    const { ctx, bus, dispatchCalls } = makeContext();
+    const pipeline = registerEventPipeline(ctx);
+
+    await bus.emit(makeFriendMessage());
+    pipeline.stop();
+    await pipeline.drain();
+
+    expect(dispatchCalls).toHaveLength(1);
+    expect(getRecentLogs(1000).some((entry) => (
+      entry.scope === 'Event'
+      && entry.level === 'warn'
+      && entry.message.includes('kind=friend_message')
+      && entry.message.includes(marker)
+    ))).toBe(true);
   });
 
   it('dispatches a separate event for every kind in parallel', async () => {

@@ -13,9 +13,13 @@
 //   SNOWLUMA_MCP_ENDPOINT    OneBot HTTP endpoint (e.g. http://127.0.0.1:3000/).
 //                            Absent → docs-only (execution tools hidden).
 //   SNOWLUMA_MCP_TOKEN       access token (Bearer) for the endpoint.
-//   SNOWLUMA_MCP_TIMEOUT_MS  per-request timeout (default SDK 30s).
+//   SNOWLUMA_MCP_TIMEOUT_MS  ordinary request timeout; Stream connection and
+//                            per-read idle timeout (default 30s).
 //   SNOWLUMA_MCP_MODE        docs | read | write. Default: read when an
 //                            endpoint is set, else docs.
+//   SNOWLUMA_MCP_STREAM_DIR  MCP-host directory for completed downloads.
+//   SNOWLUMA_MCP_UPLOAD_ROOT Existing MCP-host directory allowed for uploads.
+//   SNOWLUMA_MCP_MAX_STREAM_BYTES  Per-file cap (1..4 GiB; default 4 GiB).
 //
 // NOTE: stdout is the MCP protocol channel — all diagnostics go to stderr.
 
@@ -29,8 +33,8 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { ACTIONS, CATEGORIES } from './generated/catalog.js';
-import { makeHttpClient, type ActionClient } from './client.js';
-import { callTool, computeTools, type Mode } from './tools.js';
+import { makeHttpClient, parseMaxStreamBytes, parseTimeoutMs, type ActionClient } from './client.js';
+import { callTool, computeTools, parseMode, type Mode } from './tools.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 const VERSION = pkg.version;
@@ -41,24 +45,25 @@ const RESOURCE_URI = 'snowluma://onebot/actions';
 function resolveRuntime(): { mode: Mode; client?: ActionClient } {
   const endpoint = process.env.SNOWLUMA_MCP_ENDPOINT?.trim();
   const token = process.env.SNOWLUMA_MCP_TOKEN?.trim() || undefined;
-  const timeoutRaw = Number(process.env.SNOWLUMA_MCP_TIMEOUT_MS);
-  const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : undefined;
-  const requested = process.env.SNOWLUMA_MCP_MODE?.trim().toLowerCase();
-  const validRequest = requested === 'docs' || requested === 'read' || requested === 'write' ? requested : undefined;
+  const streamDir = process.env.SNOWLUMA_MCP_STREAM_DIR?.trim() || undefined;
+  const uploadRoot = process.env.SNOWLUMA_MCP_UPLOAD_ROOT?.trim() || undefined;
+  const maxStreamBytes = parseMaxStreamBytes(process.env.SNOWLUMA_MCP_MAX_STREAM_BYTES);
+  const timeoutMs = parseTimeoutMs(process.env.SNOWLUMA_MCP_TIMEOUT_MS);
+  const requested = parseMode(process.env.SNOWLUMA_MCP_MODE);
 
   if (!endpoint) {
-    if (validRequest && validRequest !== 'docs') {
-      console.error(`[snowluma-mcp] SNOWLUMA_MCP_MODE=${validRequest} ignored: no SNOWLUMA_MCP_ENDPOINT set — docs-only.`);
+    if (requested && requested !== 'docs') {
+      console.error(`[snowluma-mcp] SNOWLUMA_MCP_MODE=${requested} ignored: no SNOWLUMA_MCP_ENDPOINT set — docs-only.`);
     }
     return { mode: 'docs' };
   }
 
-  const mode: Mode = validRequest ?? 'read';
+  const mode: Mode = requested ?? 'read';
   if (mode === 'docs') {
     // Endpoint set but operator explicitly wants docs-only — honor it.
     return { mode: 'docs' };
   }
-  const client = makeHttpClient({ endpoint, accessToken: token, timeoutMs });
+  const client = makeHttpClient({ endpoint, accessToken: token, timeoutMs, streamDir, uploadRoot, maxStreamBytes });
   return { mode, client };
 }
 
@@ -71,9 +76,9 @@ const server = new Server(
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: computeTools(mode) }));
 
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
+server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>;
-  return callTool(req.params.name, args, { mode, client });
+  return callTool(req.params.name, args, { mode, client, signal: extra.signal });
 });
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => ({

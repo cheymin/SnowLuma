@@ -28,6 +28,8 @@ vi.mock('@snowluma/protocol/highway/video-upload', () => ({
 }));
 
 import { buildSendElems } from '@snowluma/protocol/element-builder';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
+import { uploadImageMsgInfo } from '@snowluma/protocol/highway/image-upload';
 
 const fakeBridge = {} as any;
 
@@ -131,6 +133,55 @@ describe('element-builder / commonElem.businessType per scene', () => {
   });
 });
 
+describe('element-builder / all-message validation preflight', () => {
+  it('does not upload an early image when a later segment is unsendable', async () => {
+    vi.mocked(uploadImageMsgInfo).mockClear();
+
+    await expect(buildSendElems([
+      { type: 'image', url: 'file:///tmp/valid-before-invalid.png' },
+      { type: 'poke', subType: 1 },
+    ] as any, { bridge: fakeBridge, groupId: 12345 })).rejects.toMatchObject({
+      code: 'UNSENDABLE_TYPE',
+      elementType: 'poke',
+    });
+
+    expect(uploadImageMsgInfo).not.toHaveBeenCalled();
+  });
+
+  it('accepts a received imageUrl-only element for re-send', async () => {
+    vi.mocked(uploadImageMsgInfo).mockClear();
+    await buildSendElems(
+      [{ type: 'image', imageUrl: 'https://gchat.qpic.cn/received.jpg' }],
+      { bridge: fakeBridge, groupId: 12345 },
+    );
+    expect(uploadImageMsgInfo).toHaveBeenCalledWith(
+      fakeBridge,
+      true,
+      12345,
+      expect.objectContaining({ imageUrl: 'https://gchat.qpic.cn/received.jpg' }),
+    );
+  });
+
+  it('does not upload an early image when a later fast-only media element lacks hashes', async () => {
+    vi.mocked(uploadImageMsgInfo).mockClear();
+
+    await expect(buildSendElems([
+      { type: 'image', url: 'file:///tmp/valid-before-invalid.png' },
+      {
+        type: 'image',
+        url: 'file:///tmp/must-not-fallback.png',
+        noByteFallback: true,
+      },
+    ] as any, { bridge: fakeBridge, groupId: 12345 })).rejects.toMatchObject({
+      code: 'MISSING_FIELD',
+      elementType: 'image',
+      field: 'md5Hex',
+    });
+
+    expect(uploadImageMsgInfo).not.toHaveBeenCalled();
+  });
+});
+
 describe('element-builder / file element is no longer carried in elems[]', () => {
   // Regression for the `result=79` class: previously the element-builder
   // emitted a `transElem(elemType=24, ...)` for `{type:'file'}` segments
@@ -141,8 +192,8 @@ describe('element-builder / file element is no longer carried in elems[]', () =>
   // segment is split off. The element-builder therefore must NOT emit
   // any element for `{type:'file'}` anymore — if it does, the message
   // ships with a transElem(24) payload and result=79 returns.
-  it('produces an empty elems[] for a {type:"file"} segment (must be split out at OneBot layer)', async () => {
-    const result = await buildSendElems(
+  it('fails fast when a live {type:"file"} reaches the element builder', async () => {
+    await expect(buildSendElems(
       [{
         type: 'file',
         fileId: 'fid-abc',
@@ -152,8 +203,11 @@ describe('element-builder / file element is no longer carried in elems[]', () =>
         sha1Hex: '0102030405060708090a0b0c0d0e0f1011121314',
       } as any],
       { bridge: fakeBridge, groupId: 12345 },
-    );
-    expect(result).toEqual([]);
+    )).rejects.toMatchObject({
+      name: 'MessageElementValidationError',
+      code: 'UNSENDABLE_TYPE',
+      elementType: 'file',
+    });
   });
 });
 
@@ -228,15 +282,10 @@ describe('element-builder / forward preview (com.tencent.multimsg LightApp)', ()
     expect(JSON.parse(json.extra).tsum).toBe(3);
   });
 
-  it('drops the forward element when resId is missing (preview unrenderable, fail open)', async () => {
-    // The dispatcher's `case 'forward': if (elem.resId) ...` short-
-    // circuits when resId is empty so a malformed segment from the
-    // OneBot client doesn't blow up the whole send. Receiver sees
-    // no forward bubble — same outcome as omitting the segment.
-    const out = await buildSendElems(
+  it('rejects a forward element when resId is missing', async () => {
+    await expect(buildSendElems(
       [{ type: 'forward' } as any],
       { bridge: fakeBridge, groupId: 12345 },
-    );
-    expect(out).toEqual([]);
+    )).rejects.toBeInstanceOf(MessageElementValidationError);
   });
 });

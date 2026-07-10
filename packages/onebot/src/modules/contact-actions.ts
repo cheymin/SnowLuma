@@ -1,5 +1,6 @@
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
 import type { IdentityService } from '@snowluma/protocol/identity-service';
+import { formatGroupRequestFlag } from '@snowluma/protocol/qq-info';
 import type { OneBotInstanceContext } from '../instance-context';
 import type { JsonObject } from '../types';
 
@@ -239,7 +240,7 @@ export async function getGroupSystemMessages(bridge: BridgeInterface): Promise<J
       requester_uin: r.targetUin,
       requester_nick: r.targetName,
       message: r.comment,
-      flag: `${r.eventType}:${r.groupId}:${r.targetUid}`,
+      flag: formatGroupRequestFlag(r),
     }));
   } catch {
     return [];

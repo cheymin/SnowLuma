@@ -19,23 +19,29 @@ import type { PacketInfo } from '@snowluma/common/protocol-types';
 function makePipeline(opts: {
   resolveStrangerProfile?: vi.Mock;
   resolveGroupJoinRequest?: vi.Mock;
+  resolveGroupInviteCardSequence?: vi.Mock;
 } = {}) {
   const identity = IdentityService.memory('10001');
   const events = new BridgeEventBus();
   const resolveStrangerProfile = opts.resolveStrangerProfile ?? vi.fn(async () => null);
   const resolveGroupJoinRequest = opts.resolveGroupJoinRequest ?? vi.fn(async () => null);
+  const resolveGroupInviteCardSequence = opts.resolveGroupInviteCardSequence ?? vi.fn(async () => null);
   const pipeline = new IncomingPacketPipeline({
     identity,
     events,
     refreshMemberCache: vi.fn(async () => false),
     resolveStrangerProfile,
     resolveGroupJoinRequest,
+    resolveGroupInviteCardSequence,
   });
 
   const captured: QQEventVariant[] = [];
   events.onAny((event) => { captured.push(event as QQEventVariant); });
 
-  return { pipeline, events, captured, resolveStrangerProfile, resolveGroupJoinRequest };
+  return {
+    pipeline, events, captured,
+    resolveStrangerProfile, resolveGroupJoinRequest, resolveGroupInviteCardSequence,
+  };
 }
 
 describe('IncomingPacketPipeline / stranger resolve on group_invite', () => {
@@ -185,6 +191,73 @@ describe('IncomingPacketPipeline / stranger resolve on group_invite', () => {
     expect(ev.fromUin).toBe(1957003260);
   });
 
+  it('replaces the legacy identity flag with a canonical approval tuple', async () => {
+    const resolveGroupJoinRequest = vi.fn(async () => ({
+      groupId: 950929451,
+      groupName: 'group',
+      targetUid: 'u_target',
+      targetUin: 1957003260,
+      targetName: 'target',
+      invitorUid: 'u_inviter',
+      invitorUin: 0,
+      invitorName: '',
+      operatorUid: '',
+      operatorUin: 0,
+      operatorName: '',
+      sequence: 1779543612823906,
+      state: 1,
+      eventType: 1,
+      comment: '你们好',
+      filtered: true,
+    }));
+    const { pipeline, captured } = makePipeline({ resolveGroupJoinRequest });
+
+    pipeline.registerCmd('test.cmd', () => [{
+      kind: 'group_invite',
+      time: 1, selfUin: 10001,
+      groupId: 950929451, fromUin: 1957003260,
+      fromUid: 'u_target', subType: 'add', message: '',
+      flag: 'add:950929451:u_target',
+    } as QQEventVariant]);
+
+    pipeline.process({ serviceCmd: 'test.cmd' } as PacketInfo);
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      message: '你们好',
+      flag: 'slreq:1:1779543612823906:950929451:1:1',
+    });
+  });
+
+  it('uses the private invite-card msgseq for a self-invite approval tuple', async () => {
+    const resolveGroupJoinRequest = vi.fn(async () => ({
+      groupId: 999, groupName: 'group',
+      targetUid: 'self', targetUin: 10001, targetName: 'self',
+      invitorUid: 'u_inviter', invitorUin: 456, invitorName: 'inviter',
+      operatorUid: '', operatorUin: 0, operatorName: '',
+      sequence: 111, state: 1, eventType: 2,
+      comment: '', filtered: false,
+    }));
+    const resolveGroupInviteCardSequence = vi.fn(async () => 778899);
+    const { pipeline, captured } = makePipeline({
+      resolveGroupJoinRequest,
+      resolveGroupInviteCardSequence,
+    });
+
+    pipeline.registerCmd('test.cmd', () => [{
+      kind: 'group_invite', time: 1, selfUin: 10001,
+      groupId: 999, fromUin: 456, fromUid: 'u_inviter',
+      subType: 'invite', message: '', flag: 'invite:999:u_inviter',
+    } as QQEventVariant]);
+
+    pipeline.process({ serviceCmd: 'test.cmd' } as PacketInfo);
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(resolveGroupInviteCardSequence).toHaveBeenCalledWith(999);
+    expect(captured[0]).toMatchObject({ flag: 'slreq:1:778899:999:2:0' });
+  });
+
   it('runs the profile + request lookups in parallel (independent failures)', async () => {
     // Profile lookup succeeds, request lookup fails — event should
     // still carry the resolved uin but no comment. The dispatch
@@ -309,7 +382,7 @@ describe('IncomingPacketPipeline / #1 group card self-heal', () => {
   }
 
   const groupMsg = (senderCard: string): QQEventVariant => ({
-    kind: 'group_message', time: 1, selfUin: 10001, groupId: 9999, senderUin: 222,
+    kind: 'group_message', groupName: '', time: 1, selfUin: 10001, groupId: 9999, senderUin: 222,
     senderNick: 'BaseNick', senderCard, senderRole: 'member',
     msgSeq: 1, msgId: 1, elements: [{ type: 'text', text: 'hi' }],
   } as QQEventVariant);
@@ -378,7 +451,7 @@ describe('IncomingPacketPipeline / group_card_change from message traffic', () =
 
   function groupMsg(card: string): QQEventVariant {
     return {
-      kind: 'group_message', time: 1700000000, selfUin: 10001, groupId: GROUP,
+      kind: 'group_message', groupName: '', time: 1700000000, selfUin: 10001, groupId: GROUP,
       senderUin: 22222, senderNick: 'nick', senderCard: card, senderRole: 'member',
       msgSeq: 1, msgId: 1, elements: [],
     } as QQEventVariant;

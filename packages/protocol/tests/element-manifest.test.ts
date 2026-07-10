@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { typesForDirection } from '../src/element-manifest';
+import {
+  ELEMENT_MANIFEST,
+  MessageElementValidationError,
+  assertValidMessageElement,
+  typesForDirection,
+} from '../src/element-manifest';
 
 // 对账测试（protocol 侧）—— 拿 element-manifest 核对「按 element.type 收敛」的
 // 两个 protocol 方向：
@@ -46,5 +51,77 @@ describe('element-manifest 对账（protocol 侧：D 收·解 / W 发·打包）
     // poke 按设计不支持发送（QQ 限制），element-builder 必须没有 poke 分支。
     expect(handled).not.toContain('poke');
     expect(handled).toEqual(sorted(typesForDirection('W')));
+  });
+
+  it('fields 是可执行封闭契约：每个声明字段都有 validator，越界字段会拒绝', () => {
+    const sampleValue = (field: string): unknown => {
+      if (field === 'replyElements') return [];
+      if (field === 'forwardNews') return [{ text: 'preview' }];
+      if (field === 'mediaNode') return {};
+      if (field === 'emojiId' || field === 'md5Hex') return 'ab'.repeat(16);
+      if (field === 'sha1Hex') return 'cd'.repeat(20);
+      if (field === 'flash' || field === 'noByteFallback') return true;
+      if (field === 'targetUin' || field === 'faceId' || field === 'fileSize'
+        || field.startsWith('reply') || field === 'subType' || field === 'duration'
+        || field === 'width' || field === 'height' || field === 'emojiPackageId'
+        || field === 'sceneType' || field === 'forwardTSum' || field.endsWith('Format')) return 1;
+      return 'value';
+    };
+
+    for (const [type, spec] of Object.entries(ELEMENT_MANIFEST)) {
+      expect(new Set(spec.fields).size, `${type} has duplicate fields`).toBe(spec.fields.length);
+      for (const required of spec.requiredFields) expect(spec.fields).toContain(required);
+      const element: Record<string, unknown> = { type };
+      for (const field of spec.fields) element[field] = sampleValue(field);
+      expect(() => assertValidMessageElement(element), type).not.toThrow();
+    }
+
+    expect(() => assertValidMessageElement({ type: 'poke', subType: 1, faceId: 1 }))
+      .toThrowError(expect.objectContaining({
+        name: 'MessageElementValidationError',
+        code: 'UNEXPECTED_FIELD',
+        elementType: 'poke',
+        field: 'faceId',
+      }));
+    expect(() => assertValidMessageElement({ type: 'reply' }))
+      .toThrowError(expect.objectContaining({ code: 'MISSING_FIELD', field: 'replySeq' }));
+    expect(() => assertValidMessageElement({ type: 'toString' }))
+      .toThrowError(expect.objectContaining({ code: 'UNKNOWN_TYPE', elementType: 'toString' }));
+    expect(() => assertValidMessageElement({ type: 'mface', emojiId: 'zz' }, 'W'))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_FIELD', field: 'emojiId' }));
+    expect(() => assertValidMessageElement({
+      type: 'image',
+      url: 'https://example.com/a.png',
+      md5Hex: 'not-md5',
+    }, 'W')).toThrowError(expect.objectContaining({ code: 'INVALID_FIELD', field: 'md5Hex' }));
+  });
+
+  it('returns a stable typed validation error for BAD_REQUEST mapping', () => {
+    try {
+      assertValidMessageElement({ type: 'unknown-segment' }, 'W');
+      expect.unreachable('validation should throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(MessageElementValidationError);
+      expect(error).toMatchObject({ code: 'UNKNOWN_TYPE', elementType: 'unknown-segment' });
+    }
+  });
+
+  it('rejects invalid wire ranges and incomplete fast-upload fingerprints', () => {
+    expect(() => assertValidMessageElement({
+      type: 'file',
+      fileId: 'fid',
+      fileSize: -1,
+    }, 'P')).toThrowError(expect.objectContaining({
+      code: 'INVALID_FIELD',
+      field: 'fileSize',
+    }));
+    expect(() => assertValidMessageElement({
+      type: 'image',
+      url: 'https://example.com/fallback-must-not-be-used.png',
+      noByteFallback: true,
+    }, 'W')).toThrowError(expect.objectContaining({
+      code: 'MISSING_FIELD',
+      field: 'md5Hex',
+    }));
   });
 });

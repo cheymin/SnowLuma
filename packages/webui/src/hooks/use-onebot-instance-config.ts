@@ -33,6 +33,7 @@ export interface UseOneBotInstanceConfig {
    */
   save: (override?: OneBotConfig) => Promise<void>;
   saveStatus: string;
+  saveStatusTone: 'idle' | 'saving' | 'success' | 'warning' | 'error';
 }
 
 const CLEAR_SAVE_STATUS_MS = 3000;
@@ -53,8 +54,13 @@ export function useOneBotInstanceConfig(
   const [config, setConfigState] = useState<OneBotConfig | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState('');
+  const [saveStatusTone, setSaveStatusTone] = useState<UseOneBotInstanceConfig['saveStatusTone']>('idle');
   const [pendingSwitchUin, setPendingSwitchUin] = useState<string | null>(null);
   const clearTimerRef = useRef<number | null>(null);
+  const editRevisionRef = useRef(0);
+  const saveGenerationRef = useRef(0);
+  const selectedUinRef = useRef(selectedUin);
+  selectedUinRef.current = selectedUin;
 
   // Auto-select first account when none is selected yet.
   useEffect(() => {
@@ -63,6 +69,14 @@ export function useOneBotInstanceConfig(
 
   // Load on UIN change. The api client already runs normalizeOneBotConfig.
   useEffect(() => {
+    editRevisionRef.current += 1;
+    saveGenerationRef.current += 1;
+    if (clearTimerRef.current != null) {
+      window.clearTimeout(clearTimerRef.current);
+      clearTimerRef.current = null;
+    }
+    setSaveStatus('');
+    setSaveStatusTone('idle');
     if (!selectedUin) {
       setConfigState(null);
       setSavedSnapshot(null);
@@ -73,6 +87,7 @@ export function useOneBotInstanceConfig(
       try {
         const loaded = await api.config.get(selectedUin);
         if (cancelled) return;
+        editRevisionRef.current += 1;
         setConfigState(loaded);
         setSavedSnapshot(JSON.stringify(loaded));
       } catch (e) {
@@ -96,7 +111,10 @@ export function useOneBotInstanceConfig(
     return JSON.stringify(config) !== savedSnapshot;
   }, [config, savedSnapshot]);
 
-  const setConfig = useCallback((next: OneBotConfig) => setConfigState(next), []);
+  const setConfig = useCallback((next: OneBotConfig) => {
+    editRevisionRef.current += 1;
+    setConfigState(next);
+  }, []);
 
   const requestSwitchUin = useCallback(
     (uin: string) => {
@@ -115,27 +133,54 @@ export function useOneBotInstanceConfig(
 
   const cancelSwitch = useCallback(() => setPendingSwitchUin(null), []);
 
-  const scheduleStatusClear = useCallback(() => {
+  const scheduleStatusClear = useCallback((uin: string, generation: number) => {
     if (clearTimerRef.current != null) window.clearTimeout(clearTimerRef.current);
     clearTimerRef.current = window.setTimeout(() => {
-      setSaveStatus('');
       clearTimerRef.current = null;
+      if (selectedUinRef.current !== uin || saveGenerationRef.current !== generation) return;
+      setSaveStatus('');
+      setSaveStatusTone('idle');
     }, CLEAR_SAVE_STATUS_MS);
   }, []);
 
   const save = useCallback(async (override?: OneBotConfig) => {
     const target = override ?? config;
     if (!selectedUin || !target) return;
+    const uin = selectedUin;
+    const editRevision = editRevisionRef.current;
+    const generation = ++saveGenerationRef.current;
     setSaveStatus('保存中...');
+    setSaveStatusTone('saving');
     try {
-      const serverView = await api.config.save(selectedUin, target);
-      setConfigState(serverView);
-      setSavedSnapshot(JSON.stringify(serverView));
-      setSaveStatus('保存成功');
+      const result = await api.config.save(uin, target);
+      if (selectedUinRef.current !== uin || saveGenerationRef.current !== generation) return;
+      setSavedSnapshot(JSON.stringify(result.config));
+      if (editRevisionRef.current === editRevision) {
+        setConfigState(result.config);
+      } else {
+        setSaveStatus('上一版本已保存，当前修改仍待保存');
+        setSaveStatusTone('warning');
+        return;
+      }
+      if (!result.online) {
+        setSaveStatus('保存成功；当前离线，将在下次连接时应用');
+        setSaveStatusTone('warning');
+      } else if (result.applied) {
+        setSaveStatus('保存成功，热重载完成');
+        setSaveStatusTone('success');
+      } else {
+        const first = result.errors[0]?.message;
+        setSaveStatus(`保存成功，但热重载失败${first ? `：${first}` : ''}`);
+        setSaveStatusTone('warning');
+      }
     } catch (e) {
+      if (selectedUinRef.current !== uin || saveGenerationRef.current !== generation) return;
       setSaveStatus(`保存失败：${e instanceof Error ? e.message : '未知错误'}`);
+      setSaveStatusTone('error');
     } finally {
-      scheduleStatusClear();
+      if (selectedUinRef.current === uin && saveGenerationRef.current === generation) {
+        scheduleStatusClear(uin, generation);
+      }
     }
   }, [api, selectedUin, config, scheduleStatusClear]);
 
@@ -150,5 +195,6 @@ export function useOneBotInstanceConfig(
     cancelSwitch,
     save,
     saveStatus,
+    saveStatusTone,
   };
 }

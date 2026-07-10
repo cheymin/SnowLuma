@@ -220,6 +220,54 @@ export class MessageApi {
   }
 
   /**
+   * Reply into an existing group temp session (临时会话). Wire primitive only —
+   * it does NOT gate; the caller verifies the session before calling. Routes
+   * through `grpTmp` (RoutingHead field 3) with { groupUin, toUid } and a normal
+   * c2c content head.
+   */
+  async sendGroupTempMessage(
+    userUin: number,
+    groupUin: number,
+    elements: MessageElement[],
+  ): Promise<SendMessageReceipt> {
+    if (elements.length === 0) throw new Error('message is empty');
+
+    const userUid = await this.ctx.resolveUserUid(userUin);
+    const protoElems = await buildSendElems(elements, { bridge: this.ctx as unknown as Bridge, userUid });
+    const random = this.ctx.nextMessageRandom();
+    const clientSeq = this.ctx.nextClientSequence();
+
+    const request = protobuf_encode<SendMessageRequest>({
+      routingHead: {
+        grpTmp: { groupUin: BigInt(groupUin), toUid: userUid },
+      },
+      contentHead: { type: 1, subType: 0, c2cCmd: 11 },
+      messageBody: { richText: { elems: protoElems } },
+      clientSequence: clientSeq,
+      random,
+      syncCookie: new Uint8Array(0),
+      via: 0,
+      dataStatist: 0,
+      ctrl: { msgFlag: Math.floor(Date.now() / 1000) },
+      multiSendSeq: 0,
+    });
+
+    const result = await this.ctx.sendRawPacket(SEND_MSG_CMD, request);
+    if (!result.success || !result.gotResponse || !result.responseData) {
+      throw new Error(`send temp message failed: ${result.errorMessage || 'no response'}`);
+    }
+    const response = protobuf_decode<SendMessageResponse>(result.responseData);
+    if (!response) throw new Error('failed to decode SendMessageResponse');
+    if (response.result != null && response.result !== 0) {
+      throw new Error(`send temp message rejected: result=${response.result} err=${response.errMsg ?? ''}`);
+    }
+    const seq = response.privateSequence ?? 0;
+    const messageId = (random & 0x7FFFFFFF) || seq;
+    const timestamp = response.timestamp1 ?? Math.floor(Date.now() / 1000);
+    return { messageId, sequence: seq, clientSequence: clientSeq, random, timestamp };
+  }
+
+  /**
    * Send a c2c file as a chat message.
    *
    * The wire shape isn't the same as a regular c2c message — the c2c

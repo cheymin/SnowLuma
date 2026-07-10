@@ -1,8 +1,13 @@
 import { renderParamsVerbose, summarizeParams } from '@snowluma/common/log-summary';
 import { createLogger, getLogLevel, nextRequestId, runWithRequestId, type Logger } from '@snowluma/common/logger';
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
-import { ALL_ACTIONS } from './actions';
-import { registerActions } from './action-kit';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
+import {
+  ACTION_REGISTRY,
+  HANDLE_QUICK_OPERATION_ACTION,
+  type CompiledActionKind,
+  type CompiledActionRegistry,
+} from './actions';
 import type { ForwardPreviewMeta } from './modules/message-actions';
 import type { JsonObject, JsonValue, MessageMeta } from './types';
 import { RETCODE, failedResponse, okResponse } from './types';
@@ -32,7 +37,7 @@ export interface ApiActionContext {
   isOnline: () => boolean;
   getMessage: (messageId: number) => JsonObject | null;
   getMessageMeta: (messageId: number) => MessageMeta | null;
-  sendPrivateMessage: (userId: number, message: JsonValue, autoEscape: boolean) => Promise<MessageSendResult>;
+  sendPrivateMessage: (userId: number, message: JsonValue, autoEscape: boolean, tempGroupId?: number) => Promise<MessageSendResult>;
   sendGroupMessage: (groupId: number, message: JsonValue, autoEscape: boolean) => Promise<MessageSendResult>;
   deleteMessage: (messageId: number, meta: MessageMeta) => Promise<void>;
   canSendImage: () => boolean;
@@ -75,6 +80,12 @@ export interface ApiActionContext {
 
 type ActionHandler = (params: JsonObject, sink?: StreamSink) => Promise<import('./types').ApiResponse>;
 
+interface RegisteredHandler {
+  readonly handler: ActionHandler;
+  readonly canonical: string;
+  readonly kind: CompiledActionKind;
+}
+
 /** A handled-action record handed to debug observers. */
 export interface ActionRecord {
   action: string;
@@ -85,10 +96,15 @@ export interface ActionRecord {
 export type ActionObserver = (rec: ActionRecord) => void;
 
 export class ApiHandler {
-  private readonly handlers = new Map<string, ActionHandler>();
-  /** Names that answer with a multi-frame Stream API response (#163). The
-   *  network adapter consults this BEFORE dispatch to pick streaming output. */
-  private readonly streamActions = new Set<string>();
+  /** Handler + dispatch kind live in one record so stream classification can
+   *  never outlive or drift from the handler it describes. */
+  private readonly handlers = new Map<string, RegisteredHandler>();
+  private readonly registry: CompiledActionRegistry;
+  private registrationOpen = true;
+  /** Sticky instance-lifecycle gate. A failed transport close may restore its
+   *  own listener for retry, but it must never reopen execution against a
+   *  retiring Bridge/store generation. */
+  private acceptingActions = true;
   private readonly log: Logger;
   /** Debug-stream taps — notified after every handled action. Attached
    *  on-demand (ref-counted) by the WebUI debug stream. */
@@ -100,43 +116,129 @@ export class ApiHandler {
     return () => { this.observers.delete(cb); };
   }
 
-  constructor(context: ApiActionContext, uin?: number) {
+  constructor(
+    context: ApiActionContext,
+    uin?: number,
+    registry: CompiledActionRegistry = ACTION_REGISTRY,
+  ) {
+    this.registry = registry;
     this.log = typeof uin === 'number' && uin > 0 ? moduleLog.child({ uin }) : moduleLog;
-    registerActions(this, context, ALL_ACTIONS);
+    try {
+      registry.register(this, context);
 
-    // The one non-ActionSpec handler: `.handle_quick_operation` needs the
-    // ApiHandler itself (to re-drive actions via executeQuickOperation), which
-    // ActionSpec.run's (params, ctx) signature can't supply — so it's the sole
-    // raw registration, kept here rather than in an action file's footer.
-    this.registerAction('.handle_quick_operation', async (params) => {
-      const opContext = params.context as JsonObject | undefined;
-      const operation = params.operation as Record<string, unknown> | undefined;
-      if (!opContext || !operation) return failedResponse(RETCODE.BAD_REQUEST, 'context and operation are required');
-      const { executeQuickOperation } = await import('./network/quick-operation');
-      await executeQuickOperation(opContext, operation, this);
-      return okResponse();
-    });
+      // The one non-ActionSpec handler: `.handle_quick_operation` needs the
+      // ApiHandler itself (to re-drive actions via executeQuickOperation), which
+      // ActionSpec.run's (params, ctx) signature can't supply — so it's the sole
+      // raw registration, kept here rather than in an action file's footer.
+      this.registerRawAction(HANDLE_QUICK_OPERATION_ACTION, async (params) => {
+        const opContext = params.context as JsonObject | undefined;
+        const operation = params.operation as Record<string, unknown> | undefined;
+        if (!opContext || !operation) return failedResponse(RETCODE.BAD_REQUEST, 'context and operation are required');
+        const { executeQuickOperation } = await import('./network/quick-operation');
+        await executeQuickOperation(opContext, operation, this);
+        return okResponse();
+      });
+      this.assertRegistryFullyBound();
+    } finally {
+      // registerAction/registerStreamAction are the constructor-time port used
+      // by ActionSpec. Once construction finishes (successfully or not), the
+      // runtime namespace is immutable and cannot bypass the compiled registry.
+      this.registrationOpen = false;
+    }
   }
 
   registerAction(action: string, handler: ActionHandler): void {
-    this.handlers.set(action, handler);
+    this.registerHandler(action, handler, 'normal');
   }
 
   /** Register a Stream API action — dispatched exactly like a normal action,
    *  but flagged so adapters stream its frames (the handler receives a sink). */
   registerStreamAction(action: string, handler: ActionHandler): void {
-    this.handlers.set(action, handler);
-    this.streamActions.add(action);
+    this.registerHandler(action, handler, 'stream');
+  }
+
+  private registerRawAction(action: string, handler: ActionHandler): void {
+    this.registerHandler(action, handler, 'raw');
+  }
+
+  private registerHandler(action: string, handler: ActionHandler, kind: CompiledActionKind): void {
+    if (!this.registrationOpen) {
+      throw new Error(
+        `Action registry is sealed; cannot register canonical "${action}" (name "${action}", kind ${kind})`,
+      );
+    }
+    const claim = this.registry.resolve(action);
+    if (!claim) {
+      throw new Error(
+        `Action registration is not declared by the compiled registry: `
+        + `canonical "${action}" (name "${action}", kind ${kind})`,
+      );
+    }
+    const canonical = claim.canonical;
+    const existing = this.handlers.get(action);
+    if (existing) {
+      throw new Error(
+        `Action handler conflict for executable name "${action}": `
+        + `canonical "${existing.canonical}" (name "${action}", kind ${existing.kind}) conflicts with `
+        + `canonical "${canonical}" (name "${action}", kind ${kind})`,
+      );
+    }
+    if (claim.kind !== kind) {
+      throw new Error(
+        `Action handler kind mismatch for canonical "${canonical}" (name "${action}"): `
+        + `registry kind ${claim.kind}, registration kind ${kind}`,
+      );
+    }
+    this.handlers.set(action, { handler, canonical, kind });
+  }
+
+  private assertRegistryFullyBound(): void {
+    for (const claim of this.registry.executableNames) {
+      if (this.handlers.has(claim.name)) continue;
+      throw new Error(
+        `Action registry claim has no handler: canonical "${claim.canonical}" `
+        + `(name "${claim.name}", kind ${claim.kind})`,
+      );
+    }
+    if (this.handlers.size !== this.registry.executableNames.length) {
+      throw new Error(
+        `Action registry binding count mismatch: ${this.handlers.size} handlers for `
+        + `${this.registry.executableNames.length} executable names`,
+      );
+    }
   }
 
   /** Whether `action` answers with a multi-frame Stream API response. */
   isStreamAction(action: string): boolean {
-    return this.streamActions.has(action);
+    return this.handlers.get(action)?.kind === 'stream';
+  }
+
+  /** Whether the owning OneBot instance still accepts new Action execution. */
+  get isAcceptingActions(): boolean {
+    return this.acceptingActions;
+  }
+
+  /** Permanently reject new Actions for this handler generation.
+   *
+   * Existing calls have already been admitted and are drained by their owning
+   * transport/instance. There is intentionally no resume operation: hot reload
+   * keeps the same live generation open, while teardown creates a new handler
+   * only after the previous generation has fully retired. */
+  quiesce(): void {
+    if (!this.acceptingActions) return;
+    this.acceptingActions = false;
+    this.log.info('Action ingress quiesced');
   }
 
   async handle(action: string, params: JsonObject, sink?: StreamSink): Promise<import('./types').ApiResponse> {
-    const handler = this.handlers.get(action);
-    if (!handler) {
+    if (!this.acceptingActions) {
+      const response = failedResponse(RETCODE.ACTION_FAILED, 'OneBot instance is shutting down');
+      this.log.warn('rejected Action %s after instance quiesce', action);
+      this.notifyObservers(action, params, response, 0);
+      return response;
+    }
+    const registered = this.handlers.get(action);
+    if (!registered) {
       this.log.debug('unknown action %s', action);
       return failedResponse(RETCODE.UNKNOWN_ACTION, 'unknown action');
     }
@@ -146,9 +248,9 @@ export class ApiHandler {
     // the wrap + id allocation when trace is actually live, so the default
     // path stays allocation-free.
     if (getLogLevel() !== 'trace') {
-      return this.runAction(action, handler, params, sink);
+      return this.runAction(action, registered.handler, params, sink);
     }
-    return runWithRequestId(nextRequestId(), () => this.runAction(action, handler, params, sink));
+    return runWithRequestId(nextRequestId(), () => this.runAction(action, registered.handler, params, sink));
   }
 
   private async runAction(
@@ -170,23 +272,23 @@ export class ApiHandler {
       response = await handler(params, sink);
       this.log.trace(() => [`${action} ⇒ ${response.status} (${Date.now() - startedAt}ms)`]);
     } catch (error) {
-      // Single error seam: any throw from a handler (bridge/OIDB business
-      // failure or an unexpected internal fault) maps here to one policy —
-      // ACTION_FAILED (100) + the error's message. Action `run` bodies
-      // shouldn't need to hand-roll their own try/catch → failedResponse:
-      // doing so only produced inconsistent retcodes (100 vs 1200) for the same
-      // kind of failure. The remaining per-action catches (qzone / group-album,
-      // still returning 1200) are being removed in a follow-up phase — until
-      // then their failures never reach this seam. `OidbError.message` already
-      // carries the QQ server code, so no special-casing is needed. warn (not
-      // error) keeps the log file a useful signal without drowning it in
-      // expected client-side failures.
+      // Single error seam: typed message-contract failures are caller errors
+      // and therefore map to BAD_REQUEST. Bridge/OIDB business failures and
+      // unexpected internal faults retain the shared ACTION_FAILED policy.
+      // Action `run` bodies should not hand-roll their own catch/response
+      // mapping: central classification keeps every transport consistent.
+      // `OidbError.message` already carries the QQ server code, so it needs no
+      // special casing. warn (not error) keeps the log file useful without
+      // drowning it in expected client-side failures.
       this.log.warn('%s failed: %s\n%s',
         action,
         error instanceof Error ? error.message : String(error),
         error instanceof Error ? (error.stack ?? '') : '');
       const message = error instanceof Error ? error.message : String(error);
-      response = failedResponse(RETCODE.ACTION_FAILED, message);
+      const retcode = error instanceof MessageElementValidationError
+        ? RETCODE.BAD_REQUEST
+        : RETCODE.ACTION_FAILED;
+      response = failedResponse(retcode, message);
     }
     this.notifyObservers(action, params, response, Date.now() - startedAt);
     return response;
@@ -218,22 +320,24 @@ export class ApiHandler {
     emit: (json: string) => void | Promise<void>,
     isAlive?: () => boolean,
   ): Promise<void> {
-    const bad = (): void => { void emit(JSON.stringify(failedResponse(RETCODE.BAD_REQUEST, 'bad request'))); };
-    if (!rawRequest.trim()) { bad(); return; }
+    const bad = (): Promise<void> => Promise.resolve(
+      emit(JSON.stringify(failedResponse(RETCODE.BAD_REQUEST, 'bad request'))),
+    );
+    if (!rawRequest.trim()) { await bad(); return; }
 
     let action: string;
     let params: JsonObject;
     let echo: JsonValue | undefined;
     try {
       const parsed = JSON.parse(rawRequest) as unknown;
-      if (!isJsonObject(parsed)) { bad(); return; }
+      if (!isJsonObject(parsed)) { await bad(); return; }
       const a = asString(parsed.action);
-      if (!a) { bad(); return; }
+      if (!a) { await bad(); return; }
       action = a;
       params = isJsonObject(parsed.params) ? parsed.params : {};
       echo = parsed.echo !== undefined ? toJsonValue(parsed.echo) : undefined;
     } catch {
-      bad();
+      await bad();
       return;
     }
 

@@ -21,9 +21,17 @@ export interface RoutingTrans0x211 {
   uid?:   pb<8, string>;
 }
 
+// Group temp-session routing head — RoutingHead field 3. Inner shape
+// { 群号 (source group), 对端 uid }.
+export interface RoutingGrpTmp {
+  groupUin?: pb<3, uint_64>;
+  toUid?:    pb<4, string>;
+}
+
 export interface RoutingHead {
   c2c?:        pb<1, RoutingC2C>;
   grp?:        pb<2, RoutingGroup>;
+  grpTmp?:     pb<3, RoutingGrpTmp>;
   trans0x211?: pb<15, RoutingTrans0x211>;
 }
 

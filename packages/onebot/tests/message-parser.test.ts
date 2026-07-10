@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
-import { parseMessage } from '../src/message-parser';
+import { MessageElementValidationError, parseMessage } from '../src/message-parser';
 import { buildSendElems } from '@snowluma/protocol/element-builder';
 import type { MentionExtraSend } from '@snowluma/proto-defs/action';
 import type { MarketFacePbReserve } from '@snowluma/proto-defs/element';
@@ -17,9 +17,12 @@ describe('parseMessage', () => {
       expect(result).toEqual([{ type: 'text', text: 'hello world' }]);
     });
 
-    it('returns empty for empty string', async () => {
-      const result = await parseMessage('', false);
-      expect(result).toEqual([]);
+    it('rejects an empty string', async () => {
+      await expect(parseMessage('', false)).rejects.toMatchObject({
+        name: 'MessageElementValidationError',
+        code: 'MISSING_FIELD',
+        field: 'message',
+      });
     });
 
     it('autoEscape treats CQ codes as text', async () => {
@@ -62,6 +65,21 @@ describe('parseMessage', () => {
       const result = await parseMessage('a&amp;b&#91;c&#93;d', false);
       expect(result).toEqual([{ type: 'text', text: 'a&b[c]d' }]);
     });
+
+    it('recognizes underscored CQ types and rejects receive-only flash_file', async () => {
+      await expect(parseMessage('[CQ:flash_file,file_set_id=x]', false)).rejects.toMatchObject({
+        code: 'UNSENDABLE_TYPE',
+        elementType: 'flash_file',
+        message: expect.stringContaining('send_flash_msg'),
+      });
+    });
+
+    it('does not send an unknown underscored CQ code as literal text', async () => {
+      await expect(parseMessage('[CQ:unknown_segment]', false)).rejects.toMatchObject({
+        code: 'UNKNOWN_TYPE',
+        elementType: 'unknown_segment',
+      });
+    });
   });
 
   describe('JSON segment array', () => {
@@ -73,6 +91,25 @@ describe('parseMessage', () => {
       expect(result).toEqual([{ type: 'text', text: 'hello' }]);
     });
 
+    it('rejects object-valued fields instead of stringifying caller input', async () => {
+      await expect(parseMessage(
+        [{ type: 'text', data: { text: { bad: true } } }] as any,
+        false,
+      )).rejects.toMatchObject({
+        code: 'INVALID_FIELD',
+        elementType: 'text',
+        field: 'text',
+      });
+      await expect(parseMessage(
+        [{ type: 'json', data: { data: { app: 'unexpected-object' } } }] as any,
+        false,
+      )).rejects.toMatchObject({
+        code: 'INVALID_FIELD',
+        elementType: 'json',
+        field: 'data',
+      });
+    });
+
     it('parses face segment', async () => {
       const result = await parseMessage(
         [{ type: 'face', data: { id: 123 } }] as any,
@@ -81,6 +118,21 @@ describe('parseMessage', () => {
       expect(result).toHaveLength(1);
       expect(result[0].type).toBe('face');
       expect(result[0].faceId).toBe(123);
+    });
+
+    it('rejects numeric fields with suffix garbage or fractional values', async () => {
+      await expect(parseMessage(
+        [{ type: 'at', data: { qq: '123abc' } }] as any,
+        false,
+      )).rejects.toMatchObject({ code: 'INVALID_FIELD' });
+      await expect(parseMessage(
+        [{ type: 'reply', data: { id: '456junk' } }] as any,
+        false,
+      )).rejects.toMatchObject({ code: 'INVALID_FIELD' });
+      await expect(parseMessage(
+        [{ type: 'face', data: { id: 1.9 } }] as any,
+        false,
+      )).rejects.toMatchObject({ code: 'INVALID_FIELD' });
     });
 
     it('parses image segment', async () => {
@@ -111,6 +163,7 @@ describe('parseMessage', () => {
       );
       expect(result[0].type).toBe('image');
       expect(result[0].url).toBe('https://multimedia.nt.qq.com.cn/download?fileid=abc&rkey=xyz');
+      expect(result[0].subType).toBe(1);
     });
 
     it('keeps file when it is itself loadable even if a url is also present', async () => {
@@ -167,12 +220,15 @@ describe('parseMessage', () => {
       expect(result).toEqual([{ type: 'video', url: 'file:////AstrBot/data/cache/BV-test.mp4', thumbUrl: undefined }]);
     });
 
-    it('drops video segment with empty source', async () => {
-      const result = await parseMessage(
+    it('rejects a video segment with an empty source', async () => {
+      await expect(parseMessage(
         [{ type: 'video', data: {} }] as any,
         false,
-      );
-      expect(result).toEqual([]);
+      )).rejects.toMatchObject({
+        name: 'MessageElementValidationError',
+        code: 'MISSING_FIELD',
+        elementType: 'video',
+      });
     });
 
     it('parses record segment from data.path (NapCat parity)', async () => {
@@ -183,12 +239,15 @@ describe('parseMessage', () => {
       expect(result).toEqual([{ type: 'record', url: 'C:\\voices\\hi.silk' }]);
     });
 
-    it('drops record segment with empty source', async () => {
-      const result = await parseMessage(
+    it('rejects a record segment with an empty source', async () => {
+      await expect(parseMessage(
         [{ type: 'record', data: {} }] as any,
         false,
-      );
-      expect(result).toEqual([]);
+      )).rejects.toMatchObject({
+        name: 'MessageElementValidationError',
+        code: 'MISSING_FIELD',
+        elementType: 'record',
+      });
     });
 
     it('parses at segment', async () => {
@@ -248,11 +307,7 @@ describe('parseMessage', () => {
       expect(protoElems[0].text?.str).toBe('@User ');
     });
 
-    it('skips record send when SendContext is absent (graceful no-bridge path)', async () => {
-      // Without a SendContext, buildSendElems can't run highway upload —
-      // it should warn and drop the element instead of throwing into the
-      // ffmpegAddon (which would explode for callers that don't actually
-      // need to send).
+    it('rejects the whole message when record SendContext is absent', async () => {
       const elements = await parseMessage(
         [
           { type: 'text', data: { text: 'hi ' } },
@@ -260,13 +315,10 @@ describe('parseMessage', () => {
         ] as any,
         false,
       );
-      const protoElems = await buildSendElems(elements);
-      // Only the leading text should make it through.
-      expect(protoElems).toHaveLength(1);
-      expect(protoElems[0].text?.str).toBe('hi ');
+      await expect(buildSendElems(elements)).rejects.toBeInstanceOf(MessageElementValidationError);
     });
 
-    it('skips video send when SendContext is absent (graceful no-bridge path)', async () => {
+    it('rejects the whole message when video SendContext is absent', async () => {
       const elements = await parseMessage(
         [
           { type: 'text', data: { text: 'hi ' } },
@@ -274,9 +326,7 @@ describe('parseMessage', () => {
         ] as any,
         false,
       );
-      const protoElems = await buildSendElems(elements);
-      expect(protoElems).toHaveLength(1);
-      expect(protoElems[0].text?.str).toBe('hi ');
+      await expect(buildSendElems(elements)).rejects.toBeInstanceOf(MessageElementValidationError);
     });
 
     it('builds video commonElem through NTV2 fast-upload response', async () => {
@@ -357,16 +407,18 @@ describe('parseMessage', () => {
       expect(result[2].type).toBe('text');
     });
 
-    it('skips unknown segment types', async () => {
-      const result = await parseMessage(
+    it('rejects the whole message when one segment type is unknown', async () => {
+      await expect(parseMessage(
         [
           { type: 'text', data: { text: 'ok' } },
           { type: 'unknown_type_xyz', data: {} },
         ] as any,
         false,
-      );
-      expect(result).toHaveLength(1);
-      expect(result[0].type).toBe('text');
+      )).rejects.toMatchObject({
+        name: 'MessageElementValidationError',
+        code: 'UNKNOWN_TYPE',
+        elementType: 'unknown_type_xyz',
+      });
     });
   });
 
@@ -409,12 +461,22 @@ describe('parseMessage', () => {
       expect((result[0] as any).emojiId).toBeUndefined();
     });
 
-    it('drops an mface segment without emoji_id', async () => {
-      const result = await parseMessage(
+    it('rejects an mface segment without emoji_id', async () => {
+      await expect(parseMessage(
         [{ type: 'mface', data: { emoji_package_id: 12, summary: 'x' } }] as any,
         false,
-      );
-      expect(result).toEqual([]);
+      )).rejects.toMatchObject({ code: 'MISSING_FIELD', elementType: 'mface' });
+    });
+
+    it('rejects a non-hex market-face GUID before wire encoding', async () => {
+      await expect(parseMessage(
+        [{ type: 'mface', data: { emoji_id: 'zz', summary: 'broken' } }] as any,
+        false,
+      )).rejects.toMatchObject({
+        code: 'INVALID_FIELD',
+        elementType: 'mface',
+        field: 'emojiId',
+      });
     });
 
     it('builds the wire marketFace element (faceId = hex(emoji_id), NapCat constants)', async () => {
@@ -447,6 +509,32 @@ describe('parseMessage', () => {
       expect(result[0].text).toBe('{"app":"test"}');
     });
 
+    it('reads canonical xml resid and file_size fields', async () => {
+      const xml = await parseMessage(
+        [{ type: 'xml', data: { data: '<msg/>', resid: '35' } }] as any,
+        false,
+      );
+      expect(xml).toEqual([{ type: 'xml', text: '<msg/>', subType: 35 }]);
+
+      const file = await parseMessage(
+        [{ type: 'file', data: { file_id: 'fid', file_size: '4096' } }] as any,
+        false,
+      );
+      expect(file).toEqual([{ type: 'file', fileId: 'fid', fileSize: 4096 }]);
+
+      await expect(parseMessage([{
+        type: 'file',
+        data: { file: 'report.pdf', url: 'https://example.com/report.pdf' },
+      }] as any, false)).resolves.toEqual([{
+        type: 'file',
+        url: 'https://example.com/report.pdf',
+      }]);
+
+      await expect(parseMessage('[CQ:file,id=fid-from-raw]', false)).resolves.toEqual([
+        { type: 'file', fileId: 'fid-from-raw' },
+      ]);
+    });
+
     it('parses reply segment with resolveReplySequence', async () => {
       const result = await parseMessage(
         [{ type: 'reply', data: { id: 42 } }] as any,
@@ -471,6 +559,29 @@ describe('parseMessage', () => {
       expect(parsed.meta.news.title).toBe('Test');
     });
 
+    it('rejects malformed rich input sugar before resolver or signer side effects', async () => {
+      const resolveContactArk = vi.fn();
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        await expect(parseMessage([{ type: 'share', data: {} }] as any, false))
+          .rejects.toMatchObject({ code: 'INVALID_FIELD', elementType: 'share' });
+        await expect(parseMessage([{ type: 'location', data: { lat: '', lon: '181' } }] as any, false))
+          .rejects.toMatchObject({ code: 'INVALID_FIELD', elementType: 'location' });
+        await expect(parseMessage(
+          [{ type: 'contact', data: { type: 'channel', id: '123' } }] as any,
+          false,
+          { resolveContactArk },
+        )).rejects.toMatchObject({ code: 'INVALID_FIELD', elementType: 'contact' });
+        await expect(parseMessage([{ type: 'music', data: { type: '163' } }] as any, false))
+          .rejects.toMatchObject({ code: 'MISSING_FIELD', elementType: 'music' });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(resolveContactArk).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('parses rps as face', async () => {
       const result = await parseMessage(
         [{ type: 'rps', data: {} }] as any,
@@ -491,25 +602,36 @@ describe('parseMessage', () => {
       expect(result[0].faceId).toBe(358);
     });
 
-    it('parses shake as poke', async () => {
-      const result = await parseMessage(
+    it('rejects shake/poke with a dedicated-Action hint', async () => {
+      await expect(parseMessage(
         [{ type: 'shake', data: {} }] as any,
         false,
-      );
-      expect(result).toHaveLength(1);
-      expect(result[0].type).toBe('poke');
+      )).rejects.toMatchObject({
+        code: 'UNSENDABLE_TYPE',
+        elementType: 'poke',
+        message: expect.stringContaining('dedicated poke Action'),
+      });
+
+      await expect(parseMessage(
+        [{ type: 'poke', data: { type: 7 } }] as any,
+        false,
+      )).rejects.toMatchObject({
+        code: 'UNSENDABLE_TYPE',
+        elementType: 'poke',
+      });
     });
 
-    it('ignores anonymous segment', async () => {
-      const result = await parseMessage(
+    it('rejects anonymous because it has no executable send semantics', async () => {
+      await expect(parseMessage(
         [
           { type: 'anonymous', data: {} },
           { type: 'text', data: { text: 'hi' } },
         ] as any,
         false,
-      );
-      expect(result).toHaveLength(1);
-      expect(result[0].type).toBe('text');
+      )).rejects.toMatchObject({
+        code: 'UNSENDABLE_TYPE',
+        elementType: 'anonymous',
+      });
     });
 
     it('parses location as json card', async () => {
@@ -576,14 +698,20 @@ describe('parseMessage', () => {
   });
 
   describe('edge cases', () => {
-    it('returns empty for null', async () => {
-      const result = await parseMessage(null as any, false);
-      expect(result).toEqual([]);
+    it('rejects null', async () => {
+      await expect(parseMessage(null as any, false)).rejects.toMatchObject({ code: 'INVALID_FIELD' });
     });
 
-    it('returns empty for number', async () => {
-      const result = await parseMessage(42 as any, false);
-      expect(result).toEqual([]);
+    it('rejects a number', async () => {
+      await expect(parseMessage(42 as any, false)).rejects.toMatchObject({ code: 'INVALID_FIELD' });
+    });
+
+    it('rejects an empty segment array and an object without type', async () => {
+      await expect(parseMessage([] as any, false)).rejects.toMatchObject({ code: 'MISSING_FIELD' });
+      await expect(parseMessage({ data: { text: 'x' } } as any, false)).rejects.toMatchObject({
+        code: 'MISSING_FIELD',
+        field: 'type',
+      });
     });
   });
 
@@ -615,24 +743,44 @@ describe('parseMessage', () => {
       expect(result).toEqual([{ type: 'file', url: '/local/path/a.bin' }]);
     });
 
-    it('drops a file segment with neither file_id nor file/url', async () => {
+    it('does not let an empty file field mask a valid url', async () => {
       const result = await parseMessage(
-        [{ type: 'file', data: {} } as any],
+        [{ type: 'file', data: { file: '', url: 'https://example.com/a.bin' } } as any],
         false,
       );
-      expect(result).toEqual([]);
+      expect(result).toEqual([{ type: 'file', url: 'https://example.com/a.bin' }]);
+    });
+
+    it('rejects a file segment with neither file_id nor file/url', async () => {
+      await expect(parseMessage(
+        [{ type: 'file', data: {} } as any],
+        false,
+      )).rejects.toMatchObject({ code: 'MISSING_FIELD', elementType: 'file' });
     });
 
     it('accepts fileId / filename / fileName / md5 / sha1 aliases', async () => {
       const result = await parseMessage(
         [{
           type: 'file',
-          data: { fileId: 'fid-2', filename: 'b.zip', fileSize: 456, md5: 'AB', sha1: 'CD' },
+          data: {
+            fileId: 'fid-2',
+            filename: 'b.zip',
+            fileSize: 456,
+            md5: 'ab'.repeat(16),
+            sha1: 'cd'.repeat(20),
+          },
         } as any],
         false,
       );
       expect(result).toEqual([
-        { type: 'file', fileId: 'fid-2', fileName: 'b.zip', fileSize: 456, md5Hex: 'AB', sha1Hex: 'CD' },
+        {
+          type: 'file',
+          fileId: 'fid-2',
+          fileName: 'b.zip',
+          fileSize: 456,
+          md5Hex: 'ab'.repeat(16),
+          sha1Hex: 'cd'.repeat(20),
+        },
       ]);
     });
   });

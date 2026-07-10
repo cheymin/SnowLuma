@@ -27,13 +27,15 @@ export interface QQInfo {
   nickname: string;
 }
 
-export type AdapterStatusLevel = 'ok' | 'warn' | 'down' | 'disabled';
+export type AdapterStatusLevel = 'ok' | 'warn' | 'down' | 'disabled' | 'degraded';
 
 export interface AdapterStatus {
   name: string;
   kind: 'httpServer' | 'httpClient' | 'wsServer' | 'wsClient';
   status: AdapterStatusLevel;
   detail: string;
+  lastError?: string;
+  lastErrorAt?: number;
 }
 
 export interface AccountConnections {

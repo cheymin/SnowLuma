@@ -1,13 +1,13 @@
 import { createLogger } from '@snowluma/common/logger';
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
-import type { ForwardNodePayload, FriendMessage, GroupMessage, MessageElement, QQEventVariant } from '@snowluma/protocol/events';
+import type { ForwardNodePayload, FriendMessage, GroupMessage, MessageElement, MessageElementOf, QQEventVariant } from '@snowluma/protocol/events';
 import { getVideoSourceSize, MAX_VIDEO_SIZE } from '@snowluma/protocol/highway/video-upload';
 import type { MessageSendResult } from '../api-handler';
 import { convertEvent, elementsToOneBotSegments, type ConverterContext } from '../event-converter';
 import { segmentsToRawMessage } from '../helper/cq';
 import type { OneBotInstanceContext } from '../instance-context';
 import { GROUP_MESSAGE_EVENT, PRIVATE_MESSAGE_EVENT, hashMessageIdInt32 } from '../message-id';
-import { parseMessage } from '../message-parser';
+import { MessageElementValidationError, parseMessage } from '../message-parser';
 import type { MessageStore } from '../message-store';
 import type { JsonArray, JsonObject, JsonValue, MessageMeta } from '../types';
 
@@ -41,14 +41,35 @@ export function videoNeedsFileFallback(element: MessageElement, isSizeErr: boole
  * else is returned for a normal re-send.
  */
 export function splitVideoFileFallback(
-  elements: MessageElement[],
+  elements: Array<Exclude<MessageElement, { type: 'file' }>>,
   isSizeErr: boolean,
-): { fileEls: MessageElement[]; remaining: MessageElement[] } {
-  const fileEls: MessageElement[] = [];
-  const remaining: MessageElement[] = [];
+): {
+  fileEls: Array<MessageElementOf<'file'>>;
+  remaining: Array<Exclude<MessageElement, { type: 'file' }>>;
+} {
+  const fileEls: Array<MessageElementOf<'file'>> = [];
+  const remaining: Array<Exclude<MessageElement, { type: 'file' }>> = [];
   for (const e of elements) {
     if (videoNeedsFileFallback(e, isSizeErr)) {
-      fileEls.push({ type: 'file', url: e.url, fileId: e.fileId, fileName: e.fileName || 'video.mp4' });
+      const fileElement: MessageElementOf<'file'> = {
+        type: 'file',
+        url: e.url,
+        fileId: e.fileId,
+        fileName: e.fileName || 'video.mp4',
+        fileSize: e.fileSize,
+        fileHash: e.fileHash,
+        md5Hex: e.md5Hex,
+        sha1Hex: e.sha1Hex,
+      };
+      if (!fileElement.url && !fileElement.fileId) {
+        throw new MessageElementValidationError(
+          'MISSING_FIELD',
+          'oversized video fallback requires a file/url source; a fingerprint alone cannot enter the file upload pipeline',
+          'video',
+          'url',
+        );
+      }
+      fileEls.push(fileElement);
     } else {
       remaining.push(e);
     }
@@ -546,7 +567,14 @@ export async function sendPrivateMessage(
   userId: number,
   message: JsonValue,
   autoEscape: boolean,
+  /** When set, reply into this group's temp session instead of friend c2c. */
+  tempGroupId?: number,
 ): Promise<MessageSendResult> {
+  // A temp-session reply is only allowed into a session the peer opened.
+  const isTempReply = tempGroupId !== undefined && ref.tempSessions.has(userId, tempGroupId);
+  if (tempGroupId !== undefined && !isTempReply) {
+    throw new Error(`cannot send to user ${userId} in group ${tempGroupId}: no such temp session`);
+  }
   const elements = await parseMessage(message, autoEscape, {
     resolveReplySequence: (replyMessageId) => {
       return ref.messageStore.resolveReplySequence(false, userId, replyMessageId);
@@ -590,29 +618,38 @@ export async function sendPrivateMessage(
   });
   if (elements.length === 0) throw new Error('message is empty');
 
-  // Private chats cannot @-mention anyone — QQ simply ignores the mention
-  // element in c2c messages.  Many OneBot callers blindly append an `at`
-  // segment right after `reply` (the group-chat convention), which ends up
-  // producing a broken wire message.  Strip `at` elements so they never
-  // reach the protocol layer.
-  const hasReply = elements.some(e => e.type === 'reply');
-  for (let i = elements.length - 1; i >= 0; i--) {
-    if (elements[i].type === 'at') {
-      if (!hasReply) {
-        log.warn('[OneBot] at segment in private message is unsupported — stripped');
-      }
-      elements.splice(i, 1);
+  // Private chats cannot @-mention anyone. Reject the whole request rather
+  // than deleting the at and sending a different message than the caller gave.
+  const hasAt = elements.some(e => e.type === 'at');
+  if (hasAt) {
+    throw new MessageElementValidationError(
+      'UNSENDABLE_TYPE',
+      'message element "at" cannot be sent in a private chat',
+      'at',
+    );
+  }
+
+  // Temp sessions only have the message-element transport. File elements use
+  // the friend c2c upload path, so reject them before sending any preceding
+  // text/media batch; discovering this after sendText would create a partial
+  // send followed by a failed Action response.
+  if (tempGroupId !== undefined) {
+    const unsupported = elements.find((element) =>
+      element.type === 'file' || videoNeedsFileFallback(element, false));
+    if (unsupported) {
+      throw new MessageElementValidationError(
+        'UNSENDABLE_TYPE',
+        `message element "${unsupported.type}" cannot be sent in a temp session`,
+        unsupported.type,
+      );
     }
   }
-  if (elements.length === 0) throw new Error('message is empty');
 
   // C2C `{type:'file'}` segments can't ride on the elems[] pipeline —
   // c2c files live on `RichText.notOnlineFile`, parallel to elems
   // (see `@snowluma/proto-defs/message:notOnlineFile`). The element-builder
-  // explicitly drops them with a warn ("file send via elems[] is
-  // group-only"), so a private message that bundled a file alongside
-  // anything else used to either ship as "[空消息]" (only-file case,
-  // 0 elements after drop) or silently lose the file (mixed case).
+  // rejects them as a routing error. Split them before invoking the element
+  // builder so they enter the dedicated c2c-file pipeline.
   //
   // NapCat splits the same way (`dev/NapCatQQ/.../SendMsg.ts:404-415`):
   // FILE / VIDEO / ARK / PTT each go in their own sendMsg call,
@@ -624,6 +661,14 @@ export async function sendPrivateMessage(
   //  b) has file_id from a prior upload_private_file → sendC2cFile() only
   let allFileElements = elements.filter(e => e.type === 'file');
   let nonFileElements = elements.filter(e => e.type !== 'file');
+  let fileTargetUid: string | null = null;
+  const ensureFileTargetUid = async (): Promise<string> => {
+    if (fileTargetUid) return fileTargetUid;
+    const resolved = await ref.bridge.resolveUserUid(userId);
+    if (!resolved) throw new Error(`c2c file send: could not resolve uid for user ${userId}`);
+    fileTargetUid = resolved;
+    return resolved;
+  };
 
   // [#145] Videos up to MAX_VIDEO_SIZE (1.5 GiB) send as real videos; only
   // above that do we route to the file pipeline (the whole video is buffered
@@ -639,12 +684,28 @@ export async function sendPrivateMessage(
     }
   }
 
+  // Resolve every deterministic prerequisite for the dedicated file path
+  // before sending a preceding text/media batch. Otherwise a mixed
+  // `[text, file]` request could publish the text and only then discover that
+  // the recipient UID required by RichText.notOnlineFile is unavailable.
+  if (allFileElements.length > 0) await ensureFileTargetUid();
+
+  // Route text/media batches through the temp-session primitive when replying
+  // passively, else the normal friend c2c path.
+  const sendText = (elems: MessageElement[]) =>
+    isTempReply && tempGroupId !== undefined
+      ? ref.bridge.apis.message.sendGroupTempMessage(userId, tempGroupId, elems)
+      : ref.bridge.apis.message.sendPrivate(userId, elems);
+
   let lastReceipt: Awaited<ReturnType<typeof ref.bridge.apis.message.sendPrivate>> | undefined;
   if (nonFileElements.length > 0) {
     try {
-      lastReceipt = await ref.bridge.apis.message.sendPrivate(userId, nonFileElements);
+      lastReceipt = await sendText(nonFileElements);
       logSentMessage(false, userId, nonFileElements);
     } catch (err) {
+      // A temp-session reply can't fall back to the c2c file path (friend-only)
+      // — surface the original error rather than mis-routing.
+      if (tempGroupId !== undefined) throw err;
       // Highway upload failed — if a large video triggered it, fall back to
       // file upload for that element (private messages cannot carry file
       // elements through the element pipeline).
@@ -654,6 +715,7 @@ export async function sendPrivateMessage(
       const { fileEls, remaining } = splitVideoFileFallback(nonFileElements, isSizeErr);
       allFileElements = [...allFileElements, ...fileEls];
       nonFileElements = remaining;
+      if (fileEls.length > 0) await ensureFileTargetUid();
       if (nonFileElements.length > 0) {
         lastReceipt = await ref.bridge.apis.message.sendPrivate(userId, nonFileElements);
         logSentMessage(false, userId, nonFileElements);
@@ -661,8 +723,10 @@ export async function sendPrivateMessage(
     }
   }
   if (allFileElements.length > 0) {
-    const userUid = await ref.bridge.resolveUserUid(userId);
-    if (!userUid) throw new Error(`c2c file send: could not resolve uid for user ${userId}`);
+    if (tempGroupId !== undefined) {
+      throw new Error('temp-session file preflight invariant failed');
+    }
+    const userUid = await ensureFileTargetUid();
     for (const fileEl of allFileElements) {
       if (fileEl.url && !fileEl.fileId) {
         // uploadPrivate() already calls sendC2cFile() internally — do NOT call it again.
@@ -681,7 +745,11 @@ export async function sendPrivateMessage(
         lastReceipt = await ref.bridge.apis.message.sendC2cFile(userId, userUid, { fileId: fileEl.fileId, fileName, fileSize, fileMd5, fileHash });
         logSentMessage(false, userId, [fileEl]);
       } else {
-        log.warn('[OneBot] private file segment without file_id or url — skipped');
+        throw new MessageElementValidationError(
+          'MISSING_FIELD',
+          'private file segment requires file_id or url',
+          'file',
+        );
       }
     }
   }
@@ -767,12 +835,16 @@ export async function sendGroupMessage(
       const name = fileEl.fileName || fileEl.url.split('/').pop() || 'file';
       const result = await ref.bridge.apis.groupFile.upload(groupId, fileEl.url, name, '/', true);
       fileId = result.fileId ?? '';
-      if (!fileId) { log.warn('[OneBot] group file auto-upload returned no file_id — skipped'); continue; }
+      if (!fileId) throw new Error('group file auto-upload returned no file_id');
     } else if (fileEl.fileId) {
       fileId = fileEl.fileId;
       await ref.bridge.apis.groupFile.publish(groupId, fileId);
     } else {
-      log.warn('[OneBot] group file segment without file_id or url — skipped');
+      throw new MessageElementValidationError(
+        'MISSING_FIELD',
+        'group file segment requires file_id or url',
+        'file',
+      );
       continue;
     }
     logSentMessage(true, groupId, [fileEl]);
@@ -1123,10 +1195,9 @@ interface ParseForwardOptions {
 /**
  * Are all entries of this array `{type:'node'}` segments? Then `content`
  * itself is a nested forward chain (vs a regular flat segment list).
- * Mixed content (some nodes + some text/image) returns false: that's
- * not a meaningful protocol shape, so we treat it as flat-segment and
- * let the node entries fall through to parseMessage (which drops them
- * with a warning).
+ * Mixed content (some nodes + some text/image) returns false: that's not a
+ * meaningful nested-forward shape, so the regular strict parser rejects the
+ * embedded node before any upload starts.
  */
 function isNestedNodeArray(value: JsonValue): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
@@ -1137,6 +1208,25 @@ function isNestedNodeArray(value: JsonValue): boolean {
   return true;
 }
 
+function assertForwardNodeMetadataIsScalar(
+  nodeData: JsonObject,
+  index: number,
+): void {
+  for (const [field, value] of Object.entries(nodeData)) {
+    if (field === 'content' || field === 'message') continue;
+    if (
+      value === undefined || value === null || typeof value === 'string'
+      || typeof value === 'number' || typeof value === 'boolean'
+    ) continue;
+    throw new MessageElementValidationError(
+      'INVALID_FIELD',
+      `forward messages[${index}].${field} must be a scalar value`,
+      'node',
+      field,
+    );
+  }
+}
+
 async function parseForwardNodes(
   ref: OneBotInstanceContext,
   messages: JsonValue,
@@ -1144,38 +1234,121 @@ async function parseForwardNodes(
 ): Promise<ForwardNodePayload[]> {
   const depth = options.depth ?? 0;
   if (depth >= MAX_FORWARD_DEPTH) {
-    throw new Error(`forward nesting depth exceeds ${MAX_FORWARD_DEPTH}`);
+    throw new MessageElementValidationError(
+      'INVALID_FIELD',
+      `forward nesting depth exceeds ${MAX_FORWARD_DEPTH}`,
+      'node',
+      'content',
+    );
   }
 
   if (!Array.isArray(messages)) {
-    throw new Error('forward messages must be an array');
+    throw new MessageElementValidationError(
+      'INVALID_FIELD',
+      'forward messages must be an array of node segments',
+      'node',
+      'messages',
+    );
+  }
+  if (messages.length === 0) {
+    throw new MessageElementValidationError(
+      'MISSING_FIELD',
+      'forward messages must contain at least one node',
+      'node',
+      'messages',
+    );
   }
 
-  const nodes: ForwardNodePayload[] = [];
-  for (const item of messages) {
+  // Validate the entire top-level node list before parsing any content. The
+  // old loop silently continued past malformed/unknown entries, so a forward
+  // Action could upload the remaining nodes and report success with altered
+  // caller intent.
+  const prepared = messages.map((item, index) => {
     const segment = asJsonObject(item);
-    if (!segment) continue;
-
-    let nodeData: JsonObject | null = null;
-    if (String(segment.type ?? '') === 'node') {
-      nodeData = asJsonObject(segment.data);
-    } else if (segment.content !== undefined || segment.message !== undefined) {
-      nodeData = segment;
+    if (!segment) {
+      throw new MessageElementValidationError(
+        'INVALID_FIELD',
+        `forward messages[${index}] must be an object`,
+        'node',
+        `messages[${index}]`,
+      );
     }
-    if (!nodeData) continue;
+    const rawType = segment.type;
+    if (rawType !== undefined && typeof rawType !== 'string') {
+      throw new MessageElementValidationError(
+        'INVALID_FIELD',
+        `forward messages[${index}].type must be "node"`,
+        'node',
+        'type',
+      );
+    }
+    if (typeof rawType === 'string' && rawType !== 'node') {
+      throw new MessageElementValidationError(
+        'UNKNOWN_TYPE',
+        `unknown forward message segment type: ${rawType}`,
+        rawType,
+        'type',
+      );
+    }
 
-    const messageId = toPositiveInt(nodeData.id ?? nodeData.message_id);
-    if (messageId > 0) {
+    if (rawType === 'node') {
+      const nodeData = asJsonObject(segment.data);
+      if (!nodeData) {
+        throw new MessageElementValidationError(
+          'INVALID_FIELD',
+          `forward messages[${index}].data must be an object`,
+          'node',
+          'data',
+        );
+      }
+      assertForwardNodeMetadataIsScalar(nodeData, index);
+      return { segment, nodeData };
+    }
+
+    // Preserve the existing bare-node compatibility form, but require it to
+    // carry content explicitly instead of silently ignoring arbitrary objects.
+    if (segment.content === undefined && segment.message === undefined) {
+      throw new MessageElementValidationError(
+        'MISSING_FIELD',
+        `forward messages[${index}] requires type:"node" data or bare content/message`,
+        'node',
+        'content',
+      );
+    }
+    assertForwardNodeMetadataIsScalar(segment, index);
+    return { segment, nodeData: segment };
+  });
+
+  const nodes: ForwardNodePayload[] = [];
+  for (const { nodeData } of prepared) {
+
+    const messageId = parseForwardMessageId(nodeData.id ?? nodeData.message_id);
+    if (messageId !== 0) {
       const event = ref.messageStore.findEvent(messageId);
-      if (!event) throw new Error(`forward node message_id not found: ${messageId}`);
+      if (!event) {
+        throw new MessageElementValidationError(
+          'INVALID_FIELD',
+          `forward node message_id not found: ${String(messageId)}`,
+          'node',
+          'message_id',
+        );
+      }
 
       const eventSender = asJsonObject(event.sender) ?? {};
       const senderCard = eventSender.card !== undefined ? String(eventSender.card) : undefined;
       const nickname = String(eventSender.card ?? eventSender.nickname ?? nodeData.nickname ?? nodeData.name ?? '');
       const userUin = toPositiveInt(event.user_id);
+      if (userUin <= 0) {
+        throw new MessageElementValidationError(
+          'INVALID_FIELD',
+          `forward node message_id ${String(messageId)} has no valid sender user_id`,
+          'node',
+          'user_id',
+        );
+      }
       const content = (event.message ?? event.raw_message ?? '') as JsonValue;
       const elements = await parseMessage(content, false);
-      if (userUin > 0 && elements.length > 0) {
+      if (elements.length > 0) {
         const messageType = event.message_type === 'group' ? 'group' : 'private';
         const groupIdValue = toPositiveInt(event.group_id);
         nodes.push({
@@ -1183,7 +1356,7 @@ async function parseForwardNodes(
           nickname: nickname || String(userUin),
           elements,
           time: typeof event.time === 'number' ? event.time : toPositiveInt(event.time),
-          msgId: toPositiveInt(event.message_id),
+          msgId: toSafeSignedInteger(event.message_id),
           msgSeq: toPositiveInt(event.message_seq),
           groupId: groupIdValue > 0 ? groupIdValue : undefined,
           senderCard,
@@ -1350,4 +1523,28 @@ function toPositiveInt(value: JsonValue | undefined): number {
     if (Number.isFinite(parsed)) return Math.max(0, Math.trunc(parsed));
   }
   return 0;
+}
+
+function toSafeSignedInteger(value: JsonValue | undefined): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function parseForwardMessageId(value: JsonValue | undefined): number {
+  if (value === undefined || value === null || value === '') return 0;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  throw new MessageElementValidationError(
+    'INVALID_FIELD',
+    'forward node id/message_id must be a non-zero safe integer',
+    'node',
+    'message_id',
+  );
 }

@@ -69,6 +69,24 @@ export type ProcessActionResult = {
   process?: HookProcessInfo & { error?: string };
 };
 
+export interface ConfigApplyError {
+  name: string;
+  kind?: 'httpServer' | 'httpClient' | 'wsServer' | 'wsClient';
+  phase: string;
+  message: string;
+  at: number;
+  restored?: boolean;
+}
+
+export interface ConfigSaveResult {
+  config: OneBotConfig;
+  saved: boolean;
+  applied: boolean;
+  online: boolean;
+  errors: ConfigApplyError[];
+  message: string;
+}
+
 export type StreamStatus = 'open' | 'reconnecting' | 'closed';
 
 export interface LogsStreamOptions {
@@ -134,7 +152,7 @@ export interface ApiClient {
   // ---- OneBotInstance per-UIN config ----
   config: {
     get(uin: string): Promise<OneBotConfig>;
-    save(uin: string, config: OneBotConfig): Promise<OneBotConfig>;
+    save(uin: string, config: OneBotConfig): Promise<ConfigSaveResult>;
   };
 
   // ---- WebUI listener self-config (port / host / TLS / trust-proxy) ----

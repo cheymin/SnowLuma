@@ -267,6 +267,38 @@ describe('actions/forward — file segment inside forward node', () => {
     })]);
   });
 
+  it('rejects two files in one private forward node before uploading either file', async () => {
+    buildSendElemsMock.mockClear();
+    const uploadPrivate = vi.fn();
+    const sendRawPacket = vi.fn();
+    const bridge = mockBridge({
+      sendRawPacket: sendRawPacket as any,
+      apis: {
+        ...mockBridge().apis,
+        groupFile: {
+          ...mockBridge().apis.groupFile,
+          uploadPrivate,
+        },
+      },
+    });
+
+    await expect(new ForwardApi(bridge as any).upload([{
+      userUin: 10001,
+      nickname: 'alice',
+      elements: [
+        { type: 'file', url: 'base64://AQID', fileName: 'one.txt' },
+        { type: 'file', url: 'base64://BAUG', fileName: 'two.txt' },
+      ] as any,
+    }], undefined, 67890)).rejects.toMatchObject({
+      code: 'UNSENDABLE_TYPE',
+      elementType: 'file',
+    });
+
+    expect(uploadPrivate).not.toHaveBeenCalled();
+    expect(buildSendElemsMock).not.toHaveBeenCalled();
+    expect(sendRawPacket).not.toHaveBeenCalled();
+  });
+
   it('private file forward keeps the long-msg upload under the self uid namespace', async () => {
     buildSendElemsMock.mockClear();
     let captured: Uint8Array | undefined;

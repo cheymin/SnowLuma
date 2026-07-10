@@ -29,6 +29,7 @@ const { FakeWebSocket, instances } = vi.hoisted(() => {
 
     constructor(url: string, _opts: unknown) {
       super();
+      if (url.includes('throw-sync')) throw new Error('invalid websocket url');
       this.url = url;
       instances.push(this);
     }
@@ -89,6 +90,40 @@ function cfg(over: Partial<WsClientNetwork> = {}): WsClientNetwork {
 describe('WsClientAdapter — stale-socket close guard (issue #97)', () => {
   beforeEach(() => {
     instances.length = 0;
+  });
+
+  it('rolls back enabled state when socket construction throws synchronously', () => {
+    const adapter = new WsClientAdapter('ws', cfg({ url: 'ws://throw-sync/' }), ctx());
+
+    expect(() => adapter.open()).toThrow('invalid websocket url');
+    expect(adapter.isActive).toBe(false);
+    expect(adapter.describeManagedStatus()).toMatchObject({
+      status: 'degraded',
+      lastError: 'invalid websocket url',
+    });
+  });
+
+  it('closes the socket but waits for an in-flight inbound action to drain', async () => {
+    let finishAction!: () => void;
+    const actionGate = new Promise<void>((resolve) => { finishAction = resolve; });
+    const gatedCtx: NetworkAdapterContext = {
+      ...ctx(),
+      api: { processStreamRequest: vi.fn(() => actionGate) } as never,
+    };
+    const adapter = new WsClientAdapter('ws', cfg(), gatedCtx);
+    adapter.open();
+    const socket = instances[0];
+    socket.emit('message', Buffer.from('{"action":"get_status"}'));
+
+    let closed = false;
+    const closing = adapter.close().then(() => { closed = true; });
+    await Promise.resolve();
+    expect(socket.readyState).toBe(2);
+    expect(closed).toBe(false);
+
+    finishAction();
+    await closing;
+    expect(closed).toBe(true);
   });
 
   it('ignores the close event from a socket replaced by a hot reload', async () => {

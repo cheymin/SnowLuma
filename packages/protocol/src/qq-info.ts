@@ -67,3 +67,22 @@ export interface GroupRequestInfo {
   comment: string;
   filtered: boolean;
 }
+
+/** Approval tuple required by OIDB 0x10C8. The OneBot flag is opaque to
+ * clients, but carrying the complete tuple makes delayed handling stateless. */
+export type GroupRequestHandle = Pick<
+  GroupRequestInfo,
+  'sequence' | 'groupId' | 'eventType' | 'filtered'
+>;
+
+/** Canonical SnowLuma group-request flag (version 1). */
+export function formatGroupRequestFlag(handle: GroupRequestHandle): string {
+  return [
+    'slreq',
+    '1',
+    handle.sequence,
+    handle.groupId,
+    handle.eventType,
+    handle.filtered ? 1 : 0,
+  ].join(':');
+}

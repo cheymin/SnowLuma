@@ -35,9 +35,9 @@ describe('decodeRichBody / 闪传 flash_file (#199/#200)', () => {
     expect(out).toEqual([{ type: 'flash_file', filesetId: 'fs-deep', fileName: 'a.zip', sceneType: 0 }]);
   });
 
-  it('defaults missing fields (still emits a non-empty element)', () => {
+  it('drops a malformed card that has no fileset identity', () => {
     const out = decodeRichBody(flashBody({ busId: 'FlashTransfer', templateId: 'flash' }), true);
-    expect(out).toEqual([{ type: 'flash_file', filesetId: '', fileName: '', sceneType: 0 }]);
+    expect(out).toEqual([]);
   });
 
   it('ignores a non-FlashTransfer markdown card (no flash_file element)', () => {

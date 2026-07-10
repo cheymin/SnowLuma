@@ -731,17 +731,24 @@ const CONN_STATUS_STYLE: Record<AdapterStatusLevel, string> = {
   ok: 'bg-success/10 text-success',
   warn: 'bg-warning/10 text-warning',
   down: 'bg-destructive/10 text-destructive',
+  degraded: 'bg-destructive/10 text-destructive',
   disabled: 'bg-muted text-muted-foreground',
 };
 const CONN_STATUS_LABEL: Record<AdapterStatusLevel, string> = {
-  ok: '正常', warn: '注意', down: '异常', disabled: '未启用',
+  ok: '正常', warn: '注意', down: '异常', degraded: '应用失败', disabled: '未启用',
 };
 const ADAPTER_KIND_LABEL: Record<AdapterStatus['kind'], string> = {
   httpServer: 'HTTP 服务端', httpClient: 'HTTP 上报', wsServer: 'WS 服务端', wsClient: 'WS 客户端',
 };
 
 // Worst-status-first ordering (down → warn → disabled → ok).
-const CONN_STATUS_RANK: Record<AdapterStatusLevel, number> = { down: 0, warn: 1, disabled: 2, ok: 3 };
+const CONN_STATUS_RANK: Record<AdapterStatusLevel, number> = {
+  degraded: 0,
+  down: 1,
+  warn: 2,
+  disabled: 3,
+  ok: 4,
+};
 
 function ConnectionsBlock({ config }: { config: ConnectionsConfig }) {
   const { connections } = useAppState();
@@ -804,6 +811,11 @@ function ConnectionsBlock({ config }: { config: ConnectionsConfig }) {
                             <span className="shrink-0 text-[10px] text-muted-foreground">{ADAPTER_KIND_LABEL[adp.kind]}</span>
                           </div>
                           <div className="truncate text-[11px] text-muted-foreground">{adp.detail}</div>
+                          {adp.lastError && adp.lastErrorAt && (
+                            <div className="truncate text-[10px] text-destructive/80">
+                              {new Date(adp.lastErrorAt).toLocaleString()} · {adp.lastError}
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}

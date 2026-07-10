@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BridgeInterface } from '../../src/bridge/bridge-interface';
 import type {
-  FriendInfo, GroupMemberInfo, QQGroupInfo, UserProfileInfo,
+  FriendInfo, GroupMemberInfo, GroupRequestInfo, QQGroupInfo, UserProfileInfo,
 } from '@snowluma/protocol/qq-info';
 import {
   getFriendList,
@@ -14,6 +14,7 @@ import {
   getGroupList,
   getGroupMemberInfo,
   getGroupMemberList,
+  getGroupSystemMessages,
   getLoginInfo,
   getStrangerInfo,
 } from '../src/modules/contact-actions';
@@ -90,6 +91,28 @@ function makeMember(uin: number, nickname: string, card = ''): GroupMemberInfo {
 function makeProfile(uin: number, nickname: string, sex: 'male' | 'female' | 'unknown' = 'unknown', age = 0): UserProfileInfo {
   return {
     uin, uid: `u_${uin}`, nickname, remark: '', qid: '', sex, age, sign: '', avatar: '',
+  };
+}
+
+function makeGroupRequest(overrides: Partial<GroupRequestInfo> = {}): GroupRequestInfo {
+  return {
+    groupId: 999,
+    groupName: 'group',
+    targetUid: 'u_target',
+    targetUin: 123,
+    targetName: 'target',
+    invitorUid: 'u_inviter',
+    invitorUin: 456,
+    invitorName: 'inviter',
+    operatorUid: 'u_operator',
+    operatorUin: 789,
+    operatorName: 'operator',
+    sequence: 123456,
+    state: 1,
+    eventType: 22,
+    comment: 'please',
+    filtered: false,
+    ...overrides,
   };
 }
 
@@ -353,5 +376,24 @@ describe('onebot/contact-actions / getStrangerInfo', () => {
       identity: fakeIdentity({ findUserProfile: () => null }),
     });
     expect(await getStrangerInfo(bridge, 99999)).toBeNull();
+  });
+});
+
+describe('onebot/contact-actions / getGroupSystemMessages', () => {
+  it('returns the same canonical flag accepted by set_group_add_request', async () => {
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => [
+        makeGroupRequest({ sequence: 123456, groupId: 999, eventType: 22, filtered: true }),
+      ]),
+    });
+
+    const result = await getGroupSystemMessages(bridge);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      request_id: 123456,
+      group_id: 999,
+      flag: 'slreq:1:123456:999:22:1',
+    });
   });
 });

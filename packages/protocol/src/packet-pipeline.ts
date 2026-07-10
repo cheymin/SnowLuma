@@ -4,6 +4,7 @@ import { createLogger, type Logger } from '@snowluma/common/logger';
 import type { BridgeEventBus } from './event-bus';
 import type { QQEventVariant } from './events';
 import type { IdentityService } from './identity-service';
+import { formatGroupRequestFlag, type GroupRequestInfo } from './qq-info';
 
 const moduleLog = createLogger('Bridge');
 const moduleEventLog = createLogger('Event');
@@ -56,7 +57,10 @@ export interface PacketPipelineDeps {
    */
   resolveGroupJoinRequest(
     groupId: number, uid: string, subType: 'add' | 'invite',
-  ): Promise<{ comment: string; sequence: number } | null>;
+  ): Promise<GroupRequestInfo | null>;
+  /** Resolve a private invite-card msgseq. Implementations may briefly wait
+   *  for the paired C2C Ark card, as the PkgType 87 push omits this value. */
+  resolveGroupInviteCardSequence?(groupId: number): Promise<number | null>;
 }
 
 export class IncomingPacketPipeline {
@@ -251,6 +255,32 @@ export class IncomingPacketPipeline {
         // `notify.postscript`. Without this the OneBot `comment` field is
         // empty — bug #98.
         event.message = requestR.value.comment;
+
+        const request = requestR.value;
+        const hasApprovalTuple = Number.isSafeInteger(request.sequence) && request.sequence > 0
+          && Number.isSafeInteger(request.groupId) && request.groupId > 0
+          && Number.isSafeInteger(request.eventType) && request.eventType > 0;
+        if (hasApprovalTuple) {
+          if (subType === 'invite' && request.eventType === 2) {
+            // A bot self-invite must use the private Ark card's msgseq (#125),
+            // not the sequence returned by 0x10C0. Keep the legacy flag when
+            // correlation times out so the action can retry the cache later.
+            const cardSequence = await this.deps.resolveGroupInviteCardSequence?.(event.groupId) ?? null;
+            if (cardSequence) {
+              event.flag = formatGroupRequestFlag({
+                groupId: event.groupId,
+                sequence: cardSequence,
+                eventType: 2,
+                filtered: false,
+              });
+            } else {
+              this.log.warn('invite-card msgseq unavailable before dispatch: groupId=%d uid=%s',
+                event.groupId, uid);
+            }
+          } else {
+            event.flag = formatGroupRequestFlag(request);
+          }
+        }
       } else if (requestR.status === 'rejected') {
         this.log.warn('failed to resolve group join request: groupId=%d uid=%s err=%s',
           event.groupId, uid,

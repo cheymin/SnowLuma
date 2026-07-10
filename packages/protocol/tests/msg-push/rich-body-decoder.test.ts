@@ -11,11 +11,14 @@
 import { describe, expect, it } from 'vitest';
 import { deflateSync } from 'zlib';
 import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
+import { getLogLevel, setLogLevel, subscribeLogs } from '@snowluma/common/logger';
 import { decodeRichBody } from '../../src/msg-push/rich-body-decoder';
+import { MAX_RICH_CARD_OUTPUT_BYTES } from '../../src/msg-push/helpers';
 import { buildSendElems } from '../../src/element-builder';
+import { assertValidMessageElement } from '../../src/element-manifest';
 import type { MessageElement } from '../../src/events';
 import type { MessageBody } from '@snowluma/proto-defs/message';
-import type { SrcMsgPbReserve } from '@snowluma/proto-defs/element';
+import type { Elem, MsgInfo, QFaceExtra, SrcMsgPbReserve } from '@snowluma/proto-defs/element';
 
 function lightAppBytes(json: unknown): Uint8Array {
   const buf = deflateSync(Buffer.from(JSON.stringify(json), 'utf8'));
@@ -23,6 +26,26 @@ function lightAppBytes(json: unknown): Uint8Array {
   out[0] = 0x01;  // deflate prefix
   out.set(buf, 1);
   return out;
+}
+
+function varint(value: number): number[] {
+  const out: number[] = [];
+  let current = value >>> 0;
+  do {
+    let byte = current & 0x7f;
+    current >>>= 7;
+    if (current !== 0) byte |= 0x80;
+    out.push(byte);
+  } while (current !== 0);
+  return out;
+}
+
+function lengthDelimited(fieldNumber: number, payload: Uint8Array): Uint8Array {
+  return Uint8Array.from([
+    ...varint((fieldNumber << 3) | 2),
+    ...varint(payload.length),
+    ...payload,
+  ]);
 }
 
 describe('decodeRichBody / forward LightApp', () => {
@@ -228,6 +251,25 @@ describe('decodeRichBody / market face', () => {
   });
 });
 
+describe('decodeRichBody / decoded element contract', () => {
+  it('omits an absent PTT fingerprint instead of emitting an invalid empty hash', () => {
+    const body: MessageBody = {
+      richText: {
+        ptt: {
+          fileName: 'voice.silk',
+          fileSize: 12,
+          time: 1,
+          fileMd5: new Uint8Array(),
+        },
+      },
+    } as any;
+    const out = decodeRichBody(body, true);
+    expect(out).toHaveLength(1);
+    expect(out[0]).not.toHaveProperty('md5Hex');
+    expect(() => assertValidMessageElement(out[0], 'D')).not.toThrow();
+  });
+});
+
 // Reply identity for c2c: the replied-to sequence is srcMsg.origSeqs[0] for BOTH
 // group and c2c. On-target capture (#114 / #124) proved origSeqs[0] equals the
 // quoted message's head.sequence — i.e. the seq its message_id is hashed from —
@@ -267,5 +309,477 @@ describe('decodeRichBody / reply uses origSeqs[0] for c2c', () => {
       richText: { elems: [{ srcMsg: { origSeqs: [CLIENT_SEQ] } } as any] },
     };
     expect(decodeRichBody(body, false)).toContainEqual({ type: 'reply', replySeq: CLIENT_SEQ });
+  });
+});
+
+describe('decodeRichBody / unknown wire element observability', () => {
+  it('does not report Proton materialized null fields as wire elements', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const encoded = protobuf_encode<MessageBody>({
+        richText: { elems: [{ text: { str: 'known text' } }] },
+      });
+      const decodedBody = protobuf_decode<MessageBody>(encoded);
+      expect(decodeRichBody(decodedBody, true)).toEqual([{ type: 'text', text: 'known text' }]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured.filter((entry) => entry.scope === 'MsgPush.UnknownElement')).toEqual([]);
+  });
+
+  it('records a service-48 CommonElem with an unknown business type', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const body: MessageBody = {
+        richText: {
+          elems: [{
+            commonElem: {
+              serviceType: 48,
+              businessType: 99,
+              pbElem: protobuf_encode<MsgInfo>({}),
+            },
+          }],
+        },
+      };
+      expect(decodeRichBody(body, true)).toEqual([]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining(
+        'serviceType=48 businessType=99 reason=no recognized MessageElement payload',
+      ),
+    }));
+  });
+
+  it('fails open and records the unsupported wire field plus reason', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const body: MessageBody = {
+        richText: {
+          elems: [{ onlineImage: { filePath: '/unknown-wire-shape' } } as any],
+        },
+      };
+      let decoded: ReturnType<typeof decodeRichBody> | undefined;
+      expect(() => { decoded = decodeRichBody(body, true); }).not.toThrow();
+      expect(decoded).toEqual([]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining('fields=onlineImage reason=no MessageElement decoder'),
+    }));
+  });
+
+  it('retains and records a schema-unknown protobuf tag beside known text', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const knownElem = protobuf_encode<Elem>({
+        text: { str: 'known text' },
+      });
+      const unknownElem = lengthDelimited(60, Uint8Array.of(1, 2, 3));
+      const richText = Uint8Array.from([
+        ...lengthDelimited(2, knownElem),
+        ...lengthDelimited(2, unknownElem),
+      ]);
+      const rawBody = lengthDelimited(1, richText);
+      const decodedBody = protobuf_decode<MessageBody>(rawBody);
+
+      expect(decodeRichBody(decodedBody, true)).toEqual([{ type: 'text', text: 'known text' }]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining(
+        'unknownTag=60 wireType=2 count=1 bytes=4 reason=no schema decoder path=elem',
+      ),
+    }));
+  });
+
+  it('logs repeated unknown tags once with an occurrence count', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const elemBytes: number[] = [...protobuf_encode<Elem>({ text: { str: 'known' } })];
+      const unknown = lengthDelimited(60, Uint8Array.of(7));
+      for (let index = 0; index < 1_000; index++) elemBytes.push(...unknown);
+      const richText = lengthDelimited(2, Uint8Array.from(elemBytes));
+      const decodedBody = protobuf_decode<MessageBody>(lengthDelimited(1, richText));
+
+      expect(decodeRichBody(decodedBody, true)).toEqual([{ type: 'text', text: 'known' }]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    const logs = captured.filter((entry) => entry.message.includes('unknownTag=60'));
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.message).toContain('count=1000 bytes=2000');
+  });
+
+  it('preserves sibling text and records a malformed known card field', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const body: MessageBody = {
+        richText: {
+          elems: [
+            { richMsg: { serviceId: 35, template1: Uint8Array.of(1, 1, 2, 3) } } as any,
+            { text: { str: 'keep me' } } as any,
+          ],
+        },
+      };
+      expect(decodeRichBody(body, true)).toEqual([{ type: 'text', text: 'keep me' }]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining('fields=richMsg reason=no recognized MessageElement payload'),
+    }));
+  });
+
+  it('does not consume the next element when a structural CommonElem is malformed', () => {
+    const body: MessageBody = {
+      richText: {
+        elems: [
+          { commonElem: { serviceType: 3, businessType: 0, pbElem: Uint8Array.of(0, 5) } } as any,
+          { text: { str: 'keep next' } } as any,
+        ],
+      },
+    };
+
+    expect(decodeRichBody(body, true)).toEqual([{ type: 'text', text: 'keep next' }]);
+  });
+
+  it('does not consume sibling text after a decoded big face', () => {
+    const body: MessageBody = {
+      richText: {
+        elems: [
+          {
+            commonElem: {
+              serviceType: 37,
+              businessType: 0,
+              pbElem: protobuf_encode<QFaceExtra>({ qsid: 321 }),
+            },
+          } as any,
+          { text: { str: 'keep after face' } } as any,
+        ],
+      },
+    };
+
+    expect(decodeRichBody(body, true)).toEqual([
+      { type: 'face', faceId: 321 },
+      { type: 'text', text: 'keep after face' },
+    ]);
+  });
+
+  it('records unknown tags inside bytes-embedded protobuf payloads', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const known = protobuf_encode<QFaceExtra>({ qsid: 654 });
+      const pbElem = Uint8Array.from([
+        ...known,
+        ...lengthDelimited(60, Uint8Array.of(1, 2)),
+      ]);
+      const body: MessageBody = {
+        richText: {
+          elems: [{
+            commonElem: { serviceType: 37, businessType: 0, pbElem },
+          } as any],
+        },
+      };
+
+      expect(decodeRichBody(body, true)).toEqual([{ type: 'face', faceId: 654 }]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining(
+        'unknownTag=60 wireType=2 count=1 bytes=3 reason=no schema decoder path=commonElem.bigFace',
+      ),
+    }));
+  });
+
+  it('fails open when an embedded face protobuf is truncated', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const body: MessageBody = {
+        richText: {
+          elems: [
+            {
+              commonElem: {
+                serviceType: 37,
+                businessType: 0,
+                pbElem: Uint8Array.of(0x18, 0x80),
+              },
+            } as any,
+            { text: { str: 'keep after malformed face' } } as any,
+          ],
+        },
+      };
+
+      let decoded: ReturnType<typeof decodeRichBody> | undefined;
+      expect(() => { decoded = decodeRichBody(body, true); }).not.toThrow();
+      expect(decoded).toEqual([
+        { type: 'text', text: 'keep after malformed face' },
+      ]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining(
+        'source=commonElem.bigFace bytes=2 reason=protobuf_truncated',
+      ),
+    }));
+  });
+
+  it('retains and records schema-unknown tags inside nested element messages', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const textPayload = Uint8Array.from([
+        ...lengthDelimited(1, new TextEncoder().encode('nested known text')),
+        ...lengthDelimited(60, Uint8Array.of(9, 8, 7)),
+      ]);
+      const elemPayload = lengthDelimited(1, textPayload);
+      const richTextPayload = lengthDelimited(2, elemPayload);
+      const decodedBody = protobuf_decode<MessageBody>(lengthDelimited(1, richTextPayload));
+
+      expect(decodeRichBody(decodedBody, true)).toEqual([
+        { type: 'text', text: 'nested known text' },
+      ]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining(
+        'unknownTag=60 wireType=2 count=1 bytes=4 reason=no schema decoder path=elem.text',
+      ),
+    }));
+  });
+
+  it('preserves sibling text when a LightApp is not a JSON object', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const body: MessageBody = {
+        richText: {
+          elems: [
+            {
+              lightApp: {
+                data: Uint8Array.from([0, ...Buffer.from('not-json', 'utf8')]),
+              },
+            } as any,
+            { text: { str: 'keep me' } } as any,
+          ],
+        },
+      };
+
+      expect(decodeRichBody(body, true)).toEqual([{ type: 'text', text: 'keep me' }]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining('wire light card ignored inputBytes=9 reason=invalid_json'),
+    }));
+    expect(captured.some((entry) => entry.message.includes('not-json'))).toBe(false);
+  });
+
+  it('records unknown tags on MessageBody and RichText roots', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const knownElem = protobuf_encode<Elem>({ text: { str: 'root known text' } });
+      const richTextPayload = Uint8Array.from([
+        ...lengthDelimited(2, knownElem),
+        ...lengthDelimited(61, Uint8Array.of(4, 5)),
+      ]);
+      const rawBody = Uint8Array.from([
+        ...lengthDelimited(1, richTextPayload),
+        ...lengthDelimited(60, Uint8Array.of(6)),
+      ]);
+      const decodedBody = protobuf_decode<MessageBody>(rawBody);
+
+      expect(decodeRichBody(decodedBody, true)).toEqual([
+        { type: 'text', text: 'root known text' },
+      ]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('unknownTag=60 wireType=2 count=1 bytes=2 reason=no schema decoder path=body'),
+    }));
+    expect(captured).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('unknownTag=61 wireType=2 count=1 bytes=3 reason=no schema decoder path=body.richText'),
+    }));
+  });
+
+  it('does not treat marker-only or non-XML RichMsg data as a card', () => {
+    const body: MessageBody = {
+      richText: {
+        elems: [
+          { richMsg: { serviceId: 35, template1: Uint8Array.of(0) } } as any,
+          {
+            richMsg: {
+              serviceId: 35,
+              template1: Uint8Array.from([0, ...Buffer.from('not xml', 'utf8')]),
+            },
+          } as any,
+          { text: { str: 'keep malformed card fallback' } } as any,
+        ],
+      },
+    };
+
+    expect(decodeRichBody(body, true)).toEqual([
+      { type: 'text', text: 'keep malformed card fallback' },
+    ]);
+  });
+
+  it('bounds compressed card output and preserves sibling text on overflow', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const compressed = deflateSync(Buffer.alloc(MAX_RICH_CARD_OUTPUT_BYTES + 1, 0x61));
+      const data = new Uint8Array(compressed.length + 1);
+      data[0] = 1;
+      data.set(compressed, 1);
+      const body: MessageBody = {
+        richText: {
+          elems: [
+            { lightApp: { data } } as any,
+            { text: { str: 'bounded fallback' } } as any,
+          ],
+        },
+      };
+
+      expect(decodeRichBody(body, true)).toEqual([
+        { type: 'text', text: 'bounded fallback' },
+      ]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining('reason=output_limit_exceeded'),
+    }));
+  });
+
+  it('bounds retained card output across the entire message', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const payload = { app: 'budget-test', data: 'x'.repeat(3 * 1024 * 1024) };
+      const body: MessageBody = {
+        richText: {
+          elems: [
+            { lightApp: { data: lightAppBytes(payload) } } as any,
+            { lightApp: { data: lightAppBytes(payload) } } as any,
+            { lightApp: { data: lightAppBytes(payload) } } as any,
+          ],
+        },
+      };
+
+      const decoded = decodeRichBody(body, true);
+      expect(decoded).toHaveLength(2);
+      expect(decoded.every((element) => element.type === 'json')).toBe(true);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    expect(captured).toContainEqual(expect.objectContaining({
+      scope: 'MsgPush.UnknownElement',
+      message: expect.stringContaining('reason=message_output_budget_exceeded'),
+    }));
+  });
+
+  it('charges malformed card inflation against the message budget', () => {
+    const previousLevel = getLogLevel();
+    const captured: Array<{ scope: string; message: string }> = [];
+    setLogLevel('debug');
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+    try {
+      const compressed = deflateSync(Buffer.alloc(3 * 1024 * 1024, 0x78));
+      const data = new Uint8Array(compressed.length + 1);
+      data[0] = 1;
+      data.set(compressed, 1);
+      const body: MessageBody = {
+        richText: {
+          elems: Array.from({ length: 4 }, () => ({ lightApp: { data } } as any)),
+        },
+      };
+
+      expect(decodeRichBody(body, true)).toEqual([]);
+    } finally {
+      unsubscribe();
+      setLogLevel(previousLevel);
+    }
+
+    const exhausted = captured.filter((entry) => (
+      entry.scope === 'MsgPush.UnknownElement'
+      && entry.message.includes('reason=message_output_budget_exceeded')
+    ));
+    expect(exhausted).toHaveLength(2);
   });
 });

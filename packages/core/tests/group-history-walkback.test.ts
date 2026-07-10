@@ -18,7 +18,7 @@ const mockFetch = vi.mocked(fetchGroupMessageRange);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function gm(seq: number): any {
   return {
-    kind: 'group_message', time: 0, selfUin: 0, senderUin: 1, msgSeq: seq,
+    kind: 'group_message', groupName: '', time: 0, selfUin: 0, senderUin: 1, msgSeq: seq,
     msgId: seq, elements: [], groupId: 9999, senderNick: '', senderCard: '', senderRole: '',
   };
 }

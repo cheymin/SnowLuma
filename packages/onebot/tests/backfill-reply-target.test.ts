@@ -29,14 +29,14 @@ function groupEvent(replySeq: number | null) {
   const elements: any[] = replySeq != null ? [{ type: 'reply', replySeq }] : [];
   elements.push({ type: 'text', text: '同意' });
   return {
-    kind: 'group_message', time: 1, selfUin: SELF, groupId: 700, senderUin: 900,
+    kind: 'group_message', groupName: '', time: 1, selfUin: SELF, groupId: 700, senderUin: 900,
     senderNick: '', senderCard: '', senderRole: 'member', msgSeq: 999, msgId: 2, elements,
   } as any;
 }
 
 function fetchedGroupMessage(msgSeq: number) {
   return {
-    kind: 'group_message', time: 1700000000, selfUin: SELF, groupId: 700, senderUin: 800,
+    kind: 'group_message', groupName: '', time: 1700000000, selfUin: SELF, groupId: 700, senderUin: 800,
     senderNick: 'orig', senderCard: '', senderRole: 'member', msgSeq, msgId: 1,
     elements: [{ type: 'text', text: 'quoted' }],
   } as any;
@@ -153,7 +153,7 @@ describe('backfillReplyTarget', () => {
       bridge: { apis: { message: { getGroupMessageBySeq } }, resolveUserUid: vi.fn() },
     } as any;
     const event = {
-      kind: 'group_message', time: 1, selfUin: SELF, groupId: 700, senderUin: 900,
+      kind: 'group_message', groupName: '', time: 1, selfUin: SELF, groupId: 700, senderUin: 900,
       senderNick: '', senderCard: '', senderRole: 'member', msgSeq: 999, msgId: 2,
       elements: [{ type: 'reply', replySeq: 123, replySenderUin: 800, replyElements: [{ type: 'text', text: 'quoted' }] }],
     } as any;

@@ -1,4 +1,96 @@
+import { createLogger } from '@snowluma/common/logger';
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
+import type { GroupRequestHandle, GroupRequestInfo } from '@snowluma/protocol/qq-info';
+
+const log = createLogger('OneBot.Request');
+
+type ParsedGroupRequestFlag =
+  | ({ kind: 'canonical' } & GroupRequestHandle)
+  | { kind: 'sequence'; sequence: number }
+  | { kind: 'legacy'; requestType: 'add' | 'invite'; groupId: number; targetUid: string };
+
+function positiveSafeInteger(value: string, field: string): number {
+  if (!/^\d+$/.test(value)) throw new Error(`invalid ${field} in group request flag`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid ${field} in group request flag`);
+  }
+  return parsed;
+}
+
+export function parseGroupRequestFlag(flag: string): ParsedGroupRequestFlag {
+  if (/^\d+$/.test(flag)) {
+    return { kind: 'sequence', sequence: positiveSafeInteger(flag, 'sequence') };
+  }
+
+  const parts = flag.split(':');
+  if (parts[0] === 'slreq') {
+    if (parts.length !== 6 || parts[1] !== '1') {
+      throw new Error('unsupported canonical group request flag');
+    }
+    if (parts[5] !== '0' && parts[5] !== '1') {
+      throw new Error('invalid filtered value in group request flag');
+    }
+    return {
+      kind: 'canonical',
+      sequence: positiveSafeInteger(parts[2], 'sequence'),
+      groupId: positiveSafeInteger(parts[3], 'group_id'),
+      eventType: positiveSafeInteger(parts[4], 'event_type'),
+      filtered: parts[5] === '1',
+    };
+  }
+
+  const requestType = parts[0];
+  if ((requestType !== 'add' && requestType !== 'invite') || parts.length < 3) {
+    throw new Error('invalid group request flag');
+  }
+  const groupId = positiveSafeInteger(parts[1], 'group_id');
+  const targetUid = parts.slice(2).join(':');
+  if (!targetUid) throw new Error('invalid request target in flag');
+  return { kind: 'legacy', requestType, groupId, targetUid };
+}
+
+async function fetchRequestInboxes(bridge: BridgeInterface): Promise<GroupRequestInfo[]> {
+  const [main, filtered] = await Promise.allSettled([
+    bridge.apis.contacts.fetchGroupRequests(false),
+    bridge.apis.contacts.fetchGroupRequests(true),
+  ]);
+
+  if (main.status === 'rejected') {
+    log.warn('failed to fetch main group-request inbox: %s',
+      main.reason instanceof Error ? main.reason.message : String(main.reason));
+  }
+  if (filtered.status === 'rejected') {
+    log.warn('failed to fetch filtered group-request inbox: %s',
+      filtered.reason instanceof Error ? filtered.reason.message : String(filtered.reason));
+  }
+  if (main.status === 'rejected' && filtered.status === 'rejected') {
+    throw new Error('failed to fetch group requests from both inboxes');
+  }
+
+  return [
+    ...(main.status === 'fulfilled' ? main.value : []),
+    ...(filtered.status === 'fulfilled' ? filtered.value : []),
+  ];
+}
+
+async function applyGroupRequest(
+  bridge: BridgeInterface,
+  handle: GroupRequestHandle,
+  approve: boolean,
+  reason: string,
+): Promise<void> {
+  log.debug('handling group request: group=%d sequence=%d eventType=%d filtered=%s approve=%s',
+    handle.groupId, handle.sequence, handle.eventType, handle.filtered, approve);
+  await bridge.apis.groupAdmin.setAddRequest(
+    handle.groupId,
+    handle.sequence,
+    handle.eventType,
+    approve,
+    reason,
+    handle.filtered,
+  );
+}
 
 export async function handleGroupAddRequest(
   bridge: BridgeInterface,
@@ -6,55 +98,58 @@ export async function handleGroupAddRequest(
   approve: boolean,
   reason: string,
 ): Promise<void> {
-  // flag format: "add:groupId:uid" or "invite:groupId:uid"
-  const parts = flag.split(':');
-  if (parts.length < 3) throw new Error('invalid group request flag');
-  const requestType = parts[0];
-  const groupId = parseInt(parts[1], 10);
-  const targetUid = parts.slice(2).join(':');
-  if (!groupId) throw new Error('invalid group_id in flag');
-  if (!targetUid) throw new Error('invalid request target in flag');
+  const parsed = parseGroupRequestFlag(flag);
 
-  // Bot self-invited via a private "qun.invite" card: the only sequence the
-  // server accepts at 0x10c8_1 is that card's jumpUrl msgseq, with eventType=2
-  // / filtered=false. The fetchGroupRequests tuple below fails this case with
-  // 120161001 ("handle async message fail"). See issue #125.
-  if (requestType === 'invite') {
-    const cardSequence = bridge.apis.contacts.getGroupInviteCardSequence(groupId);
+  if (parsed.kind === 'canonical') {
+    await applyGroupRequest(bridge, parsed, approve, reason);
+    return;
+  }
+
+  if (parsed.kind === 'sequence') {
+    // Private "qun.invite" cards use their Ark msgseq and never appear under
+    // that sequence in 0x10C0. Resolve the reverse card cache before inboxes.
+    const cardGroupId = bridge.apis.contacts.findGroupInviteCardGroupBySequence(parsed.sequence);
+    if (cardGroupId) {
+      await applyGroupRequest(bridge, {
+        groupId: cardGroupId,
+        sequence: parsed.sequence,
+        eventType: 2,
+        filtered: false,
+      }, approve, reason);
+      return;
+    }
+
+    const matching = (await fetchRequestInboxes(bridge))
+      .find((request) => request.sequence === parsed.sequence);
+    if (!matching) throw new Error(`group request sequence ${parsed.sequence} not found`);
+    await applyGroupRequest(bridge, matching, approve, reason);
+    return;
+  }
+
+  // Legacy SnowLuma flags remain accepted for events emitted by older builds.
+  // A private invite card needs its msgseq rather than the 0x10C0 tuple (#125).
+  if (parsed.requestType === 'invite') {
+    const cardSequence = bridge.apis.contacts.getGroupInviteCardSequence(parsed.groupId);
     if (cardSequence) {
-      await bridge.apis.groupAdmin.setAddRequest(groupId, cardSequence, 2, approve, reason, false);
+      await applyGroupRequest(bridge, {
+        groupId: parsed.groupId,
+        sequence: cardSequence,
+        eventType: 2,
+        filtered: false,
+      }, approve, reason);
       return;
     }
   }
 
-  // A join/invite request lands in either the main inbox (0x10c8 subCommand 1)
-  // or the spam-filtered one (subCommand 2). The old code only fetched the main
-  // inbox, so a filtered request that SnowLuma had already reported to the
-  // client couldn't be approved through its own flag — "matching group request
-  // not found" (#197). Search both; each request keeps the `filtered` flag its
-  // inbox needs for the approval subCommand. One inbox failing degrades to the
-  // other rather than aborting.
-  const [mainInbox, filteredInbox] = await Promise.all([
-    bridge.apis.contacts.fetchGroupRequests(false).catch(() => []),
-    bridge.apis.contacts.fetchGroupRequests(true).catch(() => []),
-  ]);
-  const requests = [...mainInbox, ...filteredInbox];
-  const matching = requests.find((r) => {
-    if (r.groupId !== groupId) return false;
-    if (requestType === 'add') return r.targetUid === targetUid;
-    if (requestType === 'invite') return r.invitorUid === targetUid;
-    return false;
-  }) || requests.find(r => r.groupId === groupId);
+  const matching = (await fetchRequestInboxes(bridge)).find((request) => {
+    if (request.groupId !== parsed.groupId) return false;
+    return parsed.requestType === 'add'
+      ? request.targetUid === parsed.targetUid
+      : request.invitorUid === parsed.targetUid;
+  });
 
-  if (!matching) {
-    throw new Error('matching group request not found');
-  }
-  await bridge.apis.groupAdmin.setAddRequest(
-    groupId,
-    matching.sequence,
-    matching.eventType,
-    approve,
-    reason,
-    matching.filtered,
-  );
+  // Never fall back to an arbitrary request from the same group: when a UID
+  // does not match, approving another pending request is worse than failing.
+  if (!matching) throw new Error('matching group request not found');
+  await applyGroupRequest(bridge, matching, approve, reason);
 }

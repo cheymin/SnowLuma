@@ -86,14 +86,49 @@ class HttpApiClient implements ApiClient {
       },
       save: async (uin, config) => {
         const url = `/api/config/${encodeURIComponent(uin)}`;
-        // POST returns { success, reloaded, message } — no config body. To
-        // honour the "save returns canonical server view" contract, refetch
-        // after a successful POST.
-        await this.fetchJson<unknown>(url, {
+        const result = await this.fetchJson<{
+          success?: boolean;
+          saved?: boolean;
+          applied?: boolean;
+          online?: boolean;
+          reloaded?: boolean;
+          errors?: Array<{
+            name: string;
+            kind?: 'httpServer' | 'httpClient' | 'wsServer' | 'wsClient';
+            phase: string;
+            message: string;
+            at: number;
+            restored?: boolean;
+          }>;
+          config?: unknown;
+          message?: string;
+        }>(url, {
           method: 'POST',
           body: JSON.stringify(config),
         });
-        return this.config.get(uin);
+        // Refetch the canonical persisted view after the save. Runtime apply
+        // is a separate fact and is preserved alongside that config.
+        let canonical = result.config === undefined
+          ? null
+          : normalizeOneBotConfig(result.config);
+        if (canonical === null) {
+          try {
+            canonical = await this.config.get(uin);
+          } catch (error) {
+            // Legacy servers omit `config`. Their POST still confirmed the
+            // save, so a follow-up GET failure must not become "保存失败".
+            console.warn('config saved but canonical refetch failed', error);
+            canonical = config;
+          }
+        }
+        return {
+          config: canonical,
+          saved: result.saved ?? result.success === true,
+          applied: result.applied ?? result.reloaded === true,
+          online: result.online ?? result.reloaded === true,
+          errors: Array.isArray(result.errors) ? result.errors : [],
+          message: result.message ?? '配置保存成功',
+        };
       },
     };
 

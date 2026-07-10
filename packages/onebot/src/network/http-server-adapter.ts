@@ -17,24 +17,56 @@ const moduleLog = createLogger('OneBot.HTTP');
 export class HttpServerAdapter extends IOneBotNetworkAdapter<HttpServerNetwork> {
   private server: Server | null = null;
   private listening = false;
+  private closePromise: Promise<void> | null = null;
+  private acceptingActions = false;
+  private readonly inFlightActions = new Set<Promise<void>>();
 
   constructor(name: string, config: HttpServerNetwork, ctx: NetworkAdapterContext) {
     super(name, config, ctx, moduleLog);
   }
 
-  open(): void {
-    if (this.isEnabled) return;
+  async open(): Promise<void> {
+    if (this.isEnabled && this.listening) return;
     if (this.config.enabled === false) return;
-    this.startServer();
+    if (this.server) throw new Error(`HTTP adapter [${this.name}] still owns a previous server`);
+    await this.startServer();
     this.isEnabled = true;
+    this.clearApplyFailure();
   }
 
-  close(): void {
-    if (!this.isEnabled && !this.server) return;
+  async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    if (!this.isEnabled && !this.server && this.inFlightActions.size === 0) return;
+    const wasEnabled = this.isEnabled;
+    const wasListening = this.listening;
+    const wasAcceptingActions = this.acceptingActions;
+    this.acceptingActions = false;
     this.isEnabled = false;
     this.listening = false;
-    this.server?.close();
-    this.server = null;
+    const server = this.server;
+    const release = server
+      ? new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error && !isAlreadyClosedError(error)) reject(error);
+          else resolve();
+        });
+      })
+      : Promise.resolve();
+    const attempt = Promise.all([release, Promise.all(this.inFlightActions)]).then(() => undefined);
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      if (this.server === server) this.server = null;
+    } catch (error) {
+      // A failed close callback cannot prove the listener was released. Keep
+      // ownership and live-state truth so shutdown/reconcile can retry it.
+      this.isEnabled = wasEnabled;
+      this.listening = wasListening;
+      this.acceptingActions = wasAcceptingActions;
+      throw error;
+    } finally {
+      this.closePromise = null;
+    }
   }
 
   override describeStatus(): AdapterStatus {
@@ -49,28 +81,57 @@ export class HttpServerAdapter extends IOneBotNetworkAdapter<HttpServerNetwork> 
 
   onEvent(_event: JsonObject, _payload: DispatchPayload): void { /* no-op */ }
 
-  private startServer(): void {
-    const server = createServer((req, res) => {
-      void this.handleRequest(req, res);
-    });
-    this.server = server;
+  private startServer(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const server = createServer((req, res) => {
+        this.trackInboundAction(req, res);
+      });
+      this.server = server;
+      let opening = true;
 
-    server.on('listening', () => {
-      this.listening = true;
-      this.log.success(
-        '[%s] listening %s:%d%s',
-        this.name,
-        this.config.host ?? '0.0.0.0',
-        this.config.port,
-        normalizePath(this.config.path ?? '/'),
-      );
-    });
-    server.on('error', (err) => {
-      this.listening = false;
-      this.log.warn('[%s] server error: %s', this.name, err instanceof Error ? err.message : String(err));
-    });
+      server.once('listening', () => {
+        opening = false;
+        if (this.server !== server || this.closePromise) {
+          server.close();
+          reject(new Error(`HTTP adapter [${this.name}] was closed while binding`));
+          return;
+        }
+        this.listening = true;
+        this.isEnabled = true;
+        this.acceptingActions = true;
+        this.log.success(
+          '[%s] listening %s:%d%s',
+          this.name,
+          this.config.host ?? '0.0.0.0',
+          this.config.port,
+          normalizePath(this.config.path ?? '/'),
+        );
+        resolve();
+      });
+      server.on('error', (error) => {
+        if (this.server === server) {
+          this.listening = false;
+          this.isEnabled = false;
+          this.acceptingActions = false;
+          this.recordTransportFailure(error);
+          if (opening) this.server = null;
+        }
+        this.log.error('[%s] server error: %s', this.name, error instanceof Error ? error.message : String(error));
+        if (opening) {
+          opening = false;
+          reject(error);
+        }
+      });
 
-    server.listen(this.config.port, this.config.host ?? '0.0.0.0');
+      try {
+        server.listen(this.config.port, this.config.host ?? '0.0.0.0');
+      } catch (error) {
+        opening = false;
+        if (this.server === server) this.server = null;
+        this.recordTransportFailure(error);
+        reject(error);
+      }
+    });
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -200,6 +261,33 @@ export class HttpServerAdapter extends IOneBotNetworkAdapter<HttpServerNetwork> 
       writeJson(res, 500, { status: 'failed', retcode: 1200, data: null, wording });
     }
   }
+
+  private trackInboundAction(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.acceptingActions || this.ctx.api.isAcceptingActions === false) {
+      writeJson(res, 503, { status: 'failed', retcode: 1200, data: null, wording: 'server closing' });
+      return;
+    }
+    let action: Promise<void>;
+    try {
+      action = this.handleRequest(req, res);
+    } catch (error) {
+      this.log.error('[%s] inbound action start failed: %s', this.name, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      writeJson(res, 500, { status: 'failed', retcode: 1200, data: null, wording: 'internal error' });
+      return;
+    }
+    const tracked = action.then(
+      () => undefined,
+      (error) => {
+        this.log.error('[%s] inbound action failed: %s', this.name, error instanceof Error ? (error.stack ?? error.message) : String(error));
+      },
+    );
+    this.inFlightActions.add(tracked);
+    void tracked.then(() => { this.inFlightActions.delete(tracked); });
+  }
+}
+
+function isAlreadyClosedError(error: Error): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING';
 }
 
 function readRequestBody(req: IncomingMessage, maxBytes = 2 * 1024 * 1024): Promise<string> {
@@ -223,7 +311,7 @@ function readRequestBody(req: IncomingMessage, maxBytes = 2 * 1024 * 1024): Prom
 function writeJson(res: ServerResponse, statusCode: number, data: unknown): void {
   // A streaming response may already have flushed headers (and even ended); a
   // late error must not double-send and trip ERR_HTTP_HEADERS_SENT.
-  if (res.headersSent || res.writableEnded) return;
+  if (res.headersSent || res.writableEnded || res.destroyed) return;
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(data));

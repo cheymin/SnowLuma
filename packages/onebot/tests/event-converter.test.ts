@@ -54,6 +54,7 @@ function makeGroupMessage(senderUin: number): GroupMessage {
     time: 1700000000,
     selfUin: SELF_ID,
     groupId: 99999,
+    groupName: 'Test Group 测试群',
     senderUin,
     senderNick: senderUin === SELF_ID ? 'me' : 'peer',
     senderCard: '',
@@ -100,6 +101,7 @@ describe('convertEvent — message kinds', () => {
     expect(out!.message_type).toBe('group');
     expect(out!.sub_type).toBe('normal');
     expect(out!.group_id).toBe(GROUP_ID);
+    expect(out!.group_name).toBe('Test Group 测试群');
   });
 
   it('group_message self → post_type "message_sent"', async () => {
@@ -107,10 +109,13 @@ describe('convertEvent — message kinds', () => {
     expect(out!.post_type).toBe('message_sent');
   });
 
-  it('temp_message peer → post_type "message", sub_type "group"', async () => {
+  it('temp_message peer → post_type "message", sub_type "group", sender.group_id set', async () => {
     const out = await convertEvent(bareCtx(), makeTempMessage(PEER_UIN));
     expect(out!.post_type).toBe('message');
     expect(out!.sub_type).toBe('group');
+    // Source group is surfaced on sender.group_id so a client can reply via
+    // send_private_msg(user_id, group_id=...).
+    expect((out!.sender as { group_id?: number }).group_id).toBe(99999);
   });
 
   it('temp_message self → post_type "message_sent"', async () => {
@@ -375,6 +380,19 @@ describe('convertEvent — message elements (13 segment types)', () => {
         sub_type: 1,
         summary: '[动画表情]',
       },
+    });
+  });
+
+  it('image: preserves the flash marker on the OneBot segment', async () => {
+    const seg = await segment({
+      type: 'image',
+      fileId: 'fid',
+      imageUrl: 'http://x',
+      flash: true,
+    });
+    expect(seg).toMatchObject({
+      type: 'image',
+      data: { type: 'flash' },
     });
   });
 

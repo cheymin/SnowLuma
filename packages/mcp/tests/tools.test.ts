@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeTools, callTool } from '../src/tools';
-import type { ActionClient, OneBotEnvelope } from '../src/client';
+import { computeTools, callTool, parseMode } from '../src/tools';
+import type { ActionClient, OneBotEnvelope, StreamCallOptions, StreamCallResult } from '../src/client';
 
 type Res = Awaited<ReturnType<typeof callTool>>;
 function text(res: Res): string {
@@ -13,13 +13,28 @@ function parsed(res: Res): any {
 
 /** A fake ActionClient — no transport. Records the last call and returns a
  *  canned envelope (overridable per test). */
-function fakeClient(impl?: (action: string, params: Record<string, unknown>) => OneBotEnvelope): ActionClient {
+function fakeClient(
+  impl?: (action: string, params: Record<string, unknown>) => OneBotEnvelope,
+  streamImpl?: (action: string, params: Record<string, unknown>, options?: StreamCallOptions) => StreamCallResult,
+): ActionClient {
   return {
     call: async (action, params) => impl?.(action, params) ?? { status: 'ok', retcode: 0, data: { action, params } },
+    callStream: async (action, params, options) => streamImpl?.(action, params, options) ?? {
+      frame_count: 1,
+      frames: [],
+      terminal: { status: 'ok', retcode: 0, data: { type: 'response', action, params } },
+    },
   };
 }
 
 describe('computeTools — mode gating', () => {
+  it('fails fast on an invalid SNOWLUMA_MCP_MODE', () => {
+    expect(parseMode(undefined)).toBeUndefined();
+    expect(parseMode('WRITE')).toBe('write');
+    for (const invalid of ['', 'unsafe', 'reader']) {
+      expect(() => parseMode(invalid), invalid).toThrow(/SNOWLUMA_MCP_MODE/);
+    }
+  });
   it('docs mode exposes only the 4 catalog tools', () => {
     expect(computeTools('docs').map((t) => t.name)).toEqual([
       'list_actions', 'get_action', 'search_actions', 'list_categories',
@@ -100,6 +115,7 @@ describe('callTool — invoke_action (write)', () => {
         seen = { action, params };
         return { status: 'ok', retcode: 0, data: { message_id: 42 } };
       },
+      callStream: async () => { throw new Error('unexpected stream call'); },
     };
     const res = await callTool('invoke_action', { action: 'send_group_msg', params: { group_id: 1, message: 'hi' } }, { mode: 'write', client });
     expect(res.isError).toBeFalsy();
@@ -120,7 +136,10 @@ describe('callTool — invoke_action (write)', () => {
     expect(parsed(res).wording).toBe('未找到');
   });
   it('maps a transport-level throw to isError', async () => {
-    const client: ActionClient = { call: async () => { throw new Error('connection refused'); } };
+    const client: ActionClient = {
+      call: async () => { throw new Error('connection refused'); },
+      callStream: async () => { throw new Error('unexpected stream call'); },
+    };
     const res = await callTool('invoke_action', { action: 'send_group_msg', params: {} }, { mode: 'write', client });
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('调用失败');
@@ -134,5 +153,67 @@ describe('callTool — invoke_action (write)', () => {
     const res = await callTool('invoke_action', { action: 'frobnicate' }, { mode: 'write', client: fakeClient() });
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('未知 action');
+  });
+
+  it('routes catalog Stream Actions through callStream and returns the bounded summary', async () => {
+    let ordinaryCalls = 0;
+    let streamCalls = 0;
+    const terminal = { status: 'ok', retcode: 0, data: { type: 'response', data_type: 'data_complete' } };
+    const client: ActionClient = {
+      call: async () => { ordinaryCalls++; return { status: 'ok', retcode: 0 }; },
+      callStream: async (action, params) => {
+        streamCalls++;
+        expect(action).toBe('test_download_stream');
+        expect(params).toEqual({ error: false });
+        return { frame_count: 1, frames: [], terminal };
+      },
+    };
+
+    const res = await callTool('invoke_action', { action: 'test_download_stream', params: { error: false } }, { mode: 'write', client });
+
+    expect(res.isError).toBeFalsy();
+    expect(parsed(res)).toEqual({ frame_count: 1, frames: [], terminal });
+    expect(streamCalls).toBe(1);
+    expect(ordinaryCalls).toBe(0);
+  });
+
+  it('passes execution.input_file only as an MCP upload option, never as OneBot params', async () => {
+    let seen: { params: Record<string, unknown>; inputFile?: string } | undefined;
+    const client = fakeClient(undefined, (_action, params, options) => {
+      seen = { params, inputFile: options?.inputFile };
+      return {
+        file_path: '/remote/local.txt', file_size: 5, sha256: 'abc', chunk_count: 1, stream_id: 'id',
+        terminal: { status: 'ok', retcode: 0, data: { type: 'response', status: 'file_complete' } },
+      };
+    });
+
+    const res = await callTool('invoke_action', {
+      action: 'upload_file_stream',
+      params: { file_retention: 0 },
+      execution: { input_file: '/allowed/local.txt' },
+    }, { mode: 'write', client });
+
+    expect(res.isError).toBeFalsy();
+    expect(seen).toEqual({ params: { file_retention: 0 }, inputFile: '/allowed/local.txt' });
+  });
+
+  it('forwards MCP request cancellation to Stream Action execution', async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const client = fakeClient(undefined, (_action, _params, options) => {
+      seenSignal = options?.signal;
+      return {
+        frame_count: 1,
+        frames: [],
+        terminal: { status: 'ok', retcode: 0, data: { type: 'response', data_type: 'data_complete' } },
+      };
+    });
+
+    const res = await callTool('invoke_action', { action: 'test_download_stream', params: {} }, {
+      mode: 'write', client, signal: controller.signal,
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(seenSignal).toBe(controller.signal);
   });
 });

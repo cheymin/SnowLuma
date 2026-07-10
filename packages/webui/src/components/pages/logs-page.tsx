@@ -28,6 +28,9 @@ const levelClass: Record<LogLevel, string> = {
 };
 
 const LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'success', 'warn', 'error'];
+// More than this many new lines in one flush ⇒ firehose: suppress the per-row
+// entrance so a 100 line/s stream never strobes (scroll flow + edge fade carry it).
+const BURST_MAX = 4;
 
 // View presets bundle the display prefs (levels/maxLines/autoScroll/wrap). The
 // server stores only the id; 'custom' (any hand-tuned state) has no bundle.
@@ -92,7 +95,7 @@ function ToolButton({ label, onClick, children, active, danger, disabled }: Tool
 
 export function LogsPage() {
   const api = useApi();
-  const { formatClock } = useTheme();
+  const { formatClock, appearance } = useTheme();
   const { pages, setPages } = useLayout();
   const prefs = pages.logs;
 
@@ -106,6 +109,12 @@ export function LogsPage() {
   const [newKeyword, setNewKeyword] = useState('');
   const [newColor, setNewColor] = useState(HIGHLIGHT_COLORS[0].id);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Ids currently playing the entrance animation. Populated in the flush (from
+  // real arrivals, so it's immune to filter/idle churn) and pruned by a 260ms
+  // timer so a later scroll-into-view never replays. Render reads it directly.
+  const animatingRef = useRef<Set<number>>(new Set());
+  const animTimersRef = useRef<Set<number>>(new Set());
+  const motionOnRef = useRef(true); // live motion pref for the async flush closure
 
   // maxLines is read through a ref so changing it doesn't re-subscribe the SSE.
   const maxLines = prefs.maxLines;
@@ -152,11 +161,30 @@ export function LogsPage() {
     // maxLines cap are preserved (a reconnect can replay recent ids).
     let pending: LogEntry[] = [];
     let flushTimer: number | null = null;
+    // Stable Set instances — captured so cleanup clears the very sets the flush
+    // mutates (satisfies the ref-in-cleanup lint without changing behaviour).
+    const animating = animatingRef.current;
+    const animTimers = animTimersRef.current;
     const flush = () => {
       flushTimer = null;
       if (pending.length === 0) return;
       const batchMap = new Map(pending.map((e) => [e.id, e] as const));
       pending = [];
+      // Mark just-arrived lines for the entrance animation — but suppress a
+      // firehose batch (> BURST_MAX) so 100 lines/s never strobes; the scroll
+      // flow + edge fade carry it instead. Populating here (before setLogs)
+      // means the very first paint of the row already has the class, and the
+      // 260ms timer bounds it so a later scroll-into-view can't replay it.
+      if (motionOnRef.current && batchMap.size > 0 && batchMap.size <= BURST_MAX) {
+        for (const id of batchMap.keys()) {
+          animatingRef.current.add(id);
+          const t = window.setTimeout(() => {
+            animatingRef.current.delete(id);
+            animTimersRef.current.delete(t);
+          }, 260);
+          animTimersRef.current.add(t);
+        }
+      }
       setLogs((prev) => {
         const kept = prev.length ? prev.filter((it) => !batchMap.has(it.id)) : prev;
         const merged = kept.length ? [...kept, ...batchMap.values()] : [...batchMap.values()];
@@ -177,6 +205,9 @@ export function LogsPage() {
     return () => {
       dispose();
       if (flushTimer != null) clearTimeout(flushTimer);
+      for (const t of animTimers) clearTimeout(t);
+      animTimers.clear();
+      animating.clear();
     };
   }, [api]);
 
@@ -228,6 +259,44 @@ export function LogsPage() {
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logs, filtered.length, prefs.autoScroll, prefs.wrap]);
+
+  // Entrance detection lives in the flush (real arrivals only). Here we just keep
+  // the flush's motion read live, since it was captured once in the [api] effect.
+  const motionOn = !appearance.reduceMotion && !appearance.disableMotion;
+  useEffect(() => { motionOnRef.current = motionOn; }, [motionOn]);
+
+  // Scroll-position-aware edge fade: fade a boundary only when hidden content
+  // actually exists past it, so a fully-scrolled top/bottom row is never dimmed.
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+  const recomputeEdges = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const top = el.scrollTop > 4; // small hysteresis so a 1px nudge can't flicker the fade
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    setEdges((p) => (p.top === top && p.bottom === bottom ? p : { top, bottom }));
+  }, []);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    recomputeEdges();
+    el.addEventListener('scroll', recomputeEdges, { passive: true });
+    // A ResizeObserver on the viewport catches height changes the scroll/content
+    // effects miss — e.g. the options panel expanding above the list, or a window
+    // resize — in one listener.
+    const ro = new ResizeObserver(() => recomputeEdges());
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', recomputeEdges);
+      ro.disconnect();
+    };
+  }, [recomputeEdges]);
+  // New lines / wrap changes shift the overflow, so recheck the edges then too.
+  useEffect(() => { recomputeEdges(); }, [filtered.length, prefs.wrap, recomputeEdges]);
+  const maskCls = appearance.disableMotion ? undefined
+    : edges.top && edges.bottom ? 'log-fade-both'
+      : edges.top ? 'log-fade-top'
+        : edges.bottom ? 'log-fade-bottom'
+          : undefined;
 
   // Any hand edit to the bundled prefs drops the active preset to 'custom'.
   const toggleLevel = (lv: LogLevel) => {
@@ -537,7 +606,7 @@ export function LogsPage() {
               <span className="flex-1">消息</span>
             </div>
           )}
-          <ScrollArea viewportRef={scrollRef} className="min-h-0 flex-1" viewportClassName="[&>div]:!block">
+          <ScrollArea viewportRef={scrollRef} className="min-h-0 flex-1" viewportClassName={cn('[&>div]:!block', maskCls)}>
             <div className="font-mono text-xs">
               {filtered.length === 0 ? (
                 <div className="flex min-h-60 flex-col items-center justify-center gap-3 px-4 py-10 text-center font-sans text-muted-foreground">
@@ -560,34 +629,46 @@ export function LogsPage() {
                     const log = filtered[vRow.index];
                     if (!log) return null; // guard a transient count/measurement skew
                     const hl = matchHighlight(log.message, prefs.highlightRules);
+                    // Entrance is decided entirely by animatingRef (populated in
+                    // the flush from real arrivals, pruned at 260ms), so it fires
+                    // on the first paint, never replays on scroll-into-view, and
+                    // is immune to filter/idle churn. Outer = positioning +
+                    // measurement (its translateY); inner = visual row + the
+                    // transform-based entrance, kept separate so they never collide.
+                    const entering = animatingRef.current.has(log.id);
                     return (
                       <div
                         key={log.id}
                         data-index={vRow.index}
                         ref={rowVirtualizer.measureElement}
-                        className="absolute left-0 top-0 flex w-full flex-col gap-0.5 border-b border-border/30 px-3 py-1.5 transition-colors hover:bg-accent/40 sm:flex-row sm:items-start sm:gap-3 sm:py-1"
-                        style={{
-                          transform: `translateY(${vRow.start}px)`,
-                          ...(hl ? { boxShadow: `inset 3px 0 0 ${hl}`, backgroundColor: `color-mix(in oklab, ${hl} 8%, transparent)` } : {}),
-                        }}
+                        className="absolute left-0 top-0 w-full"
+                        style={{ transform: `translateY(${vRow.start}px)` }}
                       >
-                        <div className="flex items-center gap-3 sm:contents">
-                          <span className="w-[104px] shrink-0 tabular-nums text-muted-foreground">{formatClock(log.time)}</span>
-                          <span className={cn('flex w-[76px] shrink-0 items-center gap-1.5 font-semibold', levelClass[log.level])}>
-                            <span className="size-1.5 shrink-0 rounded-full bg-current" />
-                            {log.level.toUpperCase()}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-muted-foreground sm:w-28 sm:flex-none sm:shrink-0">[{log.scope}]</span>
-                        </div>
-                        <span
-                          className={cn('min-w-0 flex-1 leading-5', prefs.wrap ? 'whitespace-pre-wrap break-all' : 'truncate')}
-                          title={prefs.wrap ? undefined : log.message}
-                        >
-                          {log.req !== undefined && (
-                            <span className="mr-1.5 rounded bg-primary/10 px-1 text-[10px] text-primary tabular-nums" title="请求关联号">#{log.req}</span>
+                        <div
+                          className={cn(
+                            'flex flex-col gap-0.5 border-b border-border/30 px-3 py-1.5 transition-colors hover:bg-accent/40 sm:flex-row sm:items-start sm:gap-3 sm:py-1',
+                            entering && 'log-row-in',
                           )}
-                          {log.message}
-                        </span>
+                          style={hl ? { boxShadow: `inset 3px 0 0 ${hl}`, backgroundColor: `color-mix(in oklab, ${hl} 8%, transparent)` } : undefined}
+                        >
+                          <div className="flex items-center gap-3 sm:contents">
+                            <span className="w-[104px] shrink-0 tabular-nums text-muted-foreground">{formatClock(log.time)}</span>
+                            <span className={cn('flex w-[76px] shrink-0 items-center gap-1.5 font-semibold', levelClass[log.level])}>
+                              <span className="size-1.5 shrink-0 rounded-full bg-current" />
+                              {log.level.toUpperCase()}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-muted-foreground sm:w-28 sm:flex-none sm:shrink-0">[{log.scope}]</span>
+                          </div>
+                          <span
+                            className={cn('min-w-0 flex-1 leading-5', prefs.wrap ? 'whitespace-pre-wrap break-all' : 'truncate')}
+                            title={prefs.wrap ? undefined : log.message}
+                          >
+                            {log.req !== undefined && (
+                              <span className="mr-1.5 rounded bg-primary/10 px-1 text-[10px] text-primary tabular-nums" title="请求关联号">#{log.req}</span>
+                            )}
+                            {log.message}
+                          </span>
+                        </div>
                       </div>
                     );
                   })}

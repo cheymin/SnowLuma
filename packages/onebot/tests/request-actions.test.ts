@@ -8,7 +8,7 @@ const APIS_ROUTING: Record<string, string> = {
   fetchFriendList: 'contacts', fetchGroupList: 'contacts',
   fetchGroupMemberList: 'contacts', fetchUserProfile: 'contacts',
   fetchGroupRequests: 'contacts', fetchDownloadRKeys: 'contacts',
-  getGroupInviteCardSequence: 'contacts',
+  getGroupInviteCardSequence: 'contacts', findGroupInviteCardGroupBySequence: 'contacts',
 };
 
 function fakeBridge(overrides: Record<string, any> = {}): BridgeInterface {
@@ -52,6 +52,63 @@ function fakeRequest(overrides: Partial<GroupRequestInfo> = {}): GroupRequestInf
 }
 
 describe('onebot/modules/request-actions / handleGroupAddRequest', () => {
+  it('uses a canonical self-contained flag without refetching the request queue', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const fetchGroupRequests = vi.fn(async () => []);
+    const bridge = fakeBridge({
+      fetchGroupRequests,
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await handleGroupAddRequest(bridge, 'slreq:1:123456:999:22:1', true, 'ok');
+
+    expect(fetchGroupRequests).not.toHaveBeenCalled();
+    expect(setAddRequest).toHaveBeenCalledWith(999, 123456, 22, true, 'ok', true);
+  });
+
+  it('accepts a NapCat numeric sequence and resolves the exact main-inbox request', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      findGroupInviteCardGroupBySequence: vi.fn(() => undefined),
+      fetchGroupRequests: vi.fn(async (filtered: boolean) => filtered ? [] : [
+        fakeRequest({ groupId: 999, sequence: 261237407, eventType: 7, filtered: false }),
+      ]),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await handleGroupAddRequest(bridge, '261237407', false, 'no');
+
+    expect(setAddRequest).toHaveBeenCalledWith(999, 261237407, 7, false, 'no', false);
+  });
+
+  it('accepts a NapCat numeric sequence from the filtered inbox', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      findGroupInviteCardGroupBySequence: vi.fn(() => undefined),
+      fetchGroupRequests: vi.fn(async (filtered: boolean) => filtered ? [
+        fakeRequest({ groupId: 999, sequence: 55, eventType: 2, filtered: true }),
+      ] : []),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await handleGroupAddRequest(bridge, '55', true, 'ok');
+
+    expect(setAddRequest).toHaveBeenCalledWith(999, 55, 2, true, 'ok', true);
+  });
+
+  it('resolves a private invite-card msgseq by its cached group', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      findGroupInviteCardGroupBySequence: vi.fn(() => 999),
+      fetchGroupRequests: vi.fn(async () => []),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await handleGroupAddRequest(bridge, '778899', true, 'ok');
+
+    expect(setAddRequest).toHaveBeenCalledWith(999, 778899, 2, true, 'ok', false);
+  });
+
   it('matches add requests by groupId and targetUid', async () => {
     const setAddRequest = vi.fn(async () => {});
     const bridge = fakeBridge({
@@ -110,5 +167,61 @@ describe('onebot/modules/request-actions / handleGroupAddRequest', () => {
     });
     await expect(handleGroupAddRequest(bridge, 'invite:999:u_i', true, 'ok'))
       .rejects.toThrow(/matching group request not found/);
+  });
+
+  it('does not treat an inviter QQ number as a request sequence (#213)', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      findGroupInviteCardGroupBySequence: vi.fn(() => undefined),
+      fetchGroupRequests: vi.fn(async () => [
+        fakeRequest({ groupId: 888, invitorUin: 261237407, sequence: 123456 }),
+      ]),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await expect(handleGroupAddRequest(bridge, '261237407', true, 'ok'))
+      .rejects.toThrow(/sequence 261237407 not found/);
+    expect(setAddRequest).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to another request from the same group', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => [
+        fakeRequest({ groupId: 999, targetUid: 'u_someone_else' }),
+      ]),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await expect(handleGroupAddRequest(bridge, 'add:999:u_missing', true, 'ok'))
+      .rejects.toThrow(/matching group request not found/);
+    expect(setAddRequest).not.toHaveBeenCalled();
+  });
+
+  it('uses the surviving inbox when the other request lookup fails', async () => {
+    const setAddRequest = vi.fn(async () => {});
+    const bridge = fakeBridge({
+      findGroupInviteCardGroupBySequence: vi.fn(() => undefined),
+      fetchGroupRequests: vi.fn(async (filtered: boolean) => {
+        if (!filtered) throw new Error('main inbox down');
+        return [fakeRequest({ groupId: 999, sequence: 55, eventType: 2, filtered: true })];
+      }),
+      apis: { groupAdmin: { setAddRequest } } as any,
+    });
+
+    await handleGroupAddRequest(bridge, '55', true, 'ok');
+
+    expect(setAddRequest).toHaveBeenCalledWith(999, 55, 2, true, 'ok', true);
+  });
+
+  it('distinguishes request-queue failure from a genuine missing request', async () => {
+    const bridge = fakeBridge({
+      findGroupInviteCardGroupBySequence: vi.fn(() => undefined),
+      fetchGroupRequests: vi.fn(async () => { throw new Error('OIDB unavailable'); }),
+      apis: { groupAdmin: { setAddRequest: vi.fn(async () => {}) } } as any,
+    });
+
+    await expect(handleGroupAddRequest(bridge, '55', true, 'ok'))
+      .rejects.toThrow(/failed to fetch group requests/);
   });
 });

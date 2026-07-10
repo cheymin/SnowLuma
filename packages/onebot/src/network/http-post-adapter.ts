@@ -52,16 +52,22 @@ export class HttpPostAdapter extends IOneBotNetworkAdapter<HttpClientNetwork> {
     this.options = resolveReportOptions(next);
   }
 
-  onEvent(event: JsonObject, payload: DispatchPayload): void {
+  async onEvent(event: JsonObject, payload: DispatchPayload): Promise<void> {
     if (!this.isEnabled) return;
     const json = pickDispatchJson(payload, this.options);
     if (json === null) return;
-    void this.postEvent(json, event).catch((err) => {
-      this.log.warn('[%s] postEvent threw: %s', this.name, err instanceof Error ? (err.stack ?? err.message) : String(err));
-    });
+    // A reconcile may replace this.config while HMAC computation or fetch is
+    // awaiting. Keep one event on one immutable config epoch so an old token
+    // can never sign a request sent to a new URL (or vice versa).
+    const config = structuredClone(this.config);
+    await this.postEvent(json, event, config);
   }
 
-  private async postEvent(payload: string, event: JsonObject): Promise<void> {
+  private async postEvent(
+    payload: string,
+    event: JsonObject,
+    config: HttpClientNetwork,
+  ): Promise<void> {
     if (!this.isEnabled) return;
 
     const headers: Record<string, string> = {
@@ -69,13 +75,13 @@ export class HttpPostAdapter extends IOneBotNetworkAdapter<HttpClientNetwork> {
       'User-Agent': 'OneBot',
       'X-Self-ID': this.ctx.uin,
     };
-    if (this.config.accessToken) {
-      headers['X-Signature'] = await computeHmacSha1(this.config.accessToken, payload);
+    if (config.accessToken) {
+      headers['X-Signature'] = await computeHmacSha1(config.accessToken, payload);
     }
 
-    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     try {
-      const response = await fetch(this.config.url, {
+      const response = await fetch(config.url, {
         method: 'POST',
         headers,
         body: payload,
@@ -92,13 +98,11 @@ export class HttpPostAdapter extends IOneBotNetworkAdapter<HttpClientNetwork> {
         }
       } else {
         this.lastDelivery = { at: Date.now(), ok: false };
-        this.log.warn('[%s] POST %s returned %d', this.name, this.config.url, response.status);
+        this.log.warn('[%s] POST %s returned %d', this.name, config.url, response.status);
       }
     } catch (error) {
       this.lastDelivery = { at: Date.now(), ok: false };
-      if (this.isEnabled) {
-        this.log.warn('[%s] POST %s failed: %s', this.name, this.config.url, error instanceof Error ? error.message : String(error));
-      }
+      this.log.warn('[%s] POST %s failed: %s', this.name, config.url, error instanceof Error ? error.message : String(error));
     }
   }
 

@@ -1,5 +1,6 @@
 import type { PacketInfo } from '@snowluma/common/protocol-types';
 import { mapWithConcurrency } from '@snowluma/common/concurrency';
+import { createLogger } from '@snowluma/common/logger';
 import type {
   LongMsgResult,
   RecvLongMsgReq,
@@ -9,7 +10,8 @@ import type {
 } from '@snowluma/proto-defs/longmsg';
 import type { FileExtra, PushMsg, PushMsgBody } from '@snowluma/proto-defs/message';
 import { buildSendElems } from '@snowluma/protocol/element-builder';
-import type { ForwardNodePayload, MessageElement } from '@snowluma/protocol/events';
+import type { ForwardNodePayload, MessageElement, MessageElementOf } from '@snowluma/protocol/events';
+import { MessageElementValidationError } from '@snowluma/protocol/element-manifest';
 import { parseMsgPush } from '@snowluma/protocol/msg-push';
 import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import { randomUUID } from 'crypto';
@@ -24,6 +26,14 @@ function asBridge(ctx: BridgeContext): Bridge { return ctx as unknown as Bridge;
 // of the process — that's enough because OneBot clients typically
 // resolve a forward immediately after receiving the parent message.
 const forwardResCache = new Map<string, ForwardNodePayload[]>();
+
+const log = createLogger('Bridge.Forward');
+
+// Forward bodies are gzip-compressed by QQ. Bound decompression while zlib is
+// producing output so a small server response cannot expand until the process
+// exhausts its heap. 32 MiB leaves ample room for legitimate merged forwards
+// while making the maximum per-fetch allocation explicit.
+const FORWARD_LONG_MSG_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 /** QQ's placeholder when it doesn't hand back a real sender name — treated as
  *  "missing" so #174's enrichment resolves the real nickname. */
@@ -233,8 +243,8 @@ function cloneNodeWithElements(node: ForwardNodePayload, elements: MessageElemen
   };
 }
 
-function stripFileSource(element: MessageElement): MessageElement {
-  const next: MessageElement = { ...element };
+function stripFileSource(element: MessageElementOf<'file'>): MessageElementOf<'file'> {
+  const next: MessageElementOf<'file'> = { ...element };
   delete next.url;
   return next;
 }
@@ -258,10 +268,28 @@ function fileNameForUpload(element: MessageElement, cached?: UploadedFileMeta): 
   return (element.fileName ?? cached?.fileName ?? '').trim();
 }
 
+function assertPrivateForwardFileCapacity(nodes: ForwardNodePayload[]): void {
+  for (const node of nodes) {
+    const fileCount = node.elements.filter((element) => element.type === 'file').length;
+    if (fileCount > 1) {
+      throw new MessageElementValidationError(
+        'UNSENDABLE_TYPE',
+        'a private forward node can contain at most one file element',
+        'file',
+      );
+    }
+    if (node.innerForward) assertPrivateForwardFileCapacity(node.innerForward);
+  }
+}
+
 export class ForwardApi {
   constructor(private readonly ctx: BridgeContext) { }
 
   async upload(nodes: ForwardNodePayload[], groupId?: number, userId?: number): Promise<string> {
+    // A c2c RichText owns exactly one msgContent/FileExtra payload. Validate
+    // the entire recursive tree before any file/media/long-message upload so a
+    // second file cannot be uploaded and then silently discarded.
+    if (groupId === undefined) assertPrivateForwardFileCapacity(nodes);
     const { resId } = await this.uploadRecursive(nodes, groupId, userId);
     return resId;
   }
@@ -281,7 +309,7 @@ export class ForwardApi {
     name: string,
     groupId?: number,
     userId?: number,
-  ): Promise<MessageElement> {
+  ): Promise<MessageElementOf<'file'>> {
     if (groupId !== undefined) {
       const uploaded = await this.ctx.apis.groupFile.upload(groupId, source, name, '/', true, false);
       if (!uploaded.fileId) throw new Error('forward group file upload returned no file_id');
@@ -577,7 +605,27 @@ export class ForwardApi {
       throw new Error('download forward message payload is empty');
     }
 
-    const inflate = gunzipSync(Buffer.from(payload));
+    let inflate: Buffer;
+    try {
+      inflate = gunzipSync(Buffer.from(payload), {
+        maxOutputLength: FORWARD_LONG_MSG_MAX_OUTPUT_BYTES,
+      });
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      log.warn(
+        'forward long-msg decompression failed: res_id=%s compressed_bytes=%d max_output_bytes=%d error=%s',
+        resId,
+        payload.byteLength,
+        FORWARD_LONG_MSG_MAX_OUTPUT_BYTES,
+        reason,
+      );
+      throw new Error(
+        `download forward message decompression failed ` +
+          `(res_id=${resId}, compressed_bytes=${payload.byteLength}, ` +
+          `max_output_bytes=${FORWARD_LONG_MSG_MAX_OUTPUT_BYTES}): ${reason}`,
+        { cause },
+      );
+    }
     const longMsg = protobuf_decode<LongMsgResult>(inflate);
     const actions = Array.isArray(longMsg?.action) ? longMsg!.action! : [];
     const mainAction = actions.find(item => item?.actionCommand === 'MultiMsg');

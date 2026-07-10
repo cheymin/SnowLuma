@@ -1,94 +1,198 @@
-export interface MessageElement {
-  type: string;       // 'text'|'at'|'face'|'mface'|'image'|'video'|'record'|'file'|'json'|'xml'|'reply'|'poke'|'forward'
-  text?: string;
-  faceId?: number;
-  targetUin?: number;
-  uid?: string;
-  imageUrl?: string;
-  fileId?: string;
-  thumbFileId?: string;
-  fileName?: string;
-  fileSize?: number;
-  replySeq?: number;
-  replyMessageId?: number;  // For reply: original message ID (for logging)
-  replySenderUin?: number;  // For reply: original sender's UIN
-  replyTime?: number;       // For reply: original message timestamp
-  replyRandom?: number;     // For reply: original message random/msgId
-  replyElements?: MessageElement[];  // Decoded elements of the quoted message (SrcMsg.elems) — lets a backfill reconstruct it for get_msg without a server round-trip
-  url?: string;
-  thumbUrl?: string;
+/** Re-upload metadata carried by received record/video elements. */
+export interface MediaNode {
+  fileUuid?: string;
+  storeId?: number;
+  uploadTime?: number;
+  ttl?: number;
   subType?: number;
-  duration?: number;
-  width?: number;
-  height?: number;
-  summary?: string;
-  // Market face (商城表情). Decoded from the wire `marketFace` element; the
-  // OneBot layer surfaces it as an `image` segment carrying these as markers,
-  // and the send path rebuilds the wire `marketFace` from them.
-  //   emojiId        = hex(MarketFace.faceId)  → also builds the gxh gif URL
-  //   emojiPackageId = MarketFace.tabId
-  //   emojiKey       = MarketFace.key
-  emojiId?: string;
-  emojiPackageId?: number;
-  emojiKey?: string;
-  flash?: boolean;
-  resId?: string;
-  fileHash?: string;
-  // 闪传文件 (flash transfer) — decoded from an older-client richui markdown
-  // commonElem (svc=45, busId=FlashTransfer). #199/#200. title reuses fileName.
-  filesetId?: string;
-  sceneType?: number;
-  // Preview-bubble metadata for the `forward` element. Drives the
-  // `com.tencent.multimsg` LightApp JSON the recipient renders before
-  // they tap to expand. When unset, the element builder falls back to
-  // generic defaults so old call sites keep working.
+  info?: {
+    fileSize?: number;
+    fileHash?: string;
+    fileSha1?: string;
+    fileName?: string;
+    width?: number;
+    height?: number;
+    time?: number;
+    original?: number;
+    type?: {
+      type?: number;
+      picFormat?: number;
+      videoFormat?: number;
+      voiceFormat?: number;
+    };
+  };
+}
+
+export interface TextElement {
+  type: 'text';
+  text: string;
+}
+
+export interface AtElement {
+  type: 'at';
+  /** 0 denotes @all. */
+  targetUin: number;
+  uid?: string;
+  text?: string;
+}
+
+export interface FaceElement {
+  type: 'face';
+  faceId: number;
+}
+
+export interface ReplyElement {
+  type: 'reply';
+  replySeq: number;
+  replyMessageId?: number;
+  replySenderUin?: number;
+  replyTime?: number;
+  replyRandom?: number;
+  /** Decoded quoted elements, used to backfill get_msg locally. */
+  replyElements?: MessageElement[];
+}
+
+export interface JsonElement {
+  type: 'json';
+  text: string;
+}
+
+export interface XmlElement {
+  type: 'xml';
+  text: string;
+  subType?: number;
+}
+
+export interface MarkdownElement {
+  type: 'markdown';
+  text: string;
+}
+
+export interface ForwardElement {
+  type: 'forward';
+  resId: string;
   forwardSource?: string;
   forwardSummary?: string;
   forwardPrompt?: string;
   forwardNews?: Array<{ text: string }>;
   forwardTSum?: number;
-  /** `uniseq` baked into the preview's LightApp JSON. For a nested
-   *  forward, the *outer* upload uses this same uuid as the
-   *  `actionCommand` for the piggyback entry carrying the inner
-   *  layer's msgBody — so receivers (Mobile QQ / QQ-NT clients) can
-   *  resolve the inner layer from the outer's single fetch instead of
-   *  hitting the server again. Defaults to a fresh UUID on send when
-   *  omitted (i.e. for non-nested forwards). */
+  /** Links a nested preview to its piggybacked actionCommand. */
   forwardUuid?: string;
-  // Server-side fingerprints carried from receive side so a forward can do a
-  // pure md5/sha1 fast-upload without re-downloading the original bytes.
-  // Set together with `noByteFallback: true` to make the upload modules throw
-  // instead of falling back to fetch(url).
+}
+
+interface FingerprintFields {
   md5Hex?: string;
   sha1Hex?: string;
-  picFormat?: number;
-  videoFormat?: number;
-  voiceFormat?: number;
+  /** Disallow falling back to source bytes when a fast upload misses. */
   noByteFallback?: boolean;
-  mediaNode?: {
-    fileUuid?: string;
-    storeId?: number;
-    uploadTime?: number;
-    ttl?: number;
-    subType?: number;
-    info?: {
-      fileSize?: number;
-      fileHash?: string;
-      fileSha1?: string;
-      fileName?: string;
-      width?: number;
-      height?: number;
-      time?: number;
-      original?: number;
-      type?: {
-        type?: number;
-        picFormat?: number;
-        videoFormat?: number;
-        voiceFormat?: number;
-      };
-    };
-  };
 }
+
+export interface ImageElement extends FingerprintFields {
+  type: 'image';
+  imageUrl?: string;
+  fileId?: string;
+  fileName?: string;
+  fileSize?: number;
+  url?: string;
+  subType?: number;
+  summary?: string;
+  width?: number;
+  height?: number;
+  flash?: boolean;
+  picFormat?: number;
+}
+
+export interface RecordElement extends FingerprintFields {
+  type: 'record';
+  fileName?: string;
+  fileId?: string;
+  fileSize?: number;
+  fileHash?: string;
+  url?: string;
+  duration?: number;
+  voiceFormat?: number;
+  mediaNode?: MediaNode;
+}
+
+export interface VideoElement extends FingerprintFields {
+  type: 'video';
+  fileName?: string;
+  fileId?: string;
+  fileSize?: number;
+  fileHash?: string;
+  url?: string;
+  thumbUrl?: string;
+  duration?: number;
+  width?: number;
+  height?: number;
+  videoFormat?: number;
+  mediaNode?: MediaNode;
+}
+
+/** Market face (商城表情); emojiId is the hex wire face GUID. */
+export interface MarketFaceElement {
+  type: 'mface';
+  emojiId: string;
+  emojiPackageId?: number;
+  emojiKey?: string;
+  text?: string;
+}
+
+export interface FileElement {
+  type: 'file';
+  fileId?: string;
+  fileName?: string;
+  fileSize?: number;
+  fileHash?: string;
+  url?: string;
+  md5Hex?: string;
+  sha1Hex?: string;
+}
+
+/** Receive-side representation only; sending uses the dedicated poke Action. */
+export interface PokeElement {
+  type: 'poke';
+  subType: number;
+}
+
+/** Receive-side flash-transfer card; sending uses send_flash_msg. */
+export interface FlashFileElement {
+  type: 'flash_file';
+  filesetId: string;
+  sceneType?: number;
+  fileName?: string;
+}
+
+type MessageElementVariant =
+  | TextElement
+  | AtElement
+  | FaceElement
+  | ReplyElement
+  | JsonElement
+  | XmlElement
+  | MarkdownElement
+  | ForwardElement
+  | ImageElement
+  | RecordElement
+  | VideoElement
+  | MarketFaceElement
+  | FileElement
+  | PokeElement
+  | FlashFileElement;
+
+type UnionKeys<T> = T extends T ? keyof T : never;
+type StrictUnionMember<T, All> = T extends T
+  ? T & Partial<Record<Exclude<UnionKeys<All>, keyof T>, never>>
+  : never;
+
+/**
+ * Closed message-element vocabulary. The optional-never fields make excess
+ * fields fail at compile time even when assigning an object to the union
+ * directly (for example, `{ type: 'poke', faceId: 1 }` is illegal).
+ */
+export type MessageElement = StrictUnionMember<MessageElementVariant, MessageElementVariant>;
+export type MessageElementType = MessageElementVariant['type'];
+export type MessageElementOf<T extends MessageElementType> = Extract<MessageElementVariant, { type: T }>;
 
 export interface ForwardNodePayload {
   userUin: number;
@@ -133,6 +237,10 @@ export interface FriendMessage extends QQEvent {
 export interface GroupMessage extends QQEvent {
   kind: 'group_message';
   groupId: number;
+  /** Group display name. From the message's own wire field (ResponseGrp
+   *  field 7 — accurate even right after a rename), falling back to the
+   *  identity group cache, else '' when neither is available. */
+  groupName: string;
   senderUin: number;
   senderNick: string;
   senderCard: string;
@@ -145,6 +253,7 @@ export interface GroupMessage extends QQEvent {
 export interface TempMessage extends QQEvent {
   kind: 'temp_message';
   senderUin: number;
+  /** Source group of the temp session (from responseHead.forward), or 0. */
   groupId: number;
   senderNick: string;
   msgSeq: number;
