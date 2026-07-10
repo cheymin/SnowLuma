@@ -8,6 +8,7 @@ import {
   type CompiledActionKind,
   type CompiledActionRegistry,
 } from './actions';
+import type { GroupSystemMessageQuery } from './modules/contact-actions';
 import type { ForwardPreviewMeta } from './modules/message-actions';
 import type { JsonObject, JsonValue, MessageMeta } from './types';
 import { RETCODE, failedResponse, okResponse } from './types';
@@ -54,7 +55,7 @@ export interface ApiActionContext {
   deleteEssenceMsg: (messageId: number) => Promise<void>;
   getGroupMsgHistory: (groupId: number, messageId?: number, count?: number) => Promise<JsonObject[]>;
   getFriendMsgHistory: (userId: number, messageId?: number, count?: number) => Promise<JsonObject[]>;
-  handleGetGroupSystemMsg: () => Promise<JsonObject[]>;
+  handleGetGroupSystemMsg: (query: GroupSystemMessageQuery) => Promise<JsonObject[]>;
   getDownloadRKeys: () => Promise<JsonObject[]>;
   sendGroupForwardMsg: (groupId: number, messages: JsonValue, meta?: ForwardPreviewMeta) => Promise<{ messageId: number; forwardId: string }>;
   sendPrivateForwardMsg: (userId: number, messages: JsonValue, meta?: ForwardPreviewMeta) => Promise<{ messageId: number; forwardId: string }>;

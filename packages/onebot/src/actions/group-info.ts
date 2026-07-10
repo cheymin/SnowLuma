@@ -183,13 +183,39 @@ export const actions = [
     name: 'get_group_system_msg',
     summary: '获取群系统消息',
     readOnly: true,
-    params: {},
-    run: async (_p, ctx) => {
+    returns: '群系统消息数组，可按群号或未处理状态过滤。',
+    returnsSchema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          group_id: { type: 'integer', description: '群号' },
+          group_name: { type: 'string', description: '群名称' },
+          request_id: { type: 'integer', description: '请求序列号' },
+          requester_uin: { type: 'integer', description: '申请人 QQ 号' },
+          requester_nick: { type: 'string', description: '申请人昵称' },
+          message: { type: 'string', description: '验证留言' },
+          checked: { type: 'boolean', description: '是否已处理' },
+          flag: { type: 'string', description: '处理请求使用的规范 flag' },
+        },
+        required: [
+          'group_id', 'group_name', 'request_id', 'requester_uin',
+          'requester_nick', 'message', 'checked', 'flag',
+        ],
+      },
+    },
+    params: {
+      group_id: f.groupId().optional(),
+      only_pending: f.bool().default(false),
+    },
+    run: async (p, ctx) => {
       if (ctx.handleGetGroupSystemMsg) {
-        return okResponse(await ctx.handleGetGroupSystemMsg());
+        return okResponse(await ctx.handleGetGroupSystemMsg({
+          groupId: p.group_id,
+          onlyPending: p.only_pending,
+        }));
       }
       return okResponse([]);
     },
   }),
 ];
-

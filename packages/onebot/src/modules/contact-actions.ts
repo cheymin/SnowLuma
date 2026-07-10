@@ -1,8 +1,20 @@
+import { mapWithConcurrency } from '@snowluma/common/concurrency';
 import type { BridgeInterface } from '@snowluma/core/bridge-interface';
 import type { IdentityService } from '@snowluma/protocol/identity-service';
-import { formatGroupRequestFlag } from '@snowluma/protocol/qq-info';
+import {
+  formatGroupRequestFlag,
+  type GroupRequestInfo,
+  type UserProfileInfo,
+} from '@snowluma/protocol/qq-info';
 import type { OneBotInstanceContext } from '../instance-context';
 import type { JsonObject } from '../types';
+
+const REQUESTER_PROFILE_CONCURRENCY = 4;
+
+export interface GroupSystemMessageQuery {
+  groupId?: number;
+  onlyPending?: boolean;
+}
 
 export function getLoginInfo(ref: OneBotInstanceContext): { userId: number; nickname: string } {
   const userId = parseInt(ref.uin, 10) || 0;
@@ -230,21 +242,70 @@ export async function getStrangerInfo(
   }
 }
 
-export async function getGroupSystemMessages(bridge: BridgeInterface): Promise<JsonObject[]> {
-  try {
-    const reqs = await bridge.apis.contacts.fetchGroupRequests();
-    return reqs.map(r => ({
-      group_id: r.groupId,
-      group_name: r.groupName,
-      request_id: r.sequence,
-      requester_uin: r.targetUin,
-      requester_nick: r.targetName,
-      message: r.comment,
-      flag: formatGroupRequestFlag(r),
-    }));
-  } catch {
-    return [];
+async function resolveRequesterUins(
+  bridge: BridgeInterface,
+  requests: readonly GroupRequestInfo[],
+): Promise<Map<string, number>> {
+  const resolved = new Map<string, number>();
+  const unresolved = new Set<string>();
+
+  for (const request of requests) {
+    const uid = request.targetUid;
+    if (!uid || resolved.has(uid)) continue;
+    if (request.targetUin > 0) {
+      resolved.set(uid, request.targetUin);
+      unresolved.delete(uid);
+      continue;
+    }
+    if (unresolved.has(uid)) continue;
+    const cached = bridge.identity.findUinByUid(uid, request.groupId)
+      ?? bridge.identity.findUinByUid(uid);
+    if (cached && cached > 0) resolved.set(uid, cached);
+    else unresolved.add(uid);
   }
+
+  const profiles = await mapWithConcurrency(
+    [...unresolved],
+    REQUESTER_PROFILE_CONCURRENCY,
+    async (uid) => {
+      let profile: UserProfileInfo;
+      try {
+        profile = await bridge.apis.contacts.fetchUserProfileByUid(uid);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`failed to resolve requester UIN for UID ${uid}: ${message}`, { cause: error });
+      }
+      if (!Number.isSafeInteger(profile.uin) || profile.uin <= 0) {
+        throw new Error(`failed to resolve requester UIN for UID ${uid}`);
+      }
+      return [uid, profile.uin] as const;
+    },
+  );
+  for (const [uid, uin] of profiles) resolved.set(uid, uin);
+  return resolved;
+}
+
+export async function getGroupSystemMessages(
+  bridge: BridgeInterface,
+  query: GroupSystemMessageQuery = {},
+): Promise<JsonObject[]> {
+  const requests = (await bridge.apis.contacts.fetchGroupRequests()).filter((request) => {
+    if (query.groupId !== undefined && request.groupId !== query.groupId) return false;
+    if (query.onlyPending && request.state !== 1) return false;
+    return true;
+  });
+  const requesterUins = await resolveRequesterUins(bridge, requests);
+
+  return requests.map((request) => ({
+    group_id: request.groupId,
+    group_name: request.groupName,
+    request_id: request.sequence,
+    requester_uin: requesterUins.get(request.targetUid) ?? request.targetUin,
+    requester_nick: request.targetName,
+    message: request.comment,
+    checked: request.state !== 1,
+    flag: formatGroupRequestFlag(request),
+  }));
 }
 
 export async function getDownloadRKeys(bridge: BridgeInterface): Promise<JsonObject[]> {
