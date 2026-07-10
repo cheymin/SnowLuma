@@ -143,12 +143,11 @@ describe('apis/group-admin', () => {
     expect(nameEnv.body).toMatchObject({ groupUin: 1, body: { targetName: 'newName' } });
 
     const titleEnv = protobuf_decode<OidbBase<OidbSpecialTitle>>(bridge.sendRawPacket.mock.calls[2]![1]);
-    // expireTime is proto int_32 with -1 sentinel; after wire round-trip the
-    // proton decoder surfaces it as the unsigned reinterpretation (-1 ≡ 0xFFFFFFFF).
+    // expireTime is proto int_32 and preserves the signed -1 sentinel.
     expect(titleEnv.body?.groupUin).toBe(1);
     expect(titleEnv.body?.body?.targetUid).toBe('resolved-uid');
     expect(titleEnv.body?.body?.specialTitle).toBe('newTitle');
-    expect(titleEnv.body?.body?.expireTime).toBe(0xFFFFFFFF);
+    expect(titleEnv.body?.body?.expireTime).toBe(-1);
 
     const remarkEnv = protobuf_decode<OidbBase<Oidb0xf16Req>>(bridge.sendRawPacket.mock.calls[3]![1]);
     expect(remarkEnv.body?.inner).toMatchObject({ groupId: 1n, remark: 'newRemark' });
