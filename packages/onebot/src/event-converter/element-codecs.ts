@@ -292,9 +292,18 @@ export const ELEMENT_CODECS = {
       return { type: 'json', data: { data: element.text ?? '' } };
     },
     async fromSegment(data) {
+      const text = data.data;
+      if (typeof text !== 'string' || !text.trim()) {
+        throw new MessageElementValidationError(
+          'INVALID_FIELD',
+          'message segment "json" field "data" must be a non-empty JSON string',
+          'json',
+          'data',
+        );
+      }
       return {
         type: 'json',
-        text: String(data.data ?? ''),
+        text,
       };
     },
   },

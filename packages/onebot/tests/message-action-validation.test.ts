@@ -70,4 +70,28 @@ describe('outbound message validation at the Action boundary', () => {
     });
     expect(bridgeSend).not.toHaveBeenCalled();
   });
+
+  it('reports the public data field when a JSON segment uses data.text', async () => {
+    const bridgeSend = vi.fn();
+    const ref = instanceContext(bridgeSend);
+    const api = new ApiHandler({
+      sendGroupMessage: (groupId, message, autoEscape) =>
+        sendGroupMessage(ref, groupId, message, autoEscape),
+    } as ApiActionContext);
+
+    const response = await api.handle('send_group_msg', {
+      group_id: 12345,
+      message: [{
+        type: 'json',
+        data: { text: '{"app":"com.tencent.contact.lua"}' },
+      }],
+    });
+
+    expect(response).toMatchObject({
+      status: 'failed',
+      retcode: 1400,
+      wording: 'message segment "json" field "data" must be a non-empty JSON string',
+    });
+    expect(bridgeSend).not.toHaveBeenCalled();
+  });
 });
