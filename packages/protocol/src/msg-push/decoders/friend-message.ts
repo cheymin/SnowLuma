@@ -38,6 +38,7 @@ export const decodeFriendMessage: MsgPushDecoder = (ctx) => {
     time: ctx.head.timestamp,
     selfUin: ctx.selfUin,
     senderUin: ctx.fromUin,
+    senderUid: ctx.fromUid,
     msgSeq: ctx.head.sequence,
     msgId: ctx.head.msgId & 0x7FFFFFFF,
     elements,

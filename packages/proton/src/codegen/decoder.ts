@@ -22,6 +22,13 @@ function varintDec64(varName: string, ind: string): string {
   ].join('\n');
 }
 
+function varintDec32Value(varName: string, ind: string): string {
+  return [
+    `${ind}const [${varName}, ${varName}_offset] = __readVarint32Value(data, offset, end);`,
+    `${ind}offset = ${varName}_offset;`,
+  ].join('\n');
+}
+
 function isVarint64(typeName: string): boolean {
   return typeName === 'uint_64' || typeName === 'int_64' || typeName === 'sint_64';
 }
@@ -153,15 +160,14 @@ function decodeField(field: ProtobufField, index: number): string {
   } else if (typeName === 'int_32') {
     // Protobuf encodes negative int32 values as a sign-extended 10-byte
     // varint. Read the full uint64 representation, then keep its signed low
-    // 32 bits. uint32/sint32/tag/length values must remain on the stricter
-    // five-byte reader.
+    // 32 bits.
     L.push(varintDec64('_val', I));
     L.push(assign(`Number(BigInt.asIntN(32, _val))`));
   } else if (typeName === 'sint_32') {
     L.push(varintDec('_val', I));
     L.push(assign(`(_val >>> 1) ^ -(_val & 1)`));
   } else if (wireType === WireType.Varint) {
-    L.push(varintDec('_val', I));
+    L.push(varintDec32Value('_val', I));
     L.push(assign(`_val >>> 0`));
   } else if (typeName === 'float') {
     L.push(`${I}if (end - offset < 4) throw new Error('protobuf truncated float field');`);

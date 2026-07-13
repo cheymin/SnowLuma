@@ -4,9 +4,14 @@ import os from 'os';
 import path from 'path';
 import {
   computeAgreementsVersion,
+  EULA_ACCEPT_ENV,
+  isConsentRequired,
+  loadAgreements,
   parseAgreementMeta,
+  PRIVACY_ACCEPT_ENV,
   recordConsent,
   loadConsentRecord,
+  resolveEnvironmentConsent,
 } from '@/webui/consent';
 
 describe('computeAgreementsVersion', () => {
@@ -66,6 +71,35 @@ describe('parseAgreementMeta', () => {
   });
 });
 
+describe('environment consent', () => {
+  it('requires explicit acceptance of both EULA and PRIVACY', () => {
+    expect(resolveEnvironmentConsent({})).toEqual({
+      eulaAccepted: false,
+      privacyAccepted: false,
+      accepted: false,
+    });
+    expect(resolveEnvironmentConsent({ [EULA_ACCEPT_ENV]: '1' })).toEqual({
+      eulaAccepted: true,
+      privacyAccepted: false,
+      accepted: false,
+    });
+  });
+
+  it('accepts trimmed, case-insensitive true values', () => {
+    expect(resolveEnvironmentConsent({
+      [EULA_ACCEPT_ENV]: ' true ',
+      [PRIVACY_ACCEPT_ENV]: 'TRUE',
+    }).accepted).toBe(true);
+  });
+
+  it('fails fast on an invalid configured value', () => {
+    expect(() => resolveEnvironmentConsent({
+      [EULA_ACCEPT_ENV]: 'yes',
+      [PRIVACY_ACCEPT_ENV]: '1',
+    })).toThrow(`${EULA_ACCEPT_ENV} must be one of: 1, true, 0, false`);
+  });
+});
+
 describe('consent persistence', () => {
   let tmp: string;
   let cwd: string;
@@ -98,6 +132,20 @@ describe('consent persistence', () => {
     // mirrors isConsentRequired()'s comparison against the current version
     expect(stored?.version !== 'new-version').toBe(true);
     expect(stored?.version !== 'old-version').toBe(false);
+  });
+
+  it('environment consent unlocks without writing a permanent consent record', () => {
+    expect(isConsentRequired({
+      [EULA_ACCEPT_ENV]: '1',
+      [PRIVACY_ACCEPT_ENV]: 'true',
+    })).toBe(false);
+    expect(loadConsentRecord()).toBeNull();
+    expect(isConsentRequired({ [EULA_ACCEPT_ENV]: '1' })).toBe(true);
+  });
+
+  it('stored consent still covers the current agreement version', () => {
+    recordConsent(loadAgreements().version);
+    expect(isConsentRequired({})).toBe(false);
   });
 
   it('ignores a malformed consent.json (treated as no consent)', () => {

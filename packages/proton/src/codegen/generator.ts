@@ -117,6 +117,13 @@ function __readVarint64(data, offset, end) {
   }
   throw new Error('protobuf uint64 varint overflow');
 }
+function __readVarint32Value(data, offset, end) {
+  const [value, next] = __readVarint64(data, offset, end);
+  if (value > 0xffffffffn && value < 0xffffffff80000000n) {
+    throw new Error('protobuf uint32 field varint overflow');
+  }
+  return [Number(BigInt.asUintN(32, value)), next];
+}
 function __skipVarint(data, offset, end) {
   for (let i = 0; i < 10; i++) {
     if (offset >= end) throw new Error('protobuf truncated varint');

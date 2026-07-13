@@ -1,8 +1,8 @@
 // 0xFD4_1 — single-page friend-roster fetch.
 //
-// QQ paginates the friend list with a wire-level cursor (`nextUin`).
+// QQ paginates the friend list with an opaque wire-level cookie.
 // This namespace handles ONE round-trip — the facade drives the
-// while-loop until the server stops emitting a next cursor and
+// while-loop until the server stops emitting a cookie and
 // concatenates results into the public FriendInfo[] shape.
 
 import type { OidbBase, OidbSvcTrpcTcp0xFD4_1Response } from '@snowluma/proto-defs/oidb';
@@ -15,9 +15,8 @@ export namespace FetchFriendListPage {
   export const subCommand = 1;
 
   export interface Params {
-    /** Cursor: `null` for the first page, otherwise the previous
-     *  page's `nextUin`. */
-    nextUin: number | null;
+    /** Opaque cookie returned by the previous page. Omit on page one. */
+    cookie?: Uint8Array;
   }
 
   export type Deps = OidbSender;
@@ -35,8 +34,8 @@ export namespace FetchFriendListPage {
       field10002: [13578, 13579, 13573, 13572, 13568],
       field10003: 4051,
     };
-    if (p.nextUin !== null) {
-      body.nextUin = { uin: p.nextUin };
+    if (p.cookie?.length) {
+      body.cookie = p.cookie;
     }
     return body;
   };

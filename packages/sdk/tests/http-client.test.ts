@@ -7,6 +7,39 @@ import {
 } from '../src';
 
 describe('SnowLumaHttpClient', () => {
+  it('maps group-announcement options to their OneBot field names', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      status: 'ok',
+      retcode: 0,
+      data: null,
+    })));
+    const client = new SnowLumaHttpClient({ fetch: fetchImpl });
+
+    await client.sendGroupNotice(941657197, 'welcome', {
+      pinned: 1,
+      type: 20,
+      sendToNewMembers: true,
+      isShowEditCard: 0,
+      tipWindowType: 0,
+      confirmRequired: 0,
+    });
+
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      action: '_send_group_notice',
+      params: {
+        group_id: 941657197,
+        content: 'welcome',
+        pinned: 1,
+        type: 20,
+        send_to_new_members: true,
+        is_show_edit_card: 0,
+        tip_window_type: 0,
+        confirm_required: 0,
+      },
+    });
+  });
+
   it('throws SnowLumaAuthError for auth retcodes', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       status: 'failed',

@@ -215,13 +215,10 @@ export interface OidbFriendListBodyItem {
   type?:   pb<1, uint_32>;
   number?: pb<2, OidbFriendListNumber>;
 }
-export interface OidbFriendListNextUin {
-  uin?: pb<1, uint_32>;
-}
 export interface OidbFriendListRequest {
   friendCount?: pb<2, uint_32>;
   field4?:      pb<4, uint_32>;
-  nextUin?:     pb<5, OidbFriendListNextUin>;
+  cookie?:      pb<5, bytes>;
   field6?:      pb<6, uint_32>;
   field7?:      pb<7, uint_32>;
   body?:        pb_repeated<10001, OidbFriendListBodyItem>;
@@ -404,6 +401,33 @@ export interface C2CReadedReportItem {
 export interface SsoReadedReportReq {
   groupList?: pb_repeated<1, GroupReadedReportItem>;
   c2cList?:   pb_repeated<2, C2CReadedReportItem>;
+}
+// SsoReadedReport deliberately uses different tags in its response. In
+// particular, field 3 is the repeated GROUP RESPONSE, not a request field.
+// Both response item types expose the server's current read sequence and its
+// latest message sequence. A read report is complete only after readSeq catches
+// up with latestSeq; a top-level success alone does not prove that happened.
+export interface GroupReadedReportResponseItem {
+  resultCode?:   pb<1, uint_32>;
+  errorMessage?: pb<2, string>;
+  groupUin?:     pb<3, uint_64>;
+  readSeq?:      pb<4, uint_64>;
+  latestSeq?:    pb<5, uint_64>;
+}
+export interface C2CReadedReportResponseItem {
+  resultCode?:   pb<1, uint_32>;
+  errorMessage?: pb<2, string>;
+  targetUin?:    pb<3, uint_64>;
+  uid?:          pb<4, string>;
+  readSeq?:      pb<5, uint_64>;
+  latestSeq?:    pb<6, uint_64>;
+  lastMsgTime?:  pb<7, uint_64>;
+}
+export interface SsoReadedReportResp {
+  resultCode?:   pb<1, uint_32>;
+  errorMessage?: pb<2, string>;
+  groupList?:    pb_repeated<3, GroupReadedReportResponseItem>;
+  c2cList?:      pb_repeated<4, C2CReadedReportResponseItem>;
 }
 export interface OidbClientKeyReq {}
 export interface OidbClientKeyResp {
@@ -912,4 +936,3 @@ export interface Oidb0xcdeRespBodyInfo {
 export interface Oidb0xcdeResp {
   info?: pb<2, Oidb0xcdeRespBodyInfo>;
 }
-

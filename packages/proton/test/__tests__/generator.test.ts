@@ -169,6 +169,28 @@ interface Int32Msg {
     ])).value).toBe(-1);
   });
 
+  it('accepts sign-extended 10-byte values for uint_32 fields without accepting real overflow', () => {
+    const { dec } = makeRoundTripFromSchema(
+      `interface Uint32Msg { value: pb<1, uint_32>; }`,
+      'Uint32Msg',
+    );
+
+    // QQ sometimes serializes a signed 32-bit source into a schema slot that
+    // clients expose as uint32. Protobuf readers consume the full ten-byte
+    // varint and retain its low 32 bits for wire compatibility.
+    expect(dec(Uint8Array.from([
+      0x08,
+      0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
+    ])).value).toBe(0xfffffffe);
+
+    // 2^32 is neither uint32 nor a sign-extended negative int32, so accepting
+    // ten-byte compatibility must not turn genuine overflow into truncation.
+    expect(() => dec(Uint8Array.from([
+      0x08,
+      0x80, 0x80, 0x80, 0x80, 0x10,
+    ]))).toThrow(/uint32 field varint overflow/);
+  });
+
   it('rejects malformed length-delimited fields without leaving parent bounds', () => {
     const schema = `interface BytesMsg { data: pb<1, bytes>; }`;
     const gen = generateCode(analyzeSource(schema, 'BytesMsg.ts'));

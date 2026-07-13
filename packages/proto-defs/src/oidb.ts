@@ -1,4 +1,4 @@
-import type { pb, pb_repeated, int_32, uint_32, uint_64, bytes } from '@snowluma/proton';
+import type { pb, pb_repeated, int_32, uint_32, uint_64, bytes, bool } from '@snowluma/proton';
 
 export interface OidbProperty {
   key?:   pb<1, string>;
@@ -51,17 +51,21 @@ export interface OidbFriend {
   additional?:  pb_repeated<10001, OidbFriendAdditional>;
 }
 
-export interface OidbSvcTrpcTcp0xFD4_1ResponseUin {
-  uin?: pb<1, uint_32>;
+export interface OidbFriendCategory {
+  categoryId?:   pb<1, uint_32>;
+  categoryName?: pb<2, string>;
+  memberCount?:  pb<3, uint_32>;
+  sortId?:       pb<4, uint_32>;
 }
 
 export interface OidbSvcTrpcTcp0xFD4_1Response {
-  next?:               pb<2, OidbSvcTrpcTcp0xFD4_1ResponseUin>;
-  displayFriendCount?: pb<3, uint_32>;
-  timestamp?:          pb<6, uint_32>;
-  selfUin?:            pb<7, uint_32>;
-  friends?:            pb_repeated<101, OidbFriend>;
-  groups?:             pb_repeated<102, OidbFriendProperty>;
+  cookie?:     pb<2, bytes>;
+  isEnd?:      pb<3, bool>;
+  timestamp?:  pb<6, uint_64>;
+  selfUin?:    pb<7, uint_64>;
+  smallSeq?:   pb<8, uint_32>;
+  friends?:    pb_repeated<101, OidbFriend>;
+  categories?: pb_repeated<102, OidbFriendCategory>;
 }
 
 // Oidb.0xFE5_2 Group list

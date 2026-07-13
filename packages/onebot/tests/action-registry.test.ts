@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { defineAction, defineStreamAction, type RegisteredActionSpec } from '../src/action-kit';
 import { ApiHandler, type ApiActionContext } from '../src/api-handler';
 import {
@@ -128,6 +128,25 @@ describe('compiled production Action registry', () => {
         .filter((entry) => entry.kind !== 'raw')
         .map((entry) => [entry.name, entry.kind]),
     );
+  });
+
+  it('validates and forwards get_group_system_msg filters', async () => {
+    const handleGetGroupSystemMsg = vi.fn(async () => []);
+    const handler = new ApiHandler({ handleGetGroupSystemMsg } as unknown as ApiActionContext);
+
+    const response = await handler.handle('get_group_system_msg', {
+      group_id: '100000002',
+      only_pending: true,
+    });
+
+    expect(response.status).toBe('ok');
+    expect(handleGetGroupSystemMsg).toHaveBeenCalledWith({
+      groupId: 100000002,
+      onlyPending: true,
+    });
+    const doc = ACTION_REGISTRY.resolve('get_group_system_msg');
+    if (!doc || doc.kind === 'raw') throw new Error('get_group_system_msg action missing');
+    expect(doc.action.doc.params.map((param) => param.name)).toEqual(['group_id', 'only_pending']);
   });
 });
 

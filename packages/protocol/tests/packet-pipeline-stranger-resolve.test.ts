@@ -39,7 +39,7 @@ function makePipeline(opts: {
   events.onAny((event) => { captured.push(event as QQEventVariant); });
 
   return {
-    pipeline, events, captured,
+    identity, pipeline, events, captured,
     resolveStrangerProfile, resolveGroupJoinRequest, resolveGroupInviteCardSequence,
   };
 }
@@ -364,6 +364,28 @@ describe('IncomingPacketPipeline / stranger resolve on group_invite', () => {
     expect(resolveStrangerProfile).not.toHaveBeenCalled();
     expect(resolveGroupJoinRequest).not.toHaveBeenCalled();
     expect(captured).toHaveLength(1);
+  });
+});
+
+describe('IncomingPacketPipeline / friend message identity', () => {
+  it('preserves the exact UID/UIN pair carried by an incoming C2C message', () => {
+    const { identity, pipeline } = makePipeline();
+    pipeline.registerCmd('test.cmd', () => [{
+      kind: 'friend_message',
+      time: 1700000000,
+      selfUin: 10001,
+      senderUin: 22222,
+      senderUid: 'u_peer_exact',
+      senderNick: 'peer',
+      msgSeq: 1,
+      msgId: 2,
+      elements: [{ type: 'text', text: 'hi' }],
+    }]);
+
+    pipeline.process({ serviceCmd: 'test.cmd' } as PacketInfo);
+
+    expect(identity.findUidByUin(22222)).toBe('u_peer_exact');
+    expect(identity.findUinByUid('u_peer_exact')).toBe(22222);
   });
 });
 

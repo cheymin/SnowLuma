@@ -370,7 +370,7 @@ export const actions = [
         return failedResponse(RETCODE.BAD_REQUEST, 'group_id does not match message session');
       }
 
-      await ctx.bridge.apis.message.markGroupRead(meta.targetId, meta.sequence);
+      await ctx.bridge.apis.message.markGroupRead(meta.targetId);
       return okResponse();
     },
   }),
@@ -392,7 +392,7 @@ export const actions = [
         return failedResponse(RETCODE.BAD_REQUEST, 'user_id does not match message session');
       }
 
-      await ctx.bridge.apis.message.markPrivateRead(meta.targetId, meta.sequence);
+      await ctx.bridge.apis.message.markPrivateRead(meta.targetId);
       return okResponse();
     },
   }),
@@ -413,9 +413,9 @@ export const actions = [
       }
 
       if (meta.isGroup) {
-        await ctx.bridge.apis.message.markGroupRead(meta.targetId, meta.sequence);
+        await ctx.bridge.apis.message.markGroupRead(meta.targetId);
       } else {
-        await ctx.bridge.apis.message.markPrivateRead(meta.targetId, meta.sequence);
+        await ctx.bridge.apis.message.markPrivateRead(meta.targetId);
       }
       return okResponse();
     },
@@ -424,20 +424,33 @@ export const actions = [
   // 群公告
   groupAction({
     name: '_send_group_notice',
-    summary: '发送群公告',
+    summary: '发送群公告（支持置顶、弹窗、新成员、群昵称引导与确认）',
     params: {
-      content: f.string({ allowEmpty: false }),
-      image: f.string().default('').role('image'),
-      pinned: f.raw(),
-      type: f.raw(),
-      confirm_required: f.raw(),
+      content: f.string({ allowEmpty: false }).describe('公告正文'),
+      image: f.string().default('').role('image').describe('可选公告图片（本地路径、URL 或 base64）'),
+      pinned: f.int({ min: 0, max: 1 }).default(0).describe('是否置顶：1=置顶，0=不置顶'),
+      type: f.int().optional().describe('发布类型：1=普通公告，20=新成员公告；建议使用 send_to_new_members'),
+      send_to_new_members: f.bool().optional().describe('是否在成员新加入群时发送（与 type=20 等价）'),
+      is_show_edit_card: f.int({ min: 0, max: 1 }).default(1).describe('是否引导群成员修改群昵称：1=是，0=否'),
+      tip_window_type: f.int({ min: 0, max: 1 }).default(1).describe('弹窗展示：0=开启弹窗，1=关闭弹窗（QQ 原始字段为反向语义）'),
+      confirm_required: f.int({ min: 0, max: 1 }).default(1).describe('是否需要群成员确认收到：1=是，0=否'),
     },
+    rules: (r) => [
+      r.rule('type must be 1 (regular) or 20 (new members)', (p) => p.type === undefined || p.type === 1 || p.type === 20),
+      r.rule(
+        'send_to_new_members conflicts with type',
+        (p) => p.send_to_new_members === undefined || p.type === undefined || p.type === (p.send_to_new_members ? 20 : 1),
+      ),
+    ],
     run: async (p, ctx) => {
       const options = {
         image: p.image || undefined,
-        pinned: p.pinned !== undefined ? Number(p.pinned) : 0,
-        type: p.type !== undefined ? Number(p.type) : 1,
-        confirm_required: p.confirm_required !== undefined ? Number(p.confirm_required) : 1,
+        pinned: p.pinned,
+        type: p.type,
+        sendToNewMembers: p.send_to_new_members,
+        isShowEditCard: p.is_show_edit_card,
+        tipWindowType: p.tip_window_type,
+        confirmRequired: p.confirm_required,
       };
 
       await ctx.bridge.apis.web.sendNotice(p.group_id, p.content, options);
@@ -448,6 +461,7 @@ export const actions = [
   groupAction({
     name: '_get_group_notice',
     summary: '获取群公告',
+    returns: '普通公告与新成员公告的合并数组；send_to_new_members 标识后者',
     readOnly: true,
     run: async (p, ctx) => {
       const notices = await ctx.bridge.apis.web.getNotice(p.group_id);
@@ -690,14 +704,13 @@ export const actions = [
     },
   }),
 
-  // _mark_all_as_read — no-op。NapCat 靠单次内核 IPC markAllMsgAsRead() 实现，
-  // SnowLuma 无等价单包 SSO cmd；遍历所有会话逐个发已读报告是风控高危群发，
-  // 故暂不真正执行（留待 RE 出"一键全读"cmd）。返回 ok 以兼容启动时盲调的客户端。
   defineAction({
     name: '_mark_all_as_read',
-    summary: '标记全部已读（no-op，待 RE 全读 cmd）',
+    summary: '标记全部已读',
     params: {},
-    run: async () => {
+    run: async (_p, ctx) => {
+      const sessions = ctx.listReadSessions();
+      await ctx.bridge.apis.message.markAllRead(sessions.groupIds, sessions.privateUserIds);
       return okResponse();
     },
   }),
@@ -1122,12 +1135,46 @@ export const actions = [
     name: 'get_friends_with_category',
     summary: '获取分组好友列表',
     readOnly: true,
+    returns: '好友分组数组；每组包含 categoryId、categoryName、categoryMbCount 和 buddyList。',
+    returnsSchema: {
+      type: 'array',
+      description: '带分组的好友列表',
+      items: {
+        type: 'object',
+        properties: {
+          categoryId: { type: 'integer', description: '分组 ID' },
+          categoryName: { type: 'string', description: '分组名称' },
+          categoryMbCount: { type: 'integer', description: '服务端报告的分组好友数' },
+          buddyList: {
+            type: 'array',
+            description: '该分组内的好友',
+            items: {
+              type: 'object',
+              properties: {
+                user_id: { type: 'integer', description: 'QQ 号' },
+                nickname: { type: 'string', description: '昵称' },
+                remark: { type: 'string', description: '好友备注' },
+              },
+              required: ['user_id', 'nickname', 'remark'],
+            },
+          },
+        },
+        required: ['categoryId', 'categoryName', 'categoryMbCount', 'buddyList'],
+      },
+    },
     params: {},
     run: async (_p, ctx) => {
-      if (ctx.getFriendList) {
-        return okResponse(await ctx.getFriendList());
-      }
-      return okResponse([]);
+      const categories = await ctx.bridge.apis.contacts.fetchFriendCategories();
+      return okResponse(categories.map(category => ({
+        categoryId: category.categoryId,
+        categoryName: category.categoryName,
+        categoryMbCount: category.memberCount,
+        buddyList: category.friends.map(friend => ({
+          user_id: friend.uin,
+          nickname: friend.nickname,
+          remark: friend.remark,
+        })),
+      })));
     },
   }),
 

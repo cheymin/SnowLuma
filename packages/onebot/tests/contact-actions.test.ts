@@ -34,7 +34,8 @@ import type { OneBotInstanceContext } from '../src/instance-context';
 const APIS_ROUTING: Record<string, string> = {
   fetchFriendList: 'contacts', fetchGroupList: 'contacts',
   fetchGroupMemberList: 'contacts', fetchUserProfile: 'contacts',
-  fetchGroupRequests: 'contacts', fetchDownloadRKeys: 'contacts',
+  fetchUserProfileByUid: 'contacts', fetchGroupRequests: 'contacts',
+  fetchDownloadRKeys: 'contacts',
   fetchGroupDetail: 'contacts',
 };
 
@@ -393,7 +394,105 @@ describe('onebot/contact-actions / getGroupSystemMessages', () => {
     expect(result[0]).toMatchObject({
       request_id: 123456,
       group_id: 999,
+      checked: false,
       flag: 'slreq:1:123456:999:22:1',
     });
+  });
+
+  it('filters by group and pending state before resolving requester identities', async () => {
+    const fetchUserProfileByUid = vi.fn(async (uid: string) =>
+      makeProfile(uid === 'u_pending' ? 101 : 202, uid));
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => [
+        makeGroupRequest({ groupId: 100, sequence: 1, state: 1, targetUid: 'u_pending', targetUin: 0 }),
+        makeGroupRequest({ groupId: 100, sequence: 2, state: 2, targetUid: 'u_checked', targetUin: 0 }),
+        makeGroupRequest({ groupId: 200, sequence: 3, state: 1, targetUid: 'u_other_group', targetUin: 0 }),
+      ]),
+      fetchUserProfileByUid,
+      identity: fakeIdentity({ findUinByUid: () => null }),
+    });
+
+    const result = await getGroupSystemMessages(bridge, { groupId: 100, onlyPending: true });
+
+    expect(result).toEqual([expect.objectContaining({
+      group_id: 100,
+      request_id: 1,
+      requester_uin: 101,
+      checked: false,
+    })]);
+    expect(fetchUserProfileByUid).toHaveBeenCalledOnce();
+    expect(fetchUserProfileByUid).toHaveBeenCalledWith('u_pending');
+  });
+
+  it('deduplicates requester profile lookups and limits QQ query concurrency', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchUserProfileByUid = vi.fn(async (uid: string) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      inFlight--;
+      return makeProfile(1_000 + Number(uid.slice(2)), uid);
+    });
+    const requests = Array.from({ length: 6 }, (_, index) => makeGroupRequest({
+      sequence: index + 1,
+      targetUid: `u_${index + 1}`,
+      targetUin: 0,
+    }));
+    requests.push(makeGroupRequest({ sequence: 7, targetUid: 'u_1', targetUin: 0 }));
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => requests),
+      fetchUserProfileByUid,
+      identity: fakeIdentity({ findUinByUid: () => null }),
+    });
+
+    const result = await getGroupSystemMessages(bridge);
+
+    expect(fetchUserProfileByUid).toHaveBeenCalledTimes(6);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(result.map((item) => item.requester_uin)).toEqual([
+      1001, 1002, 1003, 1004, 1005, 1006, 1001,
+    ]);
+  });
+
+  it('uses a known UIN from a duplicate request without querying QQ', async () => {
+    const fetchUserProfileByUid = vi.fn(async () => {
+      throw new Error('profile lookup must not run');
+    });
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => [
+        makeGroupRequest({ sequence: 1, targetUid: 'u_known', targetUin: 0 }),
+        makeGroupRequest({ sequence: 2, targetUid: 'u_known', targetUin: 4242 }),
+      ]),
+      fetchUserProfileByUid,
+      identity: fakeIdentity({ findUinByUid: () => null }),
+    });
+
+    const result = await getGroupSystemMessages(bridge);
+
+    expect(fetchUserProfileByUid).not.toHaveBeenCalled();
+    expect(result.map((item) => item.requester_uin)).toEqual([4242, 4242]);
+  });
+
+  it('propagates inbox failures instead of disguising them as an empty list', async () => {
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => { throw new Error('OIDB unavailable'); }),
+    });
+
+    await expect(getGroupSystemMessages(bridge)).rejects.toThrow('OIDB unavailable');
+  });
+
+  it('identifies the requester UID when profile resolution fails', async () => {
+    const bridge = fakeBridge({
+      fetchGroupRequests: vi.fn(async () => [
+        makeGroupRequest({ targetUid: 'u_missing', targetUin: 0 }),
+      ]),
+      fetchUserProfileByUid: vi.fn(async () => { throw new Error('profile OIDB unavailable'); }),
+      identity: fakeIdentity({ findUinByUid: () => null }),
+    });
+
+    await expect(getGroupSystemMessages(bridge)).rejects.toThrow(
+      'failed to resolve requester UIN for UID u_missing: profile OIDB unavailable',
+    );
   });
 });

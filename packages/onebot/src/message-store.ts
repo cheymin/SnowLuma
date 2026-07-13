@@ -2,6 +2,11 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import type { JsonObject, MessageMeta } from './types';
 import { openSqliteDb } from './sqlite-open';
 
+export interface ReadSessionTargets {
+  groupIds: number[];
+  privateUserIds: number[];
+}
+
 export class MessageStore {
   private readonly db: DatabaseSync;
   private readonly stmtStoreEvent: StatementSync;
@@ -12,6 +17,7 @@ export class MessageStore {
   private readonly stmtResolveReplyPrivate: StatementSync;
   private readonly stmtListEventsAnchored: StatementSync;
   private readonly stmtListEventsLatest: StatementSync;
+  private readonly stmtListIncomingC2CSessions: StatementSync;
 
   constructor(dbPath: string) {
     // Replace .json extension with .db if present
@@ -84,6 +90,18 @@ export class MessageStore {
        WHERE is_group = ? AND session_id = ? AND data IS NOT NULL
        ORDER BY sequence DESC
        LIMIT ?`,
+    );
+
+    this.stmtListIncomingC2CSessions = this.db.prepare(
+      `SELECT session_id
+       FROM messages
+       WHERE is_group = 0
+         AND data IS NOT NULL
+         AND json_extract(data, '$.post_type') = 'message'
+         AND json_extract(data, '$.message_type') = 'private'
+         AND json_extract(data, '$.sub_type') = 'friend'
+       GROUP BY session_id
+       ORDER BY session_id ASC`,
     );
   }
 
@@ -209,7 +227,35 @@ export class MessageStore {
     return result;
   }
 
+  /**
+   * Build read-report targets from current groups plus genuine incoming C2C
+   * sessions. `is_group = 0` alone is insufficient: group temp sessions use
+   * the same storage lane, and sent-message echoes may be keyed by self UIN.
+   * Only an incoming `sub_type=friend` event can represent unread C2C state.
+   */
+  listReadSessions(currentGroupIds: readonly number[]): ReadSessionTargets {
+    const groupIds: number[] = [];
+    const seenGroups = new Set<number>();
+    for (const groupId of currentGroupIds) {
+      if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+        throw new Error(`current group list contains invalid group id ${String(groupId)}`);
+      }
+      if (!seenGroups.has(groupId)) {
+        seenGroups.add(groupId);
+        groupIds.push(groupId);
+      }
+    }
 
+    const rows = this.stmtListIncomingC2CSessions.all() as Array<{ session_id: number }>;
+    const privateUserIds: number[] = [];
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.session_id) || row.session_id <= 0) {
+        throw new Error(`messages database contains invalid session id ${String(row.session_id)}`);
+      }
+      privateUserIds.push(row.session_id);
+    }
+    return { groupIds, privateUserIds };
+  }
 
   private initSchema(): void {
     this.db.exec(`

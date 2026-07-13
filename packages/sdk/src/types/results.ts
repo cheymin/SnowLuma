@@ -1,4 +1,4 @@
-import type { JsonArray, JsonObject } from './json';
+import type { JsonArray, JsonObject, JsonValue } from './json';
 
 export interface SendMessageResult {
   message_id: number;
@@ -58,6 +58,36 @@ export interface GroupMessageHistory {
 
 export interface FriendMessageHistory {
   messages: JsonObject[];
+}
+
+export interface GroupNoticeInfo {
+  notice_id: string;
+  sender_id: number;
+  publish_time: number;
+  message: {
+    text: string;
+    image: Array<{ id: string; height: number; width: number }>;
+    images: Array<{ id: string; height: number; width: number }>;
+  };
+  settings: JsonValue;
+  read_num: number;
+  /** Server response type; regular announcements are commonly returned as 6. */
+  type: number;
+  pinned: number;
+  send_to_new_members: boolean;
+}
+
+export interface CategorizedFriend {
+  user_id: number;
+  nickname: string;
+  remark: string;
+}
+
+export interface FriendCategoryResult {
+  categoryId: number;
+  categoryName: string;
+  categoryMbCount: number;
+  buddyList: CategorizedFriend[];
 }
 
 export interface MediaInfo extends JsonObject {}

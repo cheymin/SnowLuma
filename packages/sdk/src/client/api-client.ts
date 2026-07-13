@@ -326,9 +326,13 @@ export abstract class SnowLumaApiClient {
 
   sendGroupNotice(groupId: number, content: string, options: RequestOptions & {
     image?: string;
-    pinned?: number;
-    type?: number;
-    confirmRequired?: number;
+    pinned?: 0 | 1;
+    type?: 1 | 20;
+    sendToNewMembers?: boolean;
+    isShowEditCard?: 0 | 1;
+    /** QQ's raw inverted field: 0=show popup, 1=do not show popup. */
+    tipWindowType?: 0 | 1;
+    confirmRequired?: 0 | 1;
   } = {}) {
     return this.call('_send_group_notice', {
       group_id: groupId,
@@ -336,6 +340,9 @@ export abstract class SnowLumaApiClient {
       image: options.image,
       pinned: options.pinned,
       type: options.type,
+      send_to_new_members: options.sendToNewMembers,
+      is_show_edit_card: options.isShowEditCard,
+      tip_window_type: options.tipWindowType,
       confirm_required: options.confirmRequired,
     }, options);
   }

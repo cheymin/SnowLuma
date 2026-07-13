@@ -228,6 +228,9 @@ export interface QQEvent {
 export interface FriendMessage extends QQEvent {
   kind: 'friend_message';
   senderUin: number;
+  /** Stable QQ UID carried by ResponseHead. Kept internally so the identity
+   *  index can preserve the exact C2C peer instead of re-resolving its UIN. */
+  senderUid?: string;
   senderNick: string;
   msgSeq: number;
   msgId: number;

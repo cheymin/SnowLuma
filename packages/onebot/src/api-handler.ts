@@ -8,7 +8,9 @@ import {
   type CompiledActionKind,
   type CompiledActionRegistry,
 } from './actions';
+import type { GroupSystemMessageQuery } from './modules/contact-actions';
 import type { ForwardPreviewMeta } from './modules/message-actions';
+import type { ReadSessionTargets } from './message-store';
 import type { JsonObject, JsonValue, MessageMeta } from './types';
 import { RETCODE, failedResponse, okResponse } from './types';
 import { type StreamSink, wrapStreamFrame, wrapStreamTerminal } from './streaming';
@@ -37,6 +39,7 @@ export interface ApiActionContext {
   isOnline: () => boolean;
   getMessage: (messageId: number) => JsonObject | null;
   getMessageMeta: (messageId: number) => MessageMeta | null;
+  listReadSessions: () => ReadSessionTargets;
   sendPrivateMessage: (userId: number, message: JsonValue, autoEscape: boolean, tempGroupId?: number) => Promise<MessageSendResult>;
   sendGroupMessage: (groupId: number, message: JsonValue, autoEscape: boolean) => Promise<MessageSendResult>;
   deleteMessage: (messageId: number, meta: MessageMeta) => Promise<void>;
@@ -54,7 +57,7 @@ export interface ApiActionContext {
   deleteEssenceMsg: (messageId: number) => Promise<void>;
   getGroupMsgHistory: (groupId: number, messageId?: number, count?: number) => Promise<JsonObject[]>;
   getFriendMsgHistory: (userId: number, messageId?: number, count?: number) => Promise<JsonObject[]>;
-  handleGetGroupSystemMsg: () => Promise<JsonObject[]>;
+  handleGetGroupSystemMsg: (query: GroupSystemMessageQuery) => Promise<JsonObject[]>;
   getDownloadRKeys: () => Promise<JsonObject[]>;
   sendGroupForwardMsg: (groupId: number, messages: JsonValue, meta?: ForwardPreviewMeta) => Promise<{ messageId: number; forwardId: string }>;
   sendPrivateForwardMsg: (userId: number, messages: JsonValue, meta?: ForwardPreviewMeta) => Promise<{ messageId: number; forwardId: string }>;

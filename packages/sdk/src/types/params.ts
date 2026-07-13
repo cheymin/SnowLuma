@@ -217,9 +217,14 @@ export interface MarkMsgAsReadParams extends JsonObject {
 export interface GroupNoticeParams extends GroupIdParams {
   content: string;
   image?: string;
-  pinned?: number;
-  type?: number;
-  confirm_required?: number;
+  pinned?: 0 | 1;
+  /** Compatibility field: 1=regular announcement, 20=new-member announcement. */
+  type?: 1 | 20;
+  send_to_new_members?: boolean;
+  is_show_edit_card?: 0 | 1;
+  /** QQ's raw inverted field: 0=show popup, 1=do not show popup. */
+  tip_window_type?: 0 | 1;
+  confirm_required?: 0 | 1;
 }
 
 export interface ForwardPreviewParams {

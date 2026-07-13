@@ -35,6 +35,7 @@ function fakeMeta(overrides: Partial<MessageMeta> = {}): MessageMeta {
 // drops the redundant `Group`/`File` prefix.
 const APIS_ROUTING: Record<string, [string, string]> = {
   fetchFriendList: ['contacts', 'fetchFriendList'],
+  fetchFriendCategories: ['contacts', 'fetchFriendCategories'],
   fetchGroupList: ['contacts', 'fetchGroupList'],
   fetchGroupMemberList: ['contacts', 'fetchGroupMemberList'],
   fetchUserProfile: ['contacts', 'fetchUserProfile'],
@@ -100,6 +101,7 @@ function fakeCtx(bridge: BridgeInterface, overrides: Partial<ApiActionContext> =
     bridge,
     getMessageMeta: () => null,
     getMessage: () => null,
+    listReadSessions: () => ({ groupIds: [], privateUserIds: [] }),
     getLoginInfo: () => ({ userId: 1, nickname: '' }),
     isOnline: () => true,
     canSendImage: () => true,
@@ -118,6 +120,108 @@ function fakeCtx(bridge: BridgeInterface, overrides: Partial<ApiActionContext> =
 function makeHandler(ctx: ApiActionContext): ApiHandler {
   return new ApiHandler(ctx);
 }
+
+describe('extended-actions / group notice options', () => {
+  it('coerces and forwards every supported announcement option', async () => {
+    const sendNotice = vi.fn(async () => ({ ec: 0 }));
+    const bridge = fakeBridge({ apis: { web: { sendNotice } } });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('_send_group_notice', {
+      group_id: '941657197',
+      content: 'announcement option test',
+      pinned: '1',
+      type: '20',
+      send_to_new_members: 'true',
+      is_show_edit_card: '0',
+      tip_window_type: '0',
+      confirm_required: '0',
+    });
+
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(sendNotice).toHaveBeenCalledWith(941657197, 'announcement option test', {
+      image: undefined,
+      pinned: 1,
+      type: 20,
+      sendToNewMembers: true,
+      isShowEditCard: 0,
+      tipWindowType: 0,
+      confirmRequired: 0,
+    });
+  });
+
+  it('rejects a semantic/raw target conflict without calling the bridge', async () => {
+    const sendNotice = vi.fn();
+    const bridge = fakeBridge({ apis: { web: { sendNotice } } });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('_send_group_notice', {
+      group_id: 941657197,
+      content: 'conflict',
+      type: 1,
+      send_to_new_members: true,
+    });
+
+    expect(response).toMatchObject({
+      status: 'failed',
+      retcode: 1400,
+      wording: 'send_to_new_members conflicts with type',
+    });
+    expect(sendNotice).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unverified publish type without calling the bridge', async () => {
+    const sendNotice = vi.fn();
+    const bridge = fakeBridge({ apis: { web: { sendNotice } } });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('_send_group_notice', {
+      group_id: 941657197,
+      content: 'unsupported',
+      type: 6,
+    });
+
+    expect(response).toMatchObject({ status: 'failed', retcode: 1400 });
+    expect(sendNotice).not.toHaveBeenCalled();
+  });
+});
+
+describe('extended-actions / get_friends_with_category', () => {
+  it('returns the exact categorized friend contract', async () => {
+    const fetchFriendCategories = vi.fn(async () => [{
+      categoryId: 7,
+      categoryName: 'Work',
+      memberCount: 1,
+      sortId: 3,
+      friends: [{ uin: 10001, uid: 'u1', nickname: 'Alice', remark: 'A' }],
+    }]);
+    const bridge = fakeBridge({ fetchFriendCategories });
+    const response = await makeHandler(fakeCtx(bridge))
+      .handle('get_friends_with_category', {});
+
+    expect(fetchFriendCategories).toHaveBeenCalledOnce();
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(response.data).toEqual([{
+      categoryId: 7,
+      categoryName: 'Work',
+      categoryMbCount: 1,
+      buddyList: [{ user_id: 10001, nickname: 'Alice', remark: 'A' }],
+    }]);
+  });
+
+  it('surfaces categorized fetch failures', async () => {
+    const bridge = fakeBridge({
+      fetchFriendCategories: vi.fn(async () => {
+        throw new Error('repeated friend-list cookie aa');
+      }),
+    });
+    const response = await makeHandler(fakeCtx(bridge))
+      .handle('get_friends_with_category', {});
+
+    expect(response).toMatchObject({
+      status: 'failed',
+      retcode: 100,
+      wording: 'repeated friend-list cookie aa',
+    });
+  });
+});
 
 // ─── Tier 1: send_packet / .send_packet ───
 
@@ -245,6 +349,34 @@ describe('extended-actions / history accepts negative message_id', () => {
     const res = await makeHandler(ctx).handle('get_group_msg_history', { group_id: 100 });
     expect(res).toMatchObject({ status: 'ok', retcode: 0 });
     expect(getGroupMsgHistory).toHaveBeenCalledWith(100, 0, 20);
+  });
+});
+
+describe('extended-actions / mark conversation read', () => {
+  it('uses a group message only to identify the conversation', async () => {
+    const markGroupRead = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ apis: { message: { markGroupRead } } });
+    const ctx = fakeCtx(bridge, {
+      getMessageMeta: () => fakeMeta({ targetId: 12345, sequence: 42708 }),
+    });
+
+    const res = await makeHandler(ctx).handle('mark_group_msg_as_read', { message_id: 1 });
+
+    expect(markGroupRead).toHaveBeenCalledWith(12345);
+    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
+  });
+
+  it('routes a private message to the C2C read implementation without forwarding its header sequence', async () => {
+    const markPrivateRead = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ apis: { message: { markPrivateRead } } });
+    const ctx = fakeCtx(bridge, {
+      getMessageMeta: () => fakeMeta({ isGroup: false, targetId: 1787882683, sequence: 42708 }),
+    });
+
+    const res = await makeHandler(ctx).handle('mark_private_msg_as_read', { message_id: 1 });
+
+    expect(markPrivateRead).toHaveBeenCalledWith(1787882683);
+    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
   });
 });
 
@@ -822,10 +954,8 @@ describe('extended-actions / ocr_image', () => {
   });
 });
 
-// ─── TierB Phase 1: compat stubs (model_show / online_clients / mark_all_as_read) ───
-// These are kernel-only in NapCat (mock/no-op), so SnowLuma ships honest
-// compat shapes rather than RE-ing a wire that doesn't exist. We pin the
-// response *shape* of each. NOTE two deliberate divergences from NapCat:
+// ─── TierB Phase 1: compatibility actions ───
+// NOTE two deliberate divergences from NapCat:
 //   • _get_model_show reuses NapCat's array/variants shape but ECHOES the
 //     requested model instead of NapCat's hardcoded 'napcat'.
 //   • get_online_clients returns the OneBot-v11/go-cqhttp { clients: [] }
@@ -862,9 +992,15 @@ describe('extended-actions / TierB compat stubs', () => {
     expect(res.data).toMatchObject({ clients: [] });
   });
 
-  it('_mark_all_as_read is an accepted no-op', async () => {
-    const res = await makeHandler(fakeCtx(fakeBridge())).handle('_mark_all_as_read', {});
-    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
+  it('_mark_all_as_read passes every observed session to the batched SSO implementation', async () => {
+    const markAllRead = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ apis: { message: { markAllRead } } });
+    const res = await makeHandler(fakeCtx(bridge, {
+      listReadSessions: () => ({ groupIds: [101, 102], privateUserIds: [201] }),
+    })).handle('_mark_all_as_read', {});
+
+    expect(markAllRead).toHaveBeenCalledWith([101, 102], [201]);
+    expect(res).toMatchObject({ status: 'ok', retcode: 0, data: null });
   });
 });
 

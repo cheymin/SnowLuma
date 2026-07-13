@@ -66,6 +66,9 @@ export function buildApiContext(ref: OneBotInstanceContext): ApiActionContext {
     isOnline: () => true,
     getMessage: (messageId) => messageStore.findEvent(messageId),
     getMessageMeta: (messageId) => messageStore.findMeta(messageId),
+    listReadSessions: () => messageStore.listReadSessions(
+      bridge.identity.groups.map(group => group.groupId),
+    ),
     canSendImage: () => true,
     canSendRecord: () => true,
     sendPrivateMessage: (userId, message, autoEscape, tempGroupId) => sendPrivateMessage(ref, userId, message, autoEscape, tempGroupId),
@@ -81,7 +84,7 @@ export function buildApiContext(ref: OneBotInstanceContext): ApiActionContext {
     handleGroupRequest: (flag, _subType, approve, reason) => handleGroupAddRequest(bridge, flag, approve, reason),
     getGroupMsgHistory: (groupId, messageId, count) => getGroupHistory(ref, groupId, messageId, count),
     getFriendMsgHistory: (userId, messageId, count) => getFriendHistory(ref, userId, messageId, count),
-    handleGetGroupSystemMsg: () => getGroupSystemMessages(bridge),
+    handleGetGroupSystemMsg: (query) => getGroupSystemMessages(bridge, query),
     getDownloadRKeys: () => getDownloadRKeys(bridge),
     sendGroupForwardMsg: (groupId, messages, meta) => sendGroupForwardMessage(ref, groupId, messages, meta),
     sendPrivateForwardMsg: (userId, messages, meta) => sendPrivateForwardMessage(ref, userId, messages, meta),
@@ -125,4 +128,3 @@ export function buildApiContext(ref: OneBotInstanceContext): ApiActionContext {
 }
 
 export type { Bridge, WebHonorType };
-

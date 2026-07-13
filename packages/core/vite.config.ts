@@ -41,8 +41,8 @@ const nativeSrc = toPosix(nativeDir);
 const targetTriple = process.env.SNOWLUMA_TARGET ?? `${process.platform}-${process.arch}`;
 const [targetPlatform, targetArch] = targetTriple.split('-');
 
-// Runtime scaffolding files copied into dist/. The NTQQ hook is Windows-only,
-// so its launcher/shell script differ per target.
+// Runtime scaffolding files copied into dist/. Windows and Linux use different
+// launchers, while both targets ship their matching QQ integration binaries.
 const runtimeDistFiles = ['package.json',
   targetPlatform === 'win32' ? 'launcher.bat' : 'launcher.sh',
 ];
