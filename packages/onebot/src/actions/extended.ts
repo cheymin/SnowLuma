@@ -424,20 +424,33 @@ export const actions = [
   // 群公告
   groupAction({
     name: '_send_group_notice',
-    summary: '发送群公告',
+    summary: '发送群公告（支持置顶、弹窗、新成员、群昵称引导与确认）',
     params: {
-      content: f.string({ allowEmpty: false }),
-      image: f.string().default('').role('image'),
-      pinned: f.raw(),
-      type: f.raw(),
-      confirm_required: f.raw(),
+      content: f.string({ allowEmpty: false }).describe('公告正文'),
+      image: f.string().default('').role('image').describe('可选公告图片（本地路径、URL 或 base64）'),
+      pinned: f.int({ min: 0, max: 1 }).default(0).describe('是否置顶：1=置顶，0=不置顶'),
+      type: f.int().optional().describe('发布类型：1=普通公告，20=新成员公告；建议使用 send_to_new_members'),
+      send_to_new_members: f.bool().optional().describe('是否在成员新加入群时发送（与 type=20 等价）'),
+      is_show_edit_card: f.int({ min: 0, max: 1 }).default(1).describe('是否引导群成员修改群昵称：1=是，0=否'),
+      tip_window_type: f.int({ min: 0, max: 1 }).default(1).describe('弹窗展示：0=开启弹窗，1=关闭弹窗（QQ 原始字段为反向语义）'),
+      confirm_required: f.int({ min: 0, max: 1 }).default(1).describe('是否需要群成员确认收到：1=是，0=否'),
     },
+    rules: (r) => [
+      r.rule('type must be 1 (regular) or 20 (new members)', (p) => p.type === undefined || p.type === 1 || p.type === 20),
+      r.rule(
+        'send_to_new_members conflicts with type',
+        (p) => p.send_to_new_members === undefined || p.type === undefined || p.type === (p.send_to_new_members ? 20 : 1),
+      ),
+    ],
     run: async (p, ctx) => {
       const options = {
         image: p.image || undefined,
-        pinned: p.pinned !== undefined ? Number(p.pinned) : 0,
-        type: p.type !== undefined ? Number(p.type) : 1,
-        confirm_required: p.confirm_required !== undefined ? Number(p.confirm_required) : 1,
+        pinned: p.pinned,
+        type: p.type,
+        sendToNewMembers: p.send_to_new_members,
+        isShowEditCard: p.is_show_edit_card,
+        tipWindowType: p.tip_window_type,
+        confirmRequired: p.confirm_required,
       };
 
       await ctx.bridge.apis.web.sendNotice(p.group_id, p.content, options);
@@ -448,6 +461,7 @@ export const actions = [
   groupAction({
     name: '_get_group_notice',
     summary: '获取群公告',
+    returns: '普通公告与新成员公告的合并数组；send_to_new_members 标识后者',
     readOnly: true,
     run: async (p, ctx) => {
       const notices = await ctx.bridge.apis.web.getNotice(p.group_id);
