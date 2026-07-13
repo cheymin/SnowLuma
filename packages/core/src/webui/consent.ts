@@ -18,6 +18,18 @@ const AGREEMENT_FILES = [
   { id: 'privacy' as const, file: 'PRIVACY.md' },
 ];
 
+export const EULA_ACCEPT_ENV = 'SNOWLUMA_ACCEPT_EULA';
+export const PRIVACY_ACCEPT_ENV = 'SNOWLUMA_ACCEPT_PRIVACY';
+
+type ConsentEnvironment = Readonly<Record<string, string | undefined>>;
+
+export interface EnvironmentConsent {
+  eulaAccepted: boolean;
+  privacyAccepted: boolean;
+  /** Both documents must be accepted; a partial opt-in never unlocks the gate. */
+  accepted: boolean;
+}
+
 export interface AgreementDoc {
   id: 'eula' | 'privacy';
   /** First markdown `# ` heading, for the tab/section title. */
@@ -41,13 +53,42 @@ export interface AgreementsPayload {
   /** Content-hash version of the current agreement set. */
   version: string;
   /**
-   * True when the operator must (re-)accept: the agreements carry real text
-   * AND the stored consent version differs from the current one. A missing or
-   * unreadable agreement set fails OPEN (no gate) so a broken bundle can never
-   * lock the admin out of their own panel.
+   * True when the operator must (re-)accept: the agreements carry real text,
+   * environment consent is incomplete, AND the stored consent version differs
+   * from the current one. A missing or unreadable agreement set fails OPEN (no
+   * gate) so a broken bundle can never lock the admin out of their own panel.
    */
   consentRequired: boolean;
   documents: AgreementDoc[];
+}
+
+function parseEnvironmentAcceptance(name: string, raw: string | undefined): boolean {
+  if (raw === undefined || raw.trim() === '') return false;
+
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === '1' || normalized === 'true') return true;
+  if (normalized === '0' || normalized === 'false') return false;
+
+  throw new Error(
+    `${name} must be one of: 1, true, 0, false; received ${JSON.stringify(raw)}`,
+  );
+}
+
+/**
+ * Resolve declarative consent for unattended deployments. Environment consent
+ * is intentionally ephemeral: removing either variable restores the normal
+ * versioned consent gate instead of silently writing a permanent record.
+ */
+export function resolveEnvironmentConsent(
+  env: ConsentEnvironment = process.env,
+): EnvironmentConsent {
+  const eulaAccepted = parseEnvironmentAcceptance(EULA_ACCEPT_ENV, env[EULA_ACCEPT_ENV]);
+  const privacyAccepted = parseEnvironmentAcceptance(PRIVACY_ACCEPT_ENV, env[PRIVACY_ACCEPT_ENV]);
+  return {
+    eulaAccepted,
+    privacyAccepted,
+    accepted: eulaAccepted && privacyAccepted,
+  };
 }
 
 // ── Agreement loading (pure-ish; file read + parse, cached) ─────────────────
@@ -85,7 +126,7 @@ export function parseAgreementMeta(text: string): {
   const title = text.match(/^#\s+(.+?)\s*$/m)?.[1]?.trim() ?? '';
   // Matches both "Version: 1.0" / "版本 / Version:** 1.0" style lines.
   const declaredVersion =
-    text.match(/(?:Version|版本)[^\n0-9]*([0-9][0-9A-Za-z.\-]*)/)?.[1]?.trim() ?? '';
+    text.match(/(?:Version|版本)[^\n0-9]*([0-9][0-9A-Za-z.-]*)/)?.[1]?.trim() ?? '';
   const effectiveDate =
     text.match(/(?:Effective date|生效日期)[^\n0-9]*(\d{4}-\d{2}-\d{2})/)?.[1] ?? '';
   return { title, declaredVersion, effectiveDate };
@@ -169,8 +210,10 @@ export function recordConsent(version: string): ConsentRecord {
   return record;
 }
 
-/** True when the agreements carry real text and the stored consent is stale. */
-export function isConsentRequired(): boolean {
+/** True when neither environment nor stored consent covers the current agreements. */
+export function isConsentRequired(env: ConsentEnvironment = process.env): boolean {
+  if (resolveEnvironmentConsent(env).accepted) return false;
+
   const { docs, version } = loadAgreements();
   const hasContent = docs.some((d) => d.text.trim().length > 0);
   if (!hasContent) return false; // fail open: never brick the panel on a broken bundle

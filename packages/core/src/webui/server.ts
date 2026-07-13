@@ -20,7 +20,15 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { evaluatePasswordRules, isStrongPassword, WebuiAuth } from './auth';
-import { getAgreementsPayload, isConsentRequired, loadAgreements, recordConsent } from './consent';
+import {
+  EULA_ACCEPT_ENV,
+  getAgreementsPayload,
+  isConsentRequired,
+  loadAgreements,
+  PRIVACY_ACCEPT_ENV,
+  recordConsent,
+  resolveEnvironmentConsent,
+} from './consent';
 import { resolveTlsContext, validateTlsPair } from './tls';
 import { coerceSettingsPatch } from './system-settings';
 import { buildBackup, planRestore, validateBackup } from './backup';
@@ -419,8 +427,24 @@ export async function initWebUI(
   // Memoized once at startup (agreements version is fixed per process; a text
   // change ships with a redeploy that restarts us). Flipped to false the moment
   // consent is recorded, so the middleware never touches disk per request.
+  const environmentConsent = resolveEnvironmentConsent();
   let consentGatePending = isConsentRequired();
-  if (consentGatePending) log.info('awaiting EULA/PRIVACY consent before the panel unlocks');
+  if (environmentConsent.accepted) {
+    log.info(
+      'EULA/PRIVACY consent supplied by %s and %s (agreements version=%s)',
+      EULA_ACCEPT_ENV,
+      PRIVACY_ACCEPT_ENV,
+      loadAgreements().version,
+    );
+  } else if (environmentConsent.eulaAccepted || environmentConsent.privacyAccepted) {
+    log.warn(
+      'partial environment consent ignored; set both %s=1 and %s=1 to accept the agreements',
+      EULA_ACCEPT_ENV,
+      PRIVACY_ACCEPT_ENV,
+    );
+  } else if (consentGatePending) {
+    log.info('awaiting EULA/PRIVACY consent before the panel unlocks');
+  }
 
   const app = new Hono();
 
