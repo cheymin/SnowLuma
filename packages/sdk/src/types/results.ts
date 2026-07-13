@@ -60,6 +60,19 @@ export interface FriendMessageHistory {
   messages: JsonObject[];
 }
 
+export interface CategorizedFriend {
+  user_id: number;
+  nickname: string;
+  remark: string;
+}
+
+export interface FriendCategoryResult {
+  categoryId: number;
+  categoryName: string;
+  categoryMbCount: number;
+  buddyList: CategorizedFriend[];
+}
+
 export interface MediaInfo extends JsonObject {}
 
 export interface CookieInfo {

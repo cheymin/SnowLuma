@@ -3019,6 +3019,60 @@
       "name": "get_friends_with_category",
       "aliases": [],
       "summary": "获取分组好友列表",
+      "returns": "好友分组数组；每组包含 categoryId、categoryName、categoryMbCount 和 buddyList。",
+      "returnsSchema": {
+        "type": "array",
+        "description": "带分组的好友列表",
+        "items": {
+          "type": "object",
+          "properties": {
+            "categoryId": {
+              "type": "integer",
+              "description": "分组 ID"
+            },
+            "categoryName": {
+              "type": "string",
+              "description": "分组名称"
+            },
+            "categoryMbCount": {
+              "type": "integer",
+              "description": "服务端报告的分组好友数"
+            },
+            "buddyList": {
+              "type": "array",
+              "description": "该分组内的好友",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer",
+                    "description": "QQ 号"
+                  },
+                  "nickname": {
+                    "type": "string",
+                    "description": "昵称"
+                  },
+                  "remark": {
+                    "type": "string",
+                    "description": "好友备注"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "nickname",
+                  "remark"
+                ]
+              }
+            }
+          },
+          "required": [
+            "categoryId",
+            "categoryName",
+            "categoryMbCount",
+            "buddyList"
+          ]
+        }
+      },
       "readOnly": true,
       "params": [],
       "invariants": [],

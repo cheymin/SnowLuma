@@ -1122,12 +1122,46 @@ export const actions = [
     name: 'get_friends_with_category',
     summary: '获取分组好友列表',
     readOnly: true,
+    returns: '好友分组数组；每组包含 categoryId、categoryName、categoryMbCount 和 buddyList。',
+    returnsSchema: {
+      type: 'array',
+      description: '带分组的好友列表',
+      items: {
+        type: 'object',
+        properties: {
+          categoryId: { type: 'integer', description: '分组 ID' },
+          categoryName: { type: 'string', description: '分组名称' },
+          categoryMbCount: { type: 'integer', description: '服务端报告的分组好友数' },
+          buddyList: {
+            type: 'array',
+            description: '该分组内的好友',
+            items: {
+              type: 'object',
+              properties: {
+                user_id: { type: 'integer', description: 'QQ 号' },
+                nickname: { type: 'string', description: '昵称' },
+                remark: { type: 'string', description: '好友备注' },
+              },
+              required: ['user_id', 'nickname', 'remark'],
+            },
+          },
+        },
+        required: ['categoryId', 'categoryName', 'categoryMbCount', 'buddyList'],
+      },
+    },
     params: {},
     run: async (_p, ctx) => {
-      if (ctx.getFriendList) {
-        return okResponse(await ctx.getFriendList());
-      }
-      return okResponse([]);
+      const categories = await ctx.bridge.apis.contacts.fetchFriendCategories();
+      return okResponse(categories.map(category => ({
+        categoryId: category.categoryId,
+        categoryName: category.categoryName,
+        categoryMbCount: category.memberCount,
+        buddyList: category.friends.map(friend => ({
+          user_id: friend.uin,
+          nickname: friend.nickname,
+          remark: friend.remark,
+        })),
+      })));
     },
   }),
 

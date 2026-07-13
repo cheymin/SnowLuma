@@ -77,6 +77,7 @@ import type {
   DownloadFileResult,
   EmptyData,
   ForwardMessageResult,
+  FriendCategoryResult,
   FriendMessageHistory,
   GroupAtAllRemainInfo,
   GroupFileSystemInfo,
@@ -196,7 +197,7 @@ export interface SnowLumaActionMap {
   fetch_custom_face: { params: FetchCustomFaceParams; data: string[] };
   get_emoji_likes: { params: GetEmojiLikesParams; data: JsonObject };
   fetch_emoji_like: { params: FetchEmojiLikeParams; data: JsonObject };
-  get_friends_with_category: { params: JsonObject; data: JsonObject[] };
+  get_friends_with_category: { params: JsonObject; data: FriendCategoryResult[] };
   get_online_clients: { params: JsonObject; data: OnlineClientsInfo };
   _get_model_show: { params: JsonObject; data: { variants: JsonArray } };
   _set_model_show: { params: JsonObject; data: EmptyData };

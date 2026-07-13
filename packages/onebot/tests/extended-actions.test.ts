@@ -35,6 +35,7 @@ function fakeMeta(overrides: Partial<MessageMeta> = {}): MessageMeta {
 // drops the redundant `Group`/`File` prefix.
 const APIS_ROUTING: Record<string, [string, string]> = {
   fetchFriendList: ['contacts', 'fetchFriendList'],
+  fetchFriendCategories: ['contacts', 'fetchFriendCategories'],
   fetchGroupList: ['contacts', 'fetchGroupList'],
   fetchGroupMemberList: ['contacts', 'fetchGroupMemberList'],
   fetchUserProfile: ['contacts', 'fetchUserProfile'],
@@ -118,6 +119,46 @@ function fakeCtx(bridge: BridgeInterface, overrides: Partial<ApiActionContext> =
 function makeHandler(ctx: ApiActionContext): ApiHandler {
   return new ApiHandler(ctx);
 }
+
+describe('extended-actions / get_friends_with_category', () => {
+  it('returns the exact categorized friend contract', async () => {
+    const fetchFriendCategories = vi.fn(async () => [{
+      categoryId: 7,
+      categoryName: 'Work',
+      memberCount: 1,
+      sortId: 3,
+      friends: [{ uin: 10001, uid: 'u1', nickname: 'Alice', remark: 'A' }],
+    }]);
+    const bridge = fakeBridge({ fetchFriendCategories });
+    const response = await makeHandler(fakeCtx(bridge))
+      .handle('get_friends_with_category', {});
+
+    expect(fetchFriendCategories).toHaveBeenCalledOnce();
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(response.data).toEqual([{
+      categoryId: 7,
+      categoryName: 'Work',
+      categoryMbCount: 1,
+      buddyList: [{ user_id: 10001, nickname: 'Alice', remark: 'A' }],
+    }]);
+  });
+
+  it('surfaces categorized fetch failures', async () => {
+    const bridge = fakeBridge({
+      fetchFriendCategories: vi.fn(async () => {
+        throw new Error('repeated friend-list cookie aa');
+      }),
+    });
+    const response = await makeHandler(fakeCtx(bridge))
+      .handle('get_friends_with_category', {});
+
+    expect(response).toMatchObject({
+      status: 'failed',
+      retcode: 100,
+      wording: 'repeated friend-list cookie aa',
+    });
+  });
+});
 
 // ─── Tier 1: send_packet / .send_packet ───
 
