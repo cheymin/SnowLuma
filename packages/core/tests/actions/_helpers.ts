@@ -27,6 +27,7 @@ export interface MockMessageApi {
   recallPrivate: ReturnType<typeof vi.fn>;
   markGroupRead: ReturnType<typeof vi.fn>;
   markPrivateRead: ReturnType<typeof vi.fn>;
+  markAllRead: ReturnType<typeof vi.fn>;
 }
 
 export function mockMessageApi(): MockMessageApi {
@@ -38,6 +39,7 @@ export function mockMessageApi(): MockMessageApi {
     recallPrivate: vi.fn(async () => undefined),
     markGroupRead: vi.fn(async () => undefined),
     markPrivateRead: vi.fn(async () => undefined),
+    markAllRead: vi.fn(async () => undefined),
   };
 }
 

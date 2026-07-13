@@ -289,6 +289,34 @@ describe('extended-actions / history accepts negative message_id', () => {
   });
 });
 
+describe('extended-actions / mark conversation read', () => {
+  it('uses a group message only to identify the conversation', async () => {
+    const markGroupRead = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ apis: { message: { markGroupRead } } });
+    const ctx = fakeCtx(bridge, {
+      getMessageMeta: () => fakeMeta({ targetId: 12345, sequence: 42708 }),
+    });
+
+    const res = await makeHandler(ctx).handle('mark_group_msg_as_read', { message_id: 1 });
+
+    expect(markGroupRead).toHaveBeenCalledWith(12345);
+    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
+  });
+
+  it('routes a private message to the C2C read implementation without forwarding its header sequence', async () => {
+    const markPrivateRead = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ apis: { message: { markPrivateRead } } });
+    const ctx = fakeCtx(bridge, {
+      getMessageMeta: () => fakeMeta({ isGroup: false, targetId: 1787882683, sequence: 42708 }),
+    });
+
+    const res = await makeHandler(ctx).handle('mark_private_msg_as_read', { message_id: 1 });
+
+    expect(markPrivateRead).toHaveBeenCalledWith(1787882683);
+    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
+  });
+});
+
 // ─── Tier 1: nc_get_packet_status / nc_get_rkey ───
 
 describe('extended-actions / nc_get_packet_status', () => {

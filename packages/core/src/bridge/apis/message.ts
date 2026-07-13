@@ -4,9 +4,12 @@ import type {
 } from '@snowluma/proto-defs/action';
 import type { FileExtra } from '@snowluma/proto-defs/message';
 import type {
+  C2CReadedReportResponseItem,
   C2CRecallRequest,
+  GroupReadedReportResponseItem,
   GroupRecallRequest,
   SsoReadedReportReq,
+  SsoReadedReportResp,
 } from '@snowluma/proto-defs/oidb-actions/base';
 import { buildSendElems } from '@snowluma/protocol/element-builder';
 import { FinalizeOfflineFile } from '@snowluma/protocol/oidb-services/group-file/finalize-offline-file';
@@ -14,6 +17,7 @@ import type { MessageElement, QQEventVariant } from '@snowluma/protocol/events';
 import { fetchC2cMessageRange, fetchGroupMessageRange } from '@snowluma/protocol/msg-push';
 import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import { createLogger } from '@snowluma/common/logger';
+import type { SendPacketResult } from '@snowluma/common/packet-sender';
 import type { BridgeContext } from '../bridge-context';
 import { resolveSelfUid } from './shared';
 // `Bridge` is imported as a type only so we can narrow `ctx` back to
@@ -27,8 +31,88 @@ import { resolveSelfUid } from './shared';
 import type { Bridge, SendMessageReceipt } from '../bridge';
 
 const SEND_MSG_CMD = 'MessageSvc.PbSendMsg';
+const READ_REPORT_CMD = 'trpc.msg.msg_svc.MsgService.SsoReadedReport';
+const READ_REPORT_BATCH_SIZE = 100;
 
 const log = createLogger('Bridge.Message');
+
+function decodeReadReportResponse(result: SendPacketResult, label: string): SsoReadedReportResp {
+  if (!result.success) {
+    throw new Error(result.errorMessage || `${label} transport failed`);
+  }
+  if (!result.gotResponse || !result.responseData || result.responseData.length === 0) {
+    throw new Error(`${label} response is empty`);
+  }
+
+  let response: SsoReadedReportResp;
+  try {
+    response = protobuf_decode<SsoReadedReportResp>(result.responseData);
+  } catch (error) {
+    throw new Error(`${label} response decode failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const resultCode = response.resultCode ?? 0;
+  if (resultCode !== 0) {
+    throw new Error(response.errorMessage || `${label} failed with result code ${resultCode}`);
+  }
+  return response;
+}
+
+interface C2CReadTarget {
+  userId: number;
+  uid: string;
+}
+
+interface ReadResponseItem {
+  resultCode?: number;
+  errorMessage?: string;
+}
+
+function uniqueSessionIds(ids: readonly number[], label: string): number[] {
+  const result: number[] = [];
+  const seen = new Set<number>();
+  for (const id of ids) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error(`invalid ${label} read target ${String(id)}`);
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      result.push(id);
+    }
+  }
+  return result;
+}
+
+function requireReadResponseItem<T extends ReadResponseItem>(
+  items: readonly T[] | undefined,
+  index: number,
+  matches: (item: T) => boolean,
+  label: string,
+): T {
+  const item = items?.find(matches) ?? items?.[index];
+  if (!item) throw new Error(`${label} response item is missing`);
+
+  const resultCode = item.resultCode ?? 0;
+  if (resultCode !== 0) {
+    throw new Error(item.errorMessage || `${label} failed with result code ${resultCode}`);
+  }
+  if (!matches(item)) throw new Error(`${label} response identity does not match the request`);
+  return item;
+}
+
+function readUnsignedSequence(value: bigint | null | undefined, label: string): bigint {
+  // Proton represents an omitted protobuf scalar as null; protobuf semantics
+  // define that as the numeric default (zero), not a decode failure.
+  if (value == null) return 0n;
+  if (typeof value !== 'bigint' || value < 0n) throw new Error(`${label} is invalid`);
+  return value;
+}
+
+function requirePositiveSequence(value: bigint | null | undefined, label: string): bigint {
+  const sequence = readUnsignedSequence(value, label);
+  if (sequence === 0n) throw new Error(`${label} is missing`);
+  return sequence;
+}
 
 type GroupMessage = Extract<QQEventVariant, { kind: 'group_message' }>;
 type FriendMessage = Extract<QQEventVariant, { kind: 'friend_message' }>;
@@ -454,48 +538,190 @@ export class MessageApi {
     if (!result.success) throw new Error(result.errorMessage || 'recall private message failed');
   }
 
-  /**
-   * Push a group read-report (`trpc.msg.msg_svc.MsgService.SsoReadedReport`)
-   * advancing the bot's last-read marker to `sequence`. Mirrors the QQ
-   * NT client's own "scrolled to bottom" behaviour so subsequent
-   * sync packets don't replay messages we've already processed.
-   */
-  async markGroupRead(groupId: number, sequence: number): Promise<void> {
-    const request = protobuf_encode<SsoReadedReportReq>({
-      groupList: [
-        {
-          groupUin: BigInt(groupId),
-          lastReadSeq: BigInt(sequence),
-        },
-      ],
-    });
-    const result = await this.ctx.sendRawPacket('trpc.msg.msg_svc.MsgService.SsoReadedReport', request);
-    if (!result.success) {
-      throw new Error(result.errorMessage || 'mark group message read failed');
-    }
+  /** Mark the entire group conversation read, matching QQ NT's setMsgRead(peer). */
+  async markGroupRead(groupId: number): Promise<void> {
+    await this.markAllRead([groupId], []);
+  }
+
+  /** Mark the entire private conversation read, matching QQ NT's setMsgRead(peer). */
+  async markPrivateRead(userId: number): Promise<void> {
+    await this.markAllRead([], [userId]);
   }
 
   /**
-   * Push a c2c read-report. Same wire-cmd as the group variant but
-   * keyed by friend uid (resolved from uin via IdentityService).
-   * `lastReadTime` defaults to "now" — matches the QQ NT client
-   * which also uses wall-clock seconds rather than the read-message
-   * timestamp.
+   * Mark every supplied conversation read through SsoReadedReport.
+   *
+   * Message-head sequences are not valid C2C read sequences. The first packet
+   * therefore reports zero for every conversation and reads the server's
+   * current read/latest pair from the response without moving the marker
+   * backwards. A second packet advances only conversations that are behind.
+   * QQ NT caps each packet at 100 C2C plus 100 group entries and waits for the
+   * response before sending the next page; mirror that strictly here.
    */
-  async markPrivateRead(userId: number, sequence: number): Promise<void> {
-    const uid = await this.ctx.resolveUserUid(userId);
-    const request = protobuf_encode<SsoReadedReportReq>({
-      c2cList: [
-        {
-          uid,
-          lastReadTime: BigInt(Math.floor(Date.now() / 1000)),
-          lastReadSeq: BigInt(sequence),
-        },
-      ],
-    });
-    const result = await this.ctx.sendRawPacket('trpc.msg.msg_svc.MsgService.SsoReadedReport', request);
-    if (!result.success) {
-      throw new Error(result.errorMessage || 'mark private message read failed');
+  async markAllRead(groupIds: readonly number[], privateUserIds: readonly number[]): Promise<void> {
+    const groups = uniqueSessionIds(groupIds, 'group');
+    const privateUsers = uniqueSessionIds(privateUserIds, 'private');
+    const c2cTargets: C2CReadTarget[] = [];
+
+    // Keep UID resolution sequential. A cache miss may itself use the network,
+    // so Promise.all here would reintroduce the burst this method is designed
+    // to avoid.
+    for (const userId of privateUsers) {
+      const uid = await this.ctx.resolveUserUid(userId);
+      if (!uid) throw new Error(`failed to resolve uid for private read target ${userId}`);
+      c2cTargets.push({ userId, uid });
+    }
+
+    const totalBatches = Math.max(
+      Math.ceil(groups.length / READ_REPORT_BATCH_SIZE),
+      Math.ceil(c2cTargets.length / READ_REPORT_BATCH_SIZE),
+    );
+    if (totalBatches === 0) return;
+
+    log.debug(
+      'mark-read start: groups=%d c2c=%d batches=%d',
+      groups.length,
+      c2cTargets.length,
+      totalBatches,
+    );
+
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+      const start = batchIndex * READ_REPORT_BATCH_SIZE;
+      await this.markReadBatch(
+        groups.slice(start, start + READ_REPORT_BATCH_SIZE),
+        c2cTargets.slice(start, start + READ_REPORT_BATCH_SIZE),
+        batchIndex + 1,
+        totalBatches,
+      );
+    }
+
+    log.debug('mark-read complete: groups=%d c2c=%d', groups.length, c2cTargets.length);
+  }
+
+  private async sendReadReport(request: SsoReadedReportReq, label: string): Promise<SsoReadedReportResp> {
+    log.debug(
+      '%s send: groups=%d c2c=%d',
+      label,
+      request.groupList?.length ?? 0,
+      request.c2cList?.length ?? 0,
+    );
+    const payload = protobuf_encode<SsoReadedReportReq>(request);
+    const result = await this.ctx.sendRawPacket(READ_REPORT_CMD, payload);
+    const response = decodeReadReportResponse(result, label);
+    log.debug(
+      '%s response: groups=%d c2c=%d',
+      label,
+      response.groupList?.length ?? 0,
+      response.c2cList?.length ?? 0,
+    );
+    return response;
+  }
+
+  private groupReadResponse(
+    response: SsoReadedReportResp,
+    groupId: number,
+    index: number,
+    label: string,
+  ): GroupReadedReportResponseItem {
+    const groupUin = BigInt(groupId);
+    return requireReadResponseItem(
+      response.groupList,
+      index,
+      item => item.groupUin === groupUin,
+      `${label} group ${groupId}`,
+    );
+  }
+
+  private c2cReadResponse(
+    response: SsoReadedReportResp,
+    target: C2CReadTarget,
+    index: number,
+    label: string,
+  ): C2CReadedReportResponseItem {
+    return requireReadResponseItem(
+      response.c2cList,
+      index,
+      item => item.uid === target.uid,
+      `${label} private user ${target.userId}`,
+    );
+  }
+
+  private async markReadBatch(
+    groupIds: readonly number[],
+    c2cTargets: readonly C2CReadTarget[],
+    batchIndex: number,
+    totalBatches: number,
+  ): Promise<void> {
+    const batchLabel = `mark-read batch ${batchIndex}/${totalBatches}`;
+    const probe = await this.sendReadReport({
+      groupList: groupIds.map(groupId => ({ groupUin: BigInt(groupId), lastReadSeq: 0n })),
+      c2cList: c2cTargets.map(target => ({ uid: target.uid, lastReadTime: 0n, lastReadSeq: 0n })),
+    }, `${batchLabel} probe`);
+
+    const groupList: NonNullable<SsoReadedReportReq['groupList']> = [];
+    for (let i = 0; i < groupIds.length; i++) {
+      const groupId = groupIds[i]!;
+      const item = this.groupReadResponse(probe, groupId, i, `${batchLabel} probe`);
+      const readSeq = readUnsignedSequence(item.readSeq, `${batchLabel} group ${groupId} read sequence`);
+      const latestSeq = readUnsignedSequence(item.latestSeq, `${batchLabel} group ${groupId} latest sequence`);
+      if (latestSeq < readSeq) {
+        throw new Error(`${batchLabel} group ${groupId} latest sequence ${latestSeq} is before read sequence ${readSeq}`);
+      }
+      if (latestSeq > readSeq) groupList.push({ groupUin: BigInt(groupId), lastReadSeq: latestSeq });
+    }
+
+    const c2cList: NonNullable<SsoReadedReportReq['c2cList']> = [];
+    const c2cConfirmTargets: C2CReadTarget[] = [];
+    for (let i = 0; i < c2cTargets.length; i++) {
+      const target = c2cTargets[i]!;
+      const item = this.c2cReadResponse(probe, target, i, `${batchLabel} probe`);
+      const readSeq = readUnsignedSequence(item.readSeq, `${batchLabel} private user ${target.userId} read sequence`);
+      const latestSeq = readUnsignedSequence(item.latestSeq, `${batchLabel} private user ${target.userId} latest sequence`);
+      if (latestSeq < readSeq) {
+        throw new Error(
+          `${batchLabel} private user ${target.userId} latest sequence ${latestSeq} is before read sequence ${readSeq}`,
+        );
+      }
+      if (latestSeq > readSeq) {
+        const lastMsgTime = requirePositiveSequence(
+          item.lastMsgTime,
+          `${batchLabel} private user ${target.userId} last message time`,
+        );
+        c2cList.push({ uid: target.uid, lastReadTime: lastMsgTime, lastReadSeq: latestSeq });
+        c2cConfirmTargets.push(target);
+      }
+    }
+
+    if (groupList.length === 0 && c2cList.length === 0) {
+      log.debug('%s already current', batchLabel);
+      return;
+    }
+
+    const confirm = await this.sendReadReport({ groupList, c2cList }, `${batchLabel} confirm`);
+    for (let i = 0; i < groupList.length; i++) {
+      const requested = groupList[i]!;
+      const groupId = Number(requested.groupUin);
+      const item = this.groupReadResponse(confirm, groupId, i, `${batchLabel} confirm`);
+      const readSeq = readUnsignedSequence(item.readSeq, `${batchLabel} group ${groupId} confirmed read sequence`);
+      if (readSeq < (requested.lastReadSeq ?? 0n)) {
+        throw new Error(
+          `${batchLabel} group ${groupId} confirmed sequence ${readSeq} before requested ${requested.lastReadSeq}`,
+        );
+      }
+    }
+    for (let i = 0; i < c2cList.length; i++) {
+      const requested = c2cList[i]!;
+      const target = c2cConfirmTargets[i]!;
+      const item = this.c2cReadResponse(confirm, target, i, `${batchLabel} confirm`);
+      const readSeq = readUnsignedSequence(
+        item.readSeq,
+        `${batchLabel} private user ${target.userId} confirmed read sequence`,
+      );
+      if (readSeq < (requested.lastReadSeq ?? 0n)) {
+        throw new Error(
+          `${batchLabel} private user ${target.userId} confirmed sequence ${readSeq} before requested ${requested.lastReadSeq}`,
+        );
+      }
     }
   }
 
@@ -558,4 +784,3 @@ export class MessageApi {
     }
   }
 }
-

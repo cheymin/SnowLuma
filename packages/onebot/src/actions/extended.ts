@@ -370,7 +370,7 @@ export const actions = [
         return failedResponse(RETCODE.BAD_REQUEST, 'group_id does not match message session');
       }
 
-      await ctx.bridge.apis.message.markGroupRead(meta.targetId, meta.sequence);
+      await ctx.bridge.apis.message.markGroupRead(meta.targetId);
       return okResponse();
     },
   }),
@@ -392,7 +392,7 @@ export const actions = [
         return failedResponse(RETCODE.BAD_REQUEST, 'user_id does not match message session');
       }
 
-      await ctx.bridge.apis.message.markPrivateRead(meta.targetId, meta.sequence);
+      await ctx.bridge.apis.message.markPrivateRead(meta.targetId);
       return okResponse();
     },
   }),
@@ -413,9 +413,9 @@ export const actions = [
       }
 
       if (meta.isGroup) {
-        await ctx.bridge.apis.message.markGroupRead(meta.targetId, meta.sequence);
+        await ctx.bridge.apis.message.markGroupRead(meta.targetId);
       } else {
-        await ctx.bridge.apis.message.markPrivateRead(meta.targetId, meta.sequence);
+        await ctx.bridge.apis.message.markPrivateRead(meta.targetId);
       }
       return okResponse();
     },
