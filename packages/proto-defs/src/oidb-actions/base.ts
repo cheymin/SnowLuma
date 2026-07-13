@@ -215,13 +215,10 @@ export interface OidbFriendListBodyItem {
   type?:   pb<1, uint_32>;
   number?: pb<2, OidbFriendListNumber>;
 }
-export interface OidbFriendListNextUin {
-  uin?: pb<1, uint_32>;
-}
 export interface OidbFriendListRequest {
   friendCount?: pb<2, uint_32>;
   field4?:      pb<4, uint_32>;
-  nextUin?:     pb<5, OidbFriendListNextUin>;
+  cookie?:      pb<5, bytes>;
   field6?:      pb<6, uint_32>;
   field7?:      pb<7, uint_32>;
   body?:        pb_repeated<10001, OidbFriendListBodyItem>;
@@ -912,4 +909,3 @@ export interface Oidb0xcdeRespBodyInfo {
 export interface Oidb0xcdeResp {
   info?: pb<2, Oidb0xcdeRespBodyInfo>;
 }
-

@@ -21,6 +21,14 @@ export interface FriendInfo {
   remark: string;
 }
 
+export interface FriendCategoryInfo {
+  categoryId: number;
+  categoryName: string;
+  memberCount: number;
+  sortId: number;
+  friends: FriendInfo[];
+}
+
 export interface GroupMemberInfo {
   uin: number;
   uid: string;

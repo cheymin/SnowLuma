@@ -8,8 +8,11 @@ import { FetchUserProfile } from '@snowluma/protocol/oidb-services/contacts/fetc
 import { FetchUserProfileByUid } from '@snowluma/protocol/oidb-services/contacts/fetch-user-profile-by-uid';
 import { GetBuddyRecommendArk } from '@snowluma/protocol/oidb-services/contacts/get-buddy-recommend-ark';
 import { GetGroupRecommendArk } from '@snowluma/protocol/oidb-services/contacts/get-group-recommend-ark';
+import { toHex } from '@snowluma/common/hex';
+import { createLogger } from '@snowluma/common/logger';
 import { createSingleFlightCache, type SingleFlightCache } from '@snowluma/common/single-flight-cache';
 import type {
+  FriendCategoryInfo,
   FriendInfo,
   GroupMemberInfo,
   GroupRequestInfo,
@@ -18,6 +21,8 @@ import type {
 } from '@snowluma/protocol/qq-info';
 import type { DownloadRKeyInfo } from '../bridge';
 import type { BridgeContext } from '../bridge-context';
+
+const log = createLogger('Bridge.Contacts');
 
 // ─── Helpers (previously in bridge-contacts.ts) ───────────────────
 
@@ -32,6 +37,23 @@ type FriendPropertySource = {
     };
   }>;
 };
+
+interface FriendRosterEntry {
+  friend: FriendInfo;
+  categoryId: number;
+}
+
+interface FriendCategoryMeta {
+  categoryId: number;
+  categoryName: string;
+  memberCount: number;
+  sortId: number;
+}
+
+interface FriendRoster {
+  entries: FriendRosterEntry[];
+  categories: FriendCategoryMeta[];
+}
 
 export function buildFriendProperties(raw: FriendPropertySource): Map<number, string> {
   const props = new Map<number, string>();
@@ -82,26 +104,85 @@ export class ContactsApi {
     return GetGroupRecommendArk.invoke(this.ctx, { groupId });
   }
 
-  async fetchFriendList(): Promise<FriendInfo[]> {
-    const friends: FriendInfo[] = [];
-    let nextUin: number | null = null;
-    do {
-      const resp = await FetchFriendListPage.invoke(this.ctx, { nextUin });
+  private async fetchFriendRoster(): Promise<FriendRoster> {
+    const entries: FriendRosterEntry[] = [];
+    const categories = new Map<number, FriendCategoryMeta>();
+    const seenCookies = new Set<string>();
+    let cookie: Uint8Array | undefined;
+
+    for (;;) {
+      const resp = await FetchFriendListPage.invoke(this.ctx, { cookie });
       for (const raw of resp.friends ?? []) {
         const props = buildFriendProperties(raw);
-        friends.push({
-          uin: raw.uin ?? 0,
-          uid: raw.uid ?? '',
-          nickname: props.get(20002) ?? String(raw.uin ?? 0),
-          remark: props.get(103) ?? '',
+        entries.push({
+          categoryId: raw.customGroup ?? 0,
+          friend: {
+            uin: raw.uin ?? 0,
+            uid: raw.uid ?? '',
+            nickname: props.get(20002) ?? String(raw.uin ?? 0),
+            remark: props.get(103) ?? '',
+          },
         });
       }
-      nextUin = resp.next?.uin ?? null;
-      if (nextUin === 0) nextUin = null;
-    } while (nextUin !== null);
+      for (const raw of resp.categories ?? []) {
+        const categoryId = raw.categoryId ?? 0;
+        categories.set(categoryId, {
+          categoryId,
+          categoryName: raw.categoryName ?? '',
+          memberCount: raw.memberCount ?? 0,
+          sortId: raw.sortId ?? 0,
+        });
+      }
 
+      const next = resp.cookie;
+      if (!next?.length) break;
+      const key = toHex(next);
+      if (seenCookies.has(key)) {
+        throw new Error(`repeated friend-list cookie ${key}`);
+      }
+      seenCookies.add(key);
+      cookie = next;
+    }
+
+    const friends = entries.map(entry => entry.friend);
     this.ctx.identity.rememberFriends(friends);
-    return friends;
+    return { entries, categories: [...categories.values()] };
+  }
+
+  async fetchFriendList(): Promise<FriendInfo[]> {
+    const roster = await this.fetchFriendRoster();
+    return roster.entries.map(entry => entry.friend);
+  }
+
+  async fetchFriendCategories(): Promise<FriendCategoryInfo[]> {
+    const roster = await this.fetchFriendRoster();
+    const buckets = new Map(
+      roster.categories.map(category => [category.categoryId, [] as FriendInfo[]]),
+    );
+
+    for (const entry of roster.entries) {
+      const bucket = buckets.get(entry.categoryId);
+      if (!bucket) {
+        throw new Error(
+          `friend roster references missing category ${entry.categoryId} `
+          + `(${roster.entries.length} friends total)`,
+        );
+      }
+      bucket.push(entry.friend);
+    }
+
+    return roster.categories.map(category => {
+      const friends = buckets.get(category.categoryId)!;
+      if (friends.length !== category.memberCount) {
+        log.warn(
+          'friend category member count mismatch category=%d server=%d assembled=%d',
+          category.categoryId,
+          category.memberCount,
+          friends.length,
+        );
+      }
+      return { ...category, friends };
+    });
   }
 
   async fetchGroupList(): Promise<QQGroupInfo[]> {
