@@ -66,6 +66,9 @@ export function buildApiContext(ref: OneBotInstanceContext): ApiActionContext {
     isOnline: () => true,
     getMessage: (messageId) => messageStore.findEvent(messageId),
     getMessageMeta: (messageId) => messageStore.findMeta(messageId),
+    listReadSessions: () => messageStore.listReadSessions(
+      bridge.identity.groups.map(group => group.groupId),
+    ),
     canSendImage: () => true,
     canSendRecord: () => true,
     sendPrivateMessage: (userId, message, autoEscape, tempGroupId) => sendPrivateMessage(ref, userId, message, autoEscape, tempGroupId),

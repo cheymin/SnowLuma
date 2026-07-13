@@ -155,7 +155,7 @@
     {
       "name": "_mark_all_as_read",
       "aliases": [],
-      "summary": "标记全部已读（no-op，待 RE 全读 cmd）",
+      "summary": "标记全部已读",
       "readOnly": false,
       "params": [],
       "invariants": [],

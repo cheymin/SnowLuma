@@ -10,6 +10,7 @@ import {
 } from './actions';
 import type { GroupSystemMessageQuery } from './modules/contact-actions';
 import type { ForwardPreviewMeta } from './modules/message-actions';
+import type { ReadSessionTargets } from './message-store';
 import type { JsonObject, JsonValue, MessageMeta } from './types';
 import { RETCODE, failedResponse, okResponse } from './types';
 import { type StreamSink, wrapStreamFrame, wrapStreamTerminal } from './streaming';
@@ -38,6 +39,7 @@ export interface ApiActionContext {
   isOnline: () => boolean;
   getMessage: (messageId: number) => JsonObject | null;
   getMessageMeta: (messageId: number) => MessageMeta | null;
+  listReadSessions: () => ReadSessionTargets;
   sendPrivateMessage: (userId: number, message: JsonValue, autoEscape: boolean, tempGroupId?: number) => Promise<MessageSendResult>;
   sendGroupMessage: (groupId: number, message: JsonValue, autoEscape: boolean) => Promise<MessageSendResult>;
   deleteMessage: (messageId: number, meta: MessageMeta) => Promise<void>;

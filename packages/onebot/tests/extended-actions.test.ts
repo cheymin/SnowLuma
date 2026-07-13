@@ -101,6 +101,7 @@ function fakeCtx(bridge: BridgeInterface, overrides: Partial<ApiActionContext> =
     bridge,
     getMessageMeta: () => null,
     getMessage: () => null,
+    listReadSessions: () => ({ groupIds: [], privateUserIds: [] }),
     getLoginInfo: () => ({ userId: 1, nickname: '' }),
     isOnline: () => true,
     canSendImage: () => true,
@@ -891,10 +892,8 @@ describe('extended-actions / ocr_image', () => {
   });
 });
 
-// ─── TierB Phase 1: compat stubs (model_show / online_clients / mark_all_as_read) ───
-// These are kernel-only in NapCat (mock/no-op), so SnowLuma ships honest
-// compat shapes rather than RE-ing a wire that doesn't exist. We pin the
-// response *shape* of each. NOTE two deliberate divergences from NapCat:
+// ─── TierB Phase 1: compatibility actions ───
+// NOTE two deliberate divergences from NapCat:
 //   • _get_model_show reuses NapCat's array/variants shape but ECHOES the
 //     requested model instead of NapCat's hardcoded 'napcat'.
 //   • get_online_clients returns the OneBot-v11/go-cqhttp { clients: [] }
@@ -931,9 +930,15 @@ describe('extended-actions / TierB compat stubs', () => {
     expect(res.data).toMatchObject({ clients: [] });
   });
 
-  it('_mark_all_as_read is an accepted no-op', async () => {
-    const res = await makeHandler(fakeCtx(fakeBridge())).handle('_mark_all_as_read', {});
-    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
+  it('_mark_all_as_read passes every observed session to the batched SSO implementation', async () => {
+    const markAllRead = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ apis: { message: { markAllRead } } });
+    const res = await makeHandler(fakeCtx(bridge, {
+      listReadSessions: () => ({ groupIds: [101, 102], privateUserIds: [201] }),
+    })).handle('_mark_all_as_read', {});
+
+    expect(markAllRead).toHaveBeenCalledWith([101, 102], [201]);
+    expect(res).toMatchObject({ status: 'ok', retcode: 0, data: null });
   });
 });
 

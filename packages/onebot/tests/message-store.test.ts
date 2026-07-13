@@ -187,4 +187,28 @@ describe('MessageStore', () => {
       expect(retrieved).toBeNull();
     });
   });
+
+  describe('listReadSessions', () => {
+    it('uses current groups and only genuine incoming friend sessions', () => {
+      const event = (postType: string, subType: string) => ({
+        time: 1700000000,
+        post_type: postType,
+        message_type: 'private',
+        sub_type: subType,
+      });
+      store.storeEvent(1001, false, 40001, 1, PRIVATE_MESSAGE_EVENT, event('message', 'friend'));
+      store.storeEvent(1002, false, 40001, 2, PRIVATE_MESSAGE_EVENT, event('message', 'friend'));
+      store.storeEvent(1003, false, 40002, 3, PRIVATE_MESSAGE_EVENT, event('message', 'group'));
+      store.storeEvent(1004, false, 40003, 4, PRIVATE_MESSAGE_EVENT, event('message_sent', 'friend'));
+
+      expect(store.listReadSessions([30002, 30001, 30002])).toEqual({
+        groupIds: [30002, 30001],
+        privateUserIds: [40001],
+      });
+    });
+
+    it('fails on a corrupt current group target', () => {
+      expect(() => store.listReadSessions([0])).toThrow('invalid group id 0');
+    });
+  });
 });

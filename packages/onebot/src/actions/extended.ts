@@ -690,14 +690,13 @@ export const actions = [
     },
   }),
 
-  // _mark_all_as_read — no-op。NapCat 靠单次内核 IPC markAllMsgAsRead() 实现，
-  // SnowLuma 无等价单包 SSO cmd；遍历所有会话逐个发已读报告是风控高危群发，
-  // 故暂不真正执行（留待 RE 出"一键全读"cmd）。返回 ok 以兼容启动时盲调的客户端。
   defineAction({
     name: '_mark_all_as_read',
-    summary: '标记全部已读（no-op，待 RE 全读 cmd）',
+    summary: '标记全部已读',
     params: {},
-    run: async () => {
+    run: async (_p, ctx) => {
+      const sessions = ctx.listReadSessions();
+      await ctx.bridge.apis.message.markAllRead(sessions.groupIds, sessions.privateUserIds);
       return okResponse();
     },
   }),
