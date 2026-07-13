@@ -43,7 +43,9 @@ describe('parseMsgPush — empty message drop (#102)', () => {
       body: { richText: { elems: [{ text: { str: 'hi' } }] } },
     }), identity);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ kind: 'friend_message', elements: [{ type: 'text', text: 'hi' }] });
+    expect(out[0]).toMatchObject({
+      kind: 'friend_message', senderUid: 'u_x', elements: [{ type: 'text', text: 'hi' }],
+    });
   });
 
   it('drops a C2C control push by (msgType, c2cCmd) even when it carries content', () => {

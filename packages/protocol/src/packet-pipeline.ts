@@ -369,6 +369,16 @@ export class IncomingPacketPipeline {
 
   private rememberEventIdentity(event: QQEventVariant): void {
     switch (event.kind) {
+      case 'friend_message':
+        // The message already carries the authoritative UID/UIN pair. Keep it
+        // at the receive boundary so later C2C operations never have to infer
+        // a peer UID from a stale message row or a fallible profile lookup.
+        this.deps.identity.rememberRequestIdentity({
+          uid: event.senderUid,
+          uin: event.senderUin,
+          source: 'friend_message',
+        });
+        break;
       case 'group_message': {
         // [#1] Self-heal a member's cached group card from message traffic. The
         // member cache only refreshes via a member-list refetch, which nothing
