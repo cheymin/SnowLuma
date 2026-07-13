@@ -598,6 +598,10 @@ describe('makeHttpClient — OneBot HTTP wiring', () => {
     fs.writeFileSync(inputFile, 'x');
     const requests: Array<Record<string, any>> = [];
     const signals: AbortSignal[] = [];
+    let markUploadRequestStarted!: () => void;
+    const uploadRequestStarted = new Promise<void>((resolve) => {
+      markUploadRequestStarted = resolve;
+    });
     const fakeFetch = (async (_url: unknown, init: RequestInit) => {
       const request = JSON.parse(String(init.body)) as Record<string, any>;
       requests.push(request);
@@ -606,12 +610,13 @@ describe('makeHttpClient — OneBot HTTP wiring', () => {
         const reset = { status: 'failed', retcode: 100, wording: 'Stream reset completed', data: { type: 'error' } };
         return new Response(`${JSON.stringify(reset)}\r\n\r\n`, { status: 200 });
       }
+      markUploadRequestStarted();
       return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
     }) as unknown as typeof fetch;
     const client = makeHttpClient({ endpoint: 'http://127.0.0.1:9999/', fetch: fakeFetch, uploadRoot: root, timeoutMs: 1_000 });
     const controller = new AbortController();
     const pending = client.callStream('upload_file_stream', {}, { inputFile, signal: controller.signal });
-    for (let i = 0; i < 50 && requests.length === 0; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    await uploadRequestStarted;
 
     controller.abort(new Error('cancel automatic upload'));
     const outcome = await Promise.race([
