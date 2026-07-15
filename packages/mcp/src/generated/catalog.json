@@ -5689,7 +5689,7 @@
     {
       "name": "get_status",
       "aliases": [],
-      "returns": "运行状态。`online`/`good` 均表示账号是否在线。",
+      "returns": "运行状态。`online` 表示账号在线；`good` 仅在接收链路确认停滞时为 `false`。",
       "returnsSchema": {
         "type": "object",
         "properties": {
@@ -5699,7 +5699,7 @@
           },
           "good": {
             "type": "boolean",
-            "description": "状态是否正常（与 online 一致）"
+            "description": "接收链路健康状态；仅在确认停滞时为 false"
           }
         },
         "required": [

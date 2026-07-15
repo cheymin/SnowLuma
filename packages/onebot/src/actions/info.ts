@@ -27,19 +27,19 @@ export const actions = [
   defineAction({
     name: 'get_status',
     readOnly: true,
-    returns: '运行状态。`online`/`good` 均表示账号是否在线。',
+    returns: '运行状态。`online` 表示账号在线；`good` 仅在接收链路确认停滞时为 `false`。',
     returnsSchema: {
       type: 'object',
       properties: {
         online: { type: 'boolean', description: '是否在线' },
-        good: { type: 'boolean', description: '状态是否正常（与 online 一致）' },
+        good: { type: 'boolean', description: '接收链路健康状态；仅在确认停滞时为 false' },
       },
       required: ['online', 'good'],
     },
     params: {},
     run: (_p, ctx) => {
       const online = ctx.isOnline();
-      return okResponse({ online, good: online });
+      return okResponse({ online, good: online && ctx.bridge.receiveHealthy });
     },
   }),
 
@@ -96,4 +96,3 @@ export const actions = [
     },
   }),
 ];
-
