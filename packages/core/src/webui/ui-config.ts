@@ -474,6 +474,11 @@ function imageStateFromParsed(parsed: unknown): ServerImageState {
   return sanitizeImageState(parsed.appearance.background);
 }
 
+/** Normalize a complete ui.json read from disk or a backup bundle. */
+export function normalizeStoredUiConfig(value: unknown): UiConfig {
+  return normalizeUiConfig(value, imageStateFromParsed(value));
+}
+
 function normalizeBackground(value: unknown, imageState: ServerImageState): UiBackground {
   const v = isObject(value) ? value : {};
   let type = oneOf<BackgroundType>(v.type, ['none', 'solid', 'gradient', 'image'], DEFAULT_BACKGROUND.type);
@@ -615,7 +620,7 @@ export function loadUiConfig(): UiConfig {
     const parsed = JSON.parse(raw) as unknown;
     // On load, the file itself is the source of truth for the server-managed
     // image fields — so they survive restarts (don't reset to defaults).
-    const normalized = normalizeUiConfig(parsed, imageStateFromParsed(parsed));
+    const normalized = normalizeStoredUiConfig(parsed);
     // Re-persist only if normalization changed something (corrupt/old file),
     // so we self-heal on disk without rewriting on every boot.
     if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {

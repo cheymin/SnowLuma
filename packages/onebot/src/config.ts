@@ -2,6 +2,7 @@ import { createLogger } from '@snowluma/common/logger';
 import { isRealUin } from '@snowluma/common/uin';
 import { randomBytes } from 'crypto';
 import fs from 'fs';
+import { isIP } from 'node:net';
 import path from 'path';
 import type {
   HttpClientNetwork,
@@ -125,6 +126,237 @@ export function saveOneBotConfig(
   ensureConfigDir();
   const perUinPath = path.join(CONFIG_DIR, `onebot_${uin}.json`);
   saveJson(perUinPath, toJsonObject(config, options.mode ?? 'snapshot'));
+}
+
+export interface PreparedOneBotConfigRestore {
+  value: JsonObject;
+  migratedFields: string[];
+}
+
+/**
+ * Parse and canonicalize an on-disk OneBot config without touching the
+ * filesystem. Restore uses this owner-provided seam so legacy layouts are
+ * migrated deliberately while malformed values cannot disappear through the
+ * normal load path's permissive compatibility parser.
+ */
+export function prepareOneBotConfigForRestore(
+  value: unknown,
+  scope: 'global' | 'per-uin',
+  inheritedGlobal?: unknown,
+): PreparedOneBotConfigRestore {
+  if (!isObject(value)) invalid('restore source must be an object');
+  validateOneBotRestoreSource(value);
+
+  let global: JsonObject | null = null;
+  if (inheritedGlobal !== undefined && inheritedGlobal !== null) {
+    if (!isObject(inheritedGlobal)) invalid('inherited global restore source must be an object');
+    validateOneBotRestoreSource(inheritedGlobal);
+    global = inheritedGlobal;
+  }
+
+  // onebot.json is an inheritance source. Materializing its adapter defaults
+  // in isolation changes how existing per-UIN legacy overlays are interpreted.
+  // Strictly validate it, but preserve its source structure.
+  if (scope === 'global') {
+    return { value, migratedFields: [] };
+  }
+
+  const sources = value.mode !== PER_UIN_SNAPSHOT_MARKER && global
+    ? [global, value]
+    : [value];
+  const config = fromJson(sources, false);
+  const mode = scope === 'per-uin' && value.mode === PER_UIN_SNAPSHOT_MARKER
+    ? 'snapshot'
+    : 'overlay';
+  const canonical = toJsonObject(config, mode);
+
+  // These legacy global defaults also apply to adapters declared by a
+  // per-account overlay. Keep them until every overlay has naturally been
+  // materialized, otherwise canonicalizing onebot.json changes inheritance.
+  // Keep the one known cross-file legacy field until startup's existing
+  // migrateGlobalSettings copy-up moves it into snowluma.json.
+  if (Object.prototype.hasOwnProperty.call(value, 'musicSignUrl')) {
+    canonical.musicSignUrl = value.musicSignUrl;
+  }
+
+  return {
+    value: canonical,
+    migratedFields: JSON.stringify(value) === JSON.stringify(canonical) ? [] : ['$'],
+  };
+}
+
+const RESTORE_TOP_LEVEL_KEYS = new Set([
+  'mode', 'networks', 'statusCommand', 'notifications', 'musicSignUrl',
+  'httpServers', 'httpClients', 'httpPostEndpoints', 'wsServers', 'wsClients',
+  'messageFormat', 'reportSelfMessage',
+]);
+
+const RESTORE_NETWORK_KEYS = new Set(['httpServers', 'httpClients', 'wsServers', 'wsClients']);
+const RESTORE_BASE_ADAPTER_KEYS = ['name', 'enabled', 'accessToken', 'messageFormat', 'reportSelfMessage'] as const;
+
+function validateOneBotRestoreSource(value: JsonObject): void {
+  rejectUnknownKeys(value, RESTORE_TOP_LEVEL_KEYS, '$');
+  if (value.mode !== undefined && value.mode !== 'snapshot' && value.mode !== 'overlay') {
+    invalid('$.mode must be snapshot or overlay');
+  }
+  if (value.messageFormat !== undefined && parseMessageFormat(value.messageFormat) === undefined) {
+    invalid('$.messageFormat must be array or string');
+  }
+  if (value.reportSelfMessage !== undefined && typeof value.reportSelfMessage !== 'boolean') {
+    invalid('$.reportSelfMessage must be a boolean');
+  }
+  if (value.musicSignUrl !== undefined) {
+    if (typeof value.musicSignUrl !== 'string') invalid('$.musicSignUrl must be a string');
+    const url = value.musicSignUrl.trim();
+    if (url && !isHttpUrlForRestore(url)) invalid('$.musicSignUrl must be empty or an http(s) URL');
+  }
+
+  const networks = value.networks;
+  if (networks !== undefined) {
+    if (!isObject(networks)) invalid('$.networks must be an object');
+    rejectUnknownKeys(networks, RESTORE_NETWORK_KEYS, '$.networks');
+  }
+
+  const counts: Record<keyof OneBotNetworks, number> = {
+    httpServers: 0,
+    httpClients: 0,
+    wsServers: 0,
+    wsClients: 0,
+  };
+  const visit = (owner: JsonObject, key: keyof OneBotNetworks, pathPrefix: string): void => {
+    if (owner[key] === undefined) return;
+    counts[key] += validateRestoreAdapterArray(owner[key], key, `${pathPrefix}.${key}`);
+  };
+  if (isObject(networks)) {
+    for (const key of RESTORE_NETWORK_KEYS) visit(networks, key as keyof OneBotNetworks, '$.networks');
+  }
+  for (const key of RESTORE_NETWORK_KEYS) visit(value, key as keyof OneBotNetworks, '$');
+  if (value.httpPostEndpoints !== undefined) {
+    counts.httpClients += validateRestoreAdapterArray(value.httpPostEndpoints, 'httpClients', '$.httpPostEndpoints');
+  }
+
+  validateRestoreStatusCommand(value.statusCommand);
+  validateRestoreNotifications(value.notifications);
+
+  const parsed = fromJson([value], false);
+  for (const key of RESTORE_NETWORK_KEYS) {
+    const kind = key as keyof OneBotNetworks;
+    if (parsed.networks[kind].length !== counts[kind]) {
+      invalid(`$.${kind} contains a duplicate or unusable adapter`);
+    }
+  }
+}
+
+function validateRestoreAdapterArray(value: unknown, kind: keyof OneBotNetworks, at: string): number {
+  if (!Array.isArray(value)) invalid(`${at} must be an array`);
+  const specific = kind === 'httpServers' || kind === 'wsServers'
+    ? ['host', 'port', 'path']
+    : kind === 'httpClients'
+      ? ['url', 'timeoutMs']
+      : ['url', 'role', 'reconnectIntervalMs'];
+  if (kind === 'wsServers') specific.push('role');
+  const allowed = new Set<string>([...RESTORE_BASE_ADAPTER_KEYS, ...specific]);
+
+  value.forEach((raw, index) => {
+    const pathAt = `${at}[${String(index)}]`;
+    if (!isObject(raw)) invalid(`${pathAt} must be an object`);
+    rejectUnknownKeys(raw, allowed, pathAt);
+    if (raw.name !== undefined && typeof raw.name !== 'string') invalid(`${pathAt}.name must be a string`);
+    if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') invalid(`${pathAt}.enabled must be a boolean`);
+    if (raw.accessToken !== undefined && typeof raw.accessToken !== 'string') invalid(`${pathAt}.accessToken must be a string`);
+    if (raw.messageFormat !== undefined && parseMessageFormat(raw.messageFormat) === undefined) {
+      invalid(`${pathAt}.messageFormat must be array or string`);
+    }
+    if (raw.reportSelfMessage !== undefined && typeof raw.reportSelfMessage !== 'boolean') {
+      invalid(`${pathAt}.reportSelfMessage must be a boolean`);
+    }
+
+    if (kind === 'httpServers' || kind === 'wsServers') {
+      const port = parseRestoreInteger(raw.port);
+      if (port === null || port <= 0 || port > 65535) invalid(`${pathAt}.port must be an integer between 1 and 65535`);
+      if (raw.host !== undefined && typeof raw.host !== 'string') invalid(`${pathAt}.host must be a string`);
+      if (raw.path !== undefined && typeof raw.path !== 'string') invalid(`${pathAt}.path must be a string`);
+    } else {
+      if (raw.url !== undefined && typeof raw.url !== 'string') invalid(`${pathAt}.url must be a string`);
+      if (raw.url === undefined && raw.enabled !== false) invalid(`${pathAt}.url is required while the adapter is enabled`);
+    }
+    if (kind === 'httpClients' && raw.timeoutMs !== undefined) {
+      const timeout = parseRestoreInteger(raw.timeoutMs);
+      if (timeout === null || timeout <= 0 || timeout > NODE_TIMER_MAX_MS) {
+        invalid(`${pathAt}.timeoutMs must be an integer between 1 and ${NODE_TIMER_MAX_MS}`);
+      }
+    }
+    if (kind === 'wsServers' || kind === 'wsClients') {
+      const role = raw.role;
+      if (role !== undefined && !['api', 'event', 'universal'].includes(String(role).toLowerCase())) {
+        invalid(`${pathAt}.role must be Api, Event, or Universal`);
+      }
+    }
+    if (kind === 'wsClients' && raw.reconnectIntervalMs !== undefined) {
+      const interval = parseRestoreInteger(raw.reconnectIntervalMs);
+      if (interval === null || interval < 1000 || interval > NODE_TIMER_MAX_MS) {
+        invalid(`${pathAt}.reconnectIntervalMs must be an integer between 1000 and ${NODE_TIMER_MAX_MS}`);
+      }
+    }
+  });
+  return value.length;
+}
+
+function validateRestoreStatusCommand(value: unknown): void {
+  if (value === undefined) return;
+  if (!isObject(value)) invalid('$.statusCommand must be an object');
+  rejectUnknownKeys(value, new Set(['enabled', 'swallow', 'cooldownSeconds', 'trigger']), '$.statusCommand');
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') invalid('$.statusCommand.enabled must be a boolean');
+  if (value.swallow !== undefined && typeof value.swallow !== 'boolean') invalid('$.statusCommand.swallow must be a boolean');
+  if (value.cooldownSeconds !== undefined) {
+    const cooldown = parseRestoreInteger(value.cooldownSeconds);
+    if (cooldown === null || cooldown < 0 || cooldown > STATUS_COMMAND_COOLDOWN_MAX) {
+      invalid(`$.statusCommand.cooldownSeconds must be an integer between 0 and ${STATUS_COMMAND_COOLDOWN_MAX}`);
+    }
+  }
+  if (value.trigger !== undefined) {
+    const trigger = typeof value.trigger === 'string' ? value.trigger.trim() : '';
+    if (
+      typeof value.trigger !== 'string' || !trigger || /[\r\n]/.test(value.trigger) ||
+      trigger.length > STATUS_COMMAND_TRIGGER_MAX_LENGTH
+    ) {
+      invalid(`$.statusCommand.trigger must be non-empty, single-line, and <= ${STATUS_COMMAND_TRIGGER_MAX_LENGTH} characters`);
+    }
+  }
+}
+
+function validateRestoreNotifications(value: unknown): void {
+  if (value === undefined) return;
+  if (!isObject(value)) invalid('$.notifications must be an object');
+  rejectUnknownKeys(value, new Set(['channelIds']), '$.notifications');
+  if (value.channelIds === undefined) return;
+  if (!Array.isArray(value.channelIds)) invalid('$.notifications.channelIds must be an array');
+  value.channelIds.forEach((id, index) => {
+    if (typeof id !== 'string') invalid(`$.notifications.channelIds[${String(index)}] must be a string`);
+    const normalized = id.trim();
+    if (!normalized || normalized.length > 64 || !/^[\w.-]+$/.test(normalized)) {
+      invalid(`$.notifications.channelIds[${String(index)}] is invalid`);
+    }
+  });
+}
+
+function rejectUnknownKeys(value: JsonObject, allowed: ReadonlySet<string>, at: string): void {
+  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  if (unknown) invalid(`${at}.${unknown} is not supported`);
+}
+
+function parseRestoreInteger(value: unknown): number | null {
+  const number = typeof value === 'string' && value.trim() ? Number(value) : value;
+  return typeof number === 'number' && Number.isSafeInteger(number) ? number : null;
+}
+
+function isHttpUrlForRestore(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** Validate the normalized, public OneBot configuration shape before it is
@@ -251,6 +483,7 @@ function validateServer(item: JsonObject, at: string): void {
     if (typeof item.host !== 'string') invalid(`${at}.host must be a string`);
     if (!item.host.trim()) invalid(`${at}.host must be a non-empty string when provided`);
     if (item.host !== item.host.trim()) invalid(`${at}.host must not have surrounding whitespace`);
+    if (!isValidBindHost(item.host)) invalid(`${at}.host must be a valid TCP bind host`);
   }
   if (item.path !== undefined) {
     if (typeof item.path !== 'string') invalid(`${at}.path must be a string`);
@@ -713,4 +946,14 @@ function saveJson(filePath: string, json: JsonObject): void {
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isValidBindHost(value: string): boolean {
+  if (!value || value.length > 253 || /[\s/?#@]/u.test(value)) return false;
+  if (value.includes(':')) return isIP(value) === 6;
+  if (/^[\d.]+$/.test(value)) {
+    return isIP(value) === 4;
+  }
+  const normalized = value.endsWith('.') ? value.slice(0, -1) : value;
+  return normalized.split('.').every((label) => /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/.test(label));
 }

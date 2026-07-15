@@ -64,16 +64,52 @@ function ensureConfigDir(): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
 }
 
-function isValidState(value: unknown): value is WebuiAuthState {
-  if (!value || typeof value !== 'object') return false;
+/**
+ * Validate credential state before it crosses a persistence boundary.
+ *
+ * The hash/salt lengths are part of the on-disk contract: accepting any hex
+ * string here only postpones failure until password verification, where the
+ * operator would be locked out after a restore.
+ */
+export function prepareWebuiAuthStateForRestore(value: unknown): WebuiAuthState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('credential state must be an object');
+  }
   const v = value as Record<string, unknown>;
-  return (
-    typeof v.passwordHash === 'string' &&
-    typeof v.passwordSalt === 'string' &&
-    typeof v.mustChangePassword === 'boolean' &&
-    /^[0-9a-f]+$/i.test(v.passwordHash) &&
-    /^[0-9a-f]+$/i.test(v.passwordSalt)
-  );
+  if (typeof v.passwordHash !== 'string' || !/^[0-9a-f]{128}$/i.test(v.passwordHash)) {
+    throw new Error('passwordHash must be exactly 128 hexadecimal characters');
+  }
+  if (typeof v.passwordSalt !== 'string' || !/^[0-9a-f]{32}$/i.test(v.passwordSalt)) {
+    throw new Error('passwordSalt must be exactly 32 hexadecimal characters');
+  }
+  if (typeof v.mustChangePassword !== 'boolean') {
+    throw new Error('mustChangePassword must be a boolean');
+  }
+  if (typeof v.generatedAt !== 'string' || !Number.isFinite(Date.parse(v.generatedAt))) {
+    throw new Error('generatedAt must be a valid timestamp');
+  }
+  if (typeof v.updatedAt !== 'string' || !Number.isFinite(Date.parse(v.updatedAt))) {
+    throw new Error('updatedAt must be a valid timestamp');
+  }
+  const allowed = new Set(['passwordHash', 'passwordSalt', 'mustChangePassword', 'generatedAt', 'updatedAt']);
+  const unknown = Object.keys(v).find((key) => !allowed.has(key));
+  if (unknown) throw new Error(`unknown field $.${unknown}`);
+  return {
+    passwordHash: v.passwordHash,
+    passwordSalt: v.passwordSalt,
+    mustChangePassword: v.mustChangePassword,
+    generatedAt: v.generatedAt,
+    updatedAt: v.updatedAt,
+  };
+}
+
+function isValidState(value: unknown): value is WebuiAuthState {
+  try {
+    prepareWebuiAuthStateForRestore(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function generateInitialState(initialPassword: string): WebuiAuthState {
