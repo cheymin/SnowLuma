@@ -80,8 +80,9 @@ export class GroupAlbumApi {
 
     const resp = protobuf_decode<GetMediaListResponse>(result.responseData);
 
-    if (resp.field1 !== 0) {
-      throw new Error(`fetch album media list error: retCode ${resp.field1 ?? 'unknown'}`);
+    const retCode = resp.field1 ?? 0;
+    if (retCode !== 0) {
+      throw new Error(`fetch album media list error: retCode ${retCode}`);
     }
 
     const data = resp.data ?? {};
