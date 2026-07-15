@@ -29,6 +29,7 @@ export interface BridgeManagerSink {
   onHookLogin(pid: number, uin: string, packetClient: PacketSender): void;
   onPacket(pkt: PacketInfo): void;
   onPidDisconnected(pid: number): void;
+  onPidReceiveHealthChanged(pid: number, healthy: boolean): void;
 }
 
 export type HookManagerDeps = {
@@ -68,7 +69,7 @@ export type HookManagerDeps = {
  * Responsibilities:
  *   - Route user commands (load/unload/refresh) to the matching session.
  *   - Route watcher diff events to the matching session.
- *   - Forward session events ('login' / 'disconnected') to BridgeManager.
+ *   - Forward session events ('login' / 'disconnected' / receive health) to BridgeManager.
  *   - Retry stuck-in-connecting sessions on every watcher tick (so a
  *     failed connect eventually recovers without a manual refresh).
  *
@@ -296,6 +297,9 @@ export class HookManager {
     });
     session.on('disconnected', (wasLoggedIn: boolean) => {
       if (wasLoggedIn) this.bridgeManager.onPidDisconnected(pid);
+    });
+    session.on('receive-health-changed', (healthy: boolean) => {
+      this.bridgeManager.onPidReceiveHealthChanged(pid, healthy);
     });
     // status-changed fires on EVERY internal status mutation, including the
     // ones reached via login / disconnected / refresh — subscribing here

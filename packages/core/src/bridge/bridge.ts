@@ -19,6 +19,7 @@ const log = createLogger('Bridge');
 export class Bridge implements BridgeInterface {
   readonly identity: IdentityService;
   private pids_ = new Set<number>();
+  private readonly receiveHealthByPid_ = new Map<number, boolean>();
   /** Packet senders keyed by their owning QQ process. Keeping the sender and
    *  PID together is what makes disconnect fallback deterministic: a sender
    *  can never outlive the PID that supplied it. */
@@ -97,6 +98,7 @@ export class Bridge implements BridgeInterface {
 
   dispose(): void {
     this.pids_.clear();
+    this.receiveHealthByPid_.clear();
     this.packetClientsByPid_.clear();
     this.packetClient_ = null;
     this.packetClientPid_ = null;
@@ -134,6 +136,10 @@ export class Bridge implements BridgeInterface {
   attachPid(pid: number): void {
     this.pids_.delete(pid);
     this.pids_.add(pid);
+    // A fresh/rebound login starts UNKNOWN-but-compatible. The receive
+    // watchdog only flips this false after observing QQ's own heartbeat and
+    // then missing the full stale + confirmation window.
+    this.receiveHealthByPid_.set(pid, true);
   }
 
   /** Atomically attach a process and make its sender the active sender.
@@ -153,6 +159,7 @@ export class Bridge implements BridgeInterface {
 
   detachPid(pid: number): void {
     this.pids_.delete(pid);
+    this.receiveHealthByPid_.delete(pid);
     this.packetClientsByPid_.delete(pid);
 
     if (this.packetClientPid_ !== pid) {
@@ -176,6 +183,24 @@ export class Bridge implements BridgeInterface {
     }
     const pids = [...this.pids_];
     return pids.length > 0 ? pids[pids.length - 1]! : null;
+  }
+  get receiveHealthy(): boolean {
+    for (const pid of this.pids_) {
+      const healthy = this.receiveHealthByPid_.get(pid);
+      if (healthy === undefined) {
+        const message = `Bridge receive-health invariant violated: PID=${pid} has no health state`;
+        log.error(message);
+        throw new Error(message);
+      }
+      if (healthy) return true;
+    }
+    return false;
+  }
+  setPidReceiveHealthy(pid: number, healthy: boolean): void {
+    if (!this.pids_.has(pid)) {
+      throw new Error(`Bridge receive-health invariant violated: PID=${pid} is not attached`);
+    }
+    this.receiveHealthByPid_.set(pid, healthy);
   }
   onPacket(pkt: PacketInfo): void {
     this.pipeline.process(pkt);

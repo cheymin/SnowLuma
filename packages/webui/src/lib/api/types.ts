@@ -164,7 +164,7 @@ export interface ApiClient {
     deleteCert(): Promise<void>;
     /** Download the config backup bundle (credentials gated). */
     exportBackup(includeCredentials: boolean): Promise<BackupBundle>;
-    /** Validate + restore a bundle (snapshots current config first). */
+    /** Validate + restore a bundle as one process-level transaction. */
     importBackup(backup: BackupBundle, restoreCredentials: boolean): Promise<BackupImportResult>;
   };
 

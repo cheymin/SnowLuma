@@ -1,7 +1,7 @@
 import { protobuf_decode } from '@snowluma/proton';
 import type { GroupMemberJoin, GroupMemberLeave } from '../../events';
 import type { GroupChange, SelfJoinInGroup } from '@snowluma/proto-defs/notify';
-import { decodeOperatorUid, resolveUidToUin } from '../helpers';
+import { decodeNestedOperatorUid, decodeRawOperatorUid, resolveUidToUin } from '../helpers';
 import type { MsgPushDecoder } from '../registry';
 
 export const decodeGroupMemberJoin: MsgPushDecoder = (ctx) => {
@@ -9,7 +9,10 @@ export const decodeGroupMemberJoin: MsgPushDecoder = (ctx) => {
   if (!change) return [];
   const groupId = change.groupUin ?? 0;
   const userUid = change.memberUid ?? '';
-  const operatorUid = decodeOperatorUid(change.operatorBytes ?? new Uint8Array(0));
+  const operatorUid = decodeRawOperatorUid(
+    change.operatorBytes ?? new Uint8Array(0),
+    'group member increase',
+  );
   const ev: GroupMemberJoin = {
     kind: 'group_member_join',
     time: ctx.head.timestamp,
@@ -49,7 +52,12 @@ export const decodeGroupMemberLeave: MsgPushDecoder = (ctx) => {
   const dt = change.decreaseType ?? 0;
   const groupId = change.groupUin ?? 0;
   const userUid = change.memberUid ?? '';
-  const operatorUid = decodeOperatorUid(change.operatorBytes ?? new Uint8Array(0));
+  const operatorBytes = change.operatorBytes ?? new Uint8Array(0);
+  // QQ sends the operator as a raw UTF-8 UID for normal member changes.
+  // Only the bot-self-kicked variant (decreaseType=3) wraps it in OperatorInfo.
+  const operatorUid = dt === 3
+    ? decodeNestedOperatorUid(operatorBytes, 'group member decrease type=3')
+    : decodeRawOperatorUid(operatorBytes, `group member decrease type=${dt}`);
   const ev: GroupMemberLeave = {
     kind: 'group_member_leave',
     time: ctx.head.timestamp,

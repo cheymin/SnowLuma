@@ -1,4 +1,5 @@
 import { protobuf_decode } from '@snowluma/proton';
+import { hexPreview } from '@snowluma/common/hex';
 import { inflateSync } from 'zlib';
 import type { IdentityService } from '../identity-service';
 import type { OperatorInfo } from '@snowluma/proto-defs/notify';
@@ -85,11 +86,57 @@ export function resolveUidToUin(identity: IdentityService, groupId: number, uid:
   return fallback;
 }
 
-export function decodeOperatorUid(bytes: Uint8Array): string {
+const OPERATOR_BYTES_PREVIEW_LENGTH = 32;
+
+function describeOperatorBytes(bytes: Uint8Array): string {
+  return `bytes=${bytes.length} preview=${hexPreview(bytes, OPERATOR_BYTES_PREVIEW_LENGTH)}`;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
+  }
+  return false;
+}
+
+function assertOperatorUid(uid: string, context: string, bytes: Uint8Array): string {
+  if (hasControlCharacter(uid)) {
+    throw new Error(`${context} operator UID contains control characters (${describeOperatorBytes(bytes)})`);
+  }
+  return uid;
+}
+
+export function decodeRawOperatorUid(bytes: Uint8Array, context: string): string {
   if (!bytes || bytes.length === 0) return '';
-  const info = protobuf_decode<OperatorInfo>(bytes);
-  if (info?.operatorField?.uid) return info.operatorField.uid;
-  return Buffer.from(bytes).toString('utf8');
+  let uid: string;
+  try {
+    uid = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(
+      `${context} operator UID is not valid UTF-8 (${describeOperatorBytes(bytes)})`,
+      { cause: error },
+    );
+  }
+  return assertOperatorUid(uid, context, bytes);
+}
+
+export function decodeNestedOperatorUid(bytes: Uint8Array, context: string): string {
+  if (!bytes || bytes.length === 0) return '';
+  let info: OperatorInfo | null;
+  try {
+    info = protobuf_decode<OperatorInfo>(bytes);
+  } catch (error) {
+    throw new Error(
+      `${context} operator info decode failed (${describeOperatorBytes(bytes)})`,
+      { cause: error },
+    );
+  }
+  const uid = info?.operatorField?.uid;
+  if (!uid) {
+    throw new Error(`${context} operator info is missing UID (${describeOperatorBytes(bytes)})`);
+  }
+  return assertOperatorUid(uid, context, bytes);
 }
 
 export function buildTemplateMap(params: Array<{ name?: string; value?: string }>): Map<string, string> {

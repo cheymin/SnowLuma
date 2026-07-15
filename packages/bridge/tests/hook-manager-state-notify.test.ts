@@ -18,6 +18,7 @@ const flush = () => new Promise<void>(r => setImmediate(r));
 interface Harness {
   manager: HookManager;
   pipeWatcher: PipeWatcher;
+  bridgeManager: BridgeManagerSink & { onPidReceiveHealthChanged: ReturnType<typeof vi.fn> };
   setProcesses: (next: number[]) => void;
   setLivePipes: (next: number[]) => void;
   onSessionsChanged: ReturnType<typeof vi.fn>;
@@ -45,7 +46,8 @@ function makeManager(opts: { processes?: number[]; livePipes?: number[] } = {}):
     onPacket: vi.fn(),
     onHookLogin: vi.fn(),
     onPidDisconnected: vi.fn(),
-  } as unknown as BridgeManagerSink;
+    onPidReceiveHealthChanged: vi.fn(),
+  } as unknown as BridgeManagerSink & { onPidReceiveHealthChanged: ReturnType<typeof vi.fn> };
   const onSessionsChanged = vi.fn();
   const manager = new HookManager({
     bridgeManager,
@@ -61,6 +63,7 @@ function makeManager(opts: { processes?: number[]; livePipes?: number[] } = {}):
   return {
     manager,
     pipeWatcher,
+    bridgeManager,
     onSessionsChanged,
     clientFactory,
     setProcesses: (next) => { pids = next; },
@@ -169,5 +172,44 @@ describe('HookManager.onSessionsChanged', () => {
     expect(list).toHaveLength(1);
     expect(list[0].pid).toBe(4242);
     manager.dispose();
+  });
+});
+
+describe('HookManager receive-health wiring (#233)', () => {
+  it('forwards stale and recovered receive health for the owning PID', async () => {
+    const ctx = makeManager({ processes: [4242], livePipes: [4242] });
+    await ctx.pipeWatcher.start();
+    await ctx.manager.loadProcess(4242);
+    await ctx.manager.refreshProcess(4242);
+    await flush();
+
+    const client = ctx.clientFactory.mock.results[0]!.value as EventEmitter;
+    client.emit('loginState', { loggedIn: true, uin: '10001', uinNumber: 10001n });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      client.emit('packet', {
+        seq: 1,
+        error: 0,
+        cmd: 'trpc.qq_new_tech.status_svc.StatusService.SsoHeartBeat',
+        uin: '10001',
+        body: Buffer.alloc(0),
+      });
+      vi.advanceTimersByTime(105_000);
+
+      expect(ctx.bridgeManager.onPidReceiveHealthChanged).toHaveBeenCalledWith(4242, false);
+
+      client.emit('packet', {
+        seq: 2,
+        error: 0,
+        cmd: 'trpc.msg.olpush.OlPushService.MsgPush',
+        uin: '10001',
+        body: Buffer.alloc(0),
+      });
+      expect(ctx.bridgeManager.onPidReceiveHealthChanged).toHaveBeenLastCalledWith(4242, true);
+    } finally {
+      vi.useRealTimers();
+      ctx.manager.dispose();
+    }
   });
 });

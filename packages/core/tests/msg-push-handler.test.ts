@@ -66,10 +66,12 @@ function makeIdentity(members: GroupMemberInfo[] = []): IdentityService {
   return identity;
 }
 
-function makeGroupIncreasePacket(memberUid: string, operatorUid = '', fromUin = GROUP_ID): PacketInfo {
-  const operatorBytes = operatorUid
-    ? protobuf_encode<OperatorInfo>({ operatorField: { uid: operatorUid } })
-    : new Uint8Array(0);
+function makeGroupIncreasePacket(
+  memberUid: string,
+  operatorUid = '',
+  fromUin = GROUP_ID,
+  operatorBytes: Uint8Array = Buffer.from(operatorUid, 'utf8'),
+): PacketInfo {
   const content = protobuf_encode<GroupChange>({
     groupUin: GROUP_ID,
     memberUid,
@@ -79,6 +81,38 @@ function makeGroupIncreasePacket(memberUid: string, operatorUid = '', fromUin = 
     message: {
       responseHead: { fromUin },
       contentHead: { msgType: 33, timestamp: 1710000000 },
+      body: { msgContent: content },
+    },
+    status: 0,
+  });
+
+  return {
+    pid: 1,
+    uin: SELF_UIN,
+    serviceCmd: MSG_PUSH_CMD,
+    seqId: 1,
+    retCode: 0,
+    fromClient: false,
+    body,
+  };
+}
+
+function makeGroupDecreasePacket(
+  memberUid: string,
+  decreaseType: number,
+  operatorBytes: Uint8Array,
+  fromUin = GROUP_ID,
+): PacketInfo {
+  const content = protobuf_encode<GroupChange>({
+    groupUin: GROUP_ID,
+    memberUid,
+    decreaseType,
+    operatorBytes,
+  });
+  const body = protobuf_encode<PushMsg>({
+    message: {
+      responseHead: { fromUin },
+      contentHead: { msgType: 34, timestamp: 1710000000 },
       body: { msgContent: content },
     },
     status: 0,
@@ -106,7 +140,7 @@ describe('parseMsgPush group member increase', () => {
     expect(event.userUid).toBe('u_new_member');
   });
 
-  it('resolves joining uid and operator uid from the member cache when available', () => {
+  it('decodes the raw operator uid used by member-increase pushes (#228)', () => {
     const member = makeGroupMember(22222, 'u_member');
     const operator = makeGroupMember(33333, 'u_operator');
     const [event] = parseMsgPush(
@@ -118,6 +152,58 @@ describe('parseMsgPush group member increase', () => {
     expect(event.operatorUin).toBe(operator.uin);
     expect(event.userUid).toBe(member.uid);
     expect(event.operatorUid).toBe(operator.uid);
+  });
+
+  it('reports malformed raw operator bytes with bounded context', () => {
+    const captured: string[] = [];
+    const unsubscribe = subscribeLogs((entry) => {
+      if (entry.scope === 'MsgPush') captured.push(entry.message);
+    });
+    try {
+      const events = parseMsgPush(
+        makeGroupIncreasePacket('u_new_member', '', GROUP_ID, new Uint8Array([0xff])),
+        makeIdentity(),
+      );
+
+      expect(events).toEqual([]);
+      expect(captured.some((message) =>
+        message.includes('group member increase operator UID')
+        && message.includes('bytes=1')
+        && message.includes('preview=ff'))).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+describe('parseMsgPush group member decrease', () => {
+  it('decodes a raw operator uid for ordinary member removals', () => {
+    const member = makeGroupMember(22222, 'u_member');
+    const operator = makeGroupMember(33333, 'u_operator');
+    const [event] = parseMsgPush(
+      makeGroupDecreasePacket(member.uid, 131, Buffer.from(operator.uid, 'utf8')),
+      makeIdentity([member, operator]),
+    ) as Extract<QQEventVariant, { kind: 'group_member_leave' }>[];
+
+    expect(event.userUin).toBe(member.uin);
+    expect(event.operatorUin).toBe(operator.uin);
+    expect(event.operatorUid).toBe(operator.uid);
+    expect(event.leaveType).toBe('kick');
+  });
+
+  it('decodes nested operator info when the bot itself is kicked', () => {
+    const operator = makeGroupMember(33333, 'u_operator');
+    const operatorBytes = protobuf_encode<OperatorInfo>({
+      operatorField: { uid: operator.uid },
+    });
+    const [event] = parseMsgPush(
+      makeGroupDecreasePacket('u_self', 3, operatorBytes),
+      makeIdentity([operator]),
+    ) as Extract<QQEventVariant, { kind: 'group_member_leave' }>[];
+
+    expect(event.operatorUin).toBe(operator.uin);
+    expect(event.operatorUid).toBe(operator.uid);
+    expect(event.leaveType).toBe('kick');
   });
 });
 

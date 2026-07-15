@@ -13,7 +13,7 @@ import type { OneBotConfig, JsonObject as OneBotJsonObject } from '@snowluma/one
 import { readRuntimeConfig, updateRuntimeConfig, resolveRuntimeEnvOverrides } from '@snowluma/common/runtime';
 import { execSync } from 'child_process';
 import { randomBytes } from 'crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { createServer as createHttpsServer } from 'https';
 import { Hono, type Context } from 'hono';
 import os from 'os';
@@ -31,7 +31,8 @@ import {
 } from './consent';
 import { resolveTlsContext, validateTlsPair } from './tls';
 import { coerceSettingsPatch } from './system-settings';
-import { buildBackup, planRestore, validateBackup } from './backup';
+import { buildBackup } from './backup';
+import { restoreBackup, RestoreTransactionError, type RestorePhase } from './restore';
 import { collectActionDocs, collectCategories } from '@snowluma/onebot/action-docs';
 import { createFramePusher } from './debug-stream';
 import { buildStreamInvokeResponse, streamUploadToDisk } from './debug-tools';
@@ -71,6 +72,82 @@ const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const AVATAR_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AVATAR_BROWSER_CACHE_SECONDS = 30 * 24 * 60 * 60;
+
+export interface RestoreFailureBody {
+  success: false;
+  message: string;
+  transactionId: string;
+  phase: RestorePhase;
+  committed: boolean;
+  rollbackSucceeded?: boolean;
+  snapshotDir?: string;
+  failedFiles: string[];
+}
+
+/** Translate transaction facts into an operator-facing HTTP failure. */
+export function describeRestoreFailure(error: RestoreTransactionError): {
+  status: 400 | 500;
+  body: RestoreFailureBody;
+} {
+  const detail = error.cause instanceof Error ? error.cause.message : error.message;
+  let message: string;
+
+  if (error.phase === 'preflight') {
+    message = `备份校验失败：${detail}`;
+  } else if (error.rollbackSucceeded === false) {
+    const recovery = error.snapshotDir ? `，恢复资料保留在 ${error.snapshotDir}` : '';
+    message = `恢复失败，且自动回滚不完整。请勿重启或继续修改配置；事务 ID：${error.transactionId}${recovery}。请检查服务器日志。`;
+  } else if (error.committed) {
+    const retained = error.snapshotDir ? `，临时事务资料保留在 ${error.snapshotDir}` : '';
+    message = `配置已恢复，但临时事务目录清理失败；重启后配置仍会生效。事务 ID：${error.transactionId}${retained}。请检查服务器日志。`;
+  } else if (error.phase === 'cleanup') {
+    const configState = error.rollbackSucceeded === true ? '当前配置已自动回滚' : '当前配置未改动';
+    const retained = error.snapshotDir ? `，临时事务资料保留在 ${error.snapshotDir}` : '';
+    message = `恢复失败，${configState}，但临时事务目录清理失败；事务 ID：${error.transactionId}${retained}。请检查服务器日志。`;
+  } else if (error.rollbackSucceeded === true) {
+    message = `恢复失败，当前配置已自动回滚。事务 ID：${error.transactionId}。请检查服务器日志。`;
+  } else {
+    message = `恢复失败，当前配置未改动。事务 ID：${error.transactionId}。请检查服务器日志。`;
+  }
+
+  return {
+    status: error.phase === 'preflight' ? 400 : 500,
+    body: {
+      success: false,
+      message,
+      transactionId: error.transactionId,
+      phase: error.phase,
+      committed: error.committed,
+      ...(error.rollbackSucceeded === undefined ? {} : { rollbackSucceeded: error.rollbackSucceeded }),
+      ...(error.snapshotDir === undefined ? {} : { snapshotDir: error.snapshotDir }),
+      failedFiles: error.failedFiles,
+    },
+  };
+}
+
+function isMissingPath(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+/** Read one allowlisted config file; I/O failures other than absence are fatal. */
+export function readBackupConfigFile(configDir: string, name: string): Buffer | null {
+  try {
+    return readFileSync(path.join(configDir, name));
+  } catch (error) {
+    if (isMissingPath(error)) return null;
+    throw error;
+  }
+}
+
+/** List per-account OneBot config candidates; an unreadable directory is fatal. */
+export function listPerUinOneBotConfigFiles(configDir: string): string[] {
+  try {
+    return readdirSync(configDir).filter((name) => /^onebot_\d+\.json$/.test(name));
+  } catch (error) {
+    if (isMissingPath(error)) return [];
+    throw error;
+  }
+}
 
 // Endpoints that an auth-required-but-must-change-password session can still hit.
 const MUST_CHANGE_ALLOWLIST = new Set([
@@ -855,27 +932,25 @@ export async function initWebUI(
   });
 
   // ── Config backup / restore (Wave A2) ──
-  const cfgPath = (name: string) => path.join('config', name);
-  const readCfg = (name: string): Buffer | null => {
-    const p = cfgPath(name);
-    return existsSync(p) ? readFileSync(p) : null;
-  };
-
-  const listPerUinOnebot = (): string[] => {
-    try {
-      return existsSync('config') ? readdirSync('config').filter((n) => /^onebot_\d+\.json$/.test(n)) : [];
-    } catch { return []; }
-  };
-
   app.get('/api/system/backup/export', (c) => {
-    const includeCredentials = c.req.query('credentials') === '1';
-    const ts = new Date().toISOString();
-    const bundle = buildBackup(readCfg, listPerUinOnebot(), { includeCredentials }, ts);
-    c.header('Content-Disposition', `attachment; filename="snowluma-backup-${ts.replace(/[:.]/g, '-')}.json"`);
-    // Bundle may carry the TLS private key / password hash — never cache it.
-    c.header('Cache-Control', 'no-store, max-age=0');
-    c.header('Pragma', 'no-cache');
-    return c.json(bundle);
+    try {
+      const includeCredentials = c.req.query('credentials') === '1';
+      const ts = new Date().toISOString();
+      const bundle = buildBackup(
+        (name) => readBackupConfigFile('config', name),
+        listPerUinOneBotConfigFiles('config'),
+        { includeCredentials },
+        ts,
+      );
+      c.header('Content-Disposition', `attachment; filename="snowluma-backup-${ts.replace(/[:.]/g, '-')}.json"`);
+      // Bundle may carry the TLS private key / password hash — never cache it.
+      c.header('Cache-Control', 'no-store, max-age=0');
+      c.header('Pragma', 'no-cache');
+      return c.json(bundle);
+    } catch (error) {
+      log.error('backup export failed: %s', error instanceof Error ? error.stack ?? error.message : String(error));
+      return c.json({ success: false, message: '导出失败，请检查服务器日志' }, 500);
+    }
   });
 
   app.post('/api/system/backup/import', async (c) => {
@@ -893,50 +968,19 @@ export async function initWebUI(
       return c.json({ success: false, message: '请求格式错误' }, 400);
     }
     const { backup, restoreCredentials } = body as { backup?: unknown; restoreCredentials?: unknown };
-    const v = validateBackup(backup);
-    if (!v.ok) return c.json({ success: false, message: v.error }, 400);
-
-    const plan = planRestore(v.backup, { restoreCredentials: restoreCredentials === true });
-    // Snapshot the current (about-to-be-overwritten) config so a restore is
-    // recoverable; one timestamped dir per import.
-    const snapDir = path.join('config', `.restore-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-    // Two-phase write for near-atomicity: stage every file as a .tmp first, then
-    // rename them all. A failure during staging touches no live file; rename
-    // almost never fails, shrinking the half-applied window to near zero.
-    const staged: Array<{ tmp: string; dest: string; name: string }> = [];
     try {
-      for (const { name } of plan.restore) {
-        const src = cfgPath(name);
-        if (!existsSync(src)) continue;
-        const snap = path.join(snapDir, name);
-        mkdirSync(path.dirname(snap), { recursive: true });
-        copyFileSync(src, snap);
-      }
-      for (const { name, data } of plan.restore) {
-        const dest = cfgPath(name);
-        mkdirSync(path.dirname(dest), { recursive: true });
-        const tmp = dest + '.restore.tmp';
-        writeFileSync(tmp, data, name === 'key.pem' ? { mode: 0o600 } : undefined);
-        staged.push({ tmp, dest, name });
-      }
-      for (const { tmp, dest, name } of staged) {
-        renameSync(tmp, dest);
-        if (name === 'key.pem') { try { chmodSync(dest, 0o600); } catch { /* best-effort */ } }
-      }
-      return c.json({
-        success: true,
-        restored: plan.restore.map((r) => r.name),
-        skipped: plan.skipped,
-        snapshotDir: snapDir,
-        restartRequiredToApply: true,
+      const result = restoreBackup(backup, {
+        configDir: 'config',
+        restoreCredentials: restoreCredentials === true,
       });
+      return c.json({ success: true, ...result });
     } catch (err) {
-      // Clean up any staged .tmp not yet renamed (staging-phase failure leaves
-      // the live config untouched; a rare rename-phase failure may be partial,
-      // recoverable from the snapshot dir).
-      for (const { tmp } of staged) { try { if (existsSync(tmp)) rmSync(tmp, { force: true }); } catch { /* ignore */ } }
-      log.warn('backup import failed: %s', err instanceof Error ? err.message : String(err));
-      return c.json({ success: false, message: '恢复失败；若为写入阶段失败则当前配置未改动，否则可从 config/.restore-backup-* 快照恢复' }, 500);
+      if (err instanceof RestoreTransactionError) {
+        const failure = describeRestoreFailure(err);
+        return c.json(failure.body, failure.status);
+      }
+      log.error('backup import failed unexpectedly: %s', err instanceof Error ? err.stack ?? err.message : String(err));
+      return c.json({ success: false, message: '恢复遇到未预期错误，请检查服务器日志' }, 500);
     }
   });
 

@@ -14,6 +14,14 @@ import type { HookProcessInfo, HookProcessStatus } from './types';
  *  auto-login races/bypasses the pushed loginState frame). */
 const LOGIN_RECONCILE_INTERVAL_MS = 3000;
 
+/** QQ emits this response periodically while its MSF receive path is healthy.
+ *  Seeing it once arms the watchdog; before that, silence is UNKNOWN rather
+ *  than unhealthy so QQ versions that do not expose this command cannot be
+ *  false-flagged. Any later recv packet proves the same end-to-end path. */
+const QQ_RECV_HEARTBEAT_CMD = 'trpc.qq_new_tech.status_svc.StatusService.SsoHeartBeat';
+const RECEIVE_STALE_AFTER_MS = 90_000;
+const RECEIVE_STALE_CONFIRM_MS = 15_000;
+
 export type HookSessionDeps = {
   injector: {
     inject: (pid: number) => HookInjectResult;
@@ -53,6 +61,7 @@ export type HookSessionDeps = {
  * Emitted events:
  *   'login'          (uin, packetSender) — real-UIN login detected
  *   'disconnected'   (wasLoggedIn)       — connection dropped or torn down
+ *   'receive-health-changed' (healthy)   — receive path confirmed stale/recovered
  *   'status-changed' (status, error)     — status field mutated
  *   'disposed'       ()                  — session stopped tracking this PID
  */
@@ -84,6 +93,11 @@ export class HookSession extends EventEmitter {
   private disposed = false;
   private loginProbeTimer: ReturnType<typeof setInterval> | null = null;
   private probing = false;
+  private _receiveHealthy = true;
+  private receiveWatchUin = '';
+  private receiveWatchArmed = false;
+  private receiveWatchTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastReceiveAt = 0;
 
   constructor(pid: number, deps: HookSessionDeps) {
     super();
@@ -103,6 +117,7 @@ export class HookSession extends EventEmitter {
   get uin(): string { return this._uin; }
   get method(): string { return this._method; }
   get isDisposed(): boolean { return this.disposed; }
+  get receiveHealthy(): boolean { return this._receiveHealthy; }
 
   attachProcessInfo(info: { name?: string; path?: string }): void {
     if (info.name) this._name = info.name;
@@ -404,6 +419,7 @@ export class HookSession extends EventEmitter {
 
   private tearDownClient(): void {
     this.stopLoginReconcile();
+    this.resetReceiveWatch();
     const client = this.client;
     if (client) {
       client.removeAllListeners();
@@ -423,7 +439,14 @@ export class HookSession extends EventEmitter {
     this.loggedIn = state.loggedIn && isRealUin(this._uin);
     // However login was observed (pushed frame or the active probe), the
     // safety net's job is done.
-    if (this.loggedIn) this.stopLoginReconcile();
+    if (this.loggedIn) {
+      this.stopLoginReconcile();
+      // A PID can switch accounts without an intermediate logout edge. Never
+      // carry the previous account's heartbeat deadline into the new epoch.
+      if (this.receiveWatchUin !== this._uin) this.resetReceiveWatch(this._uin);
+    } else {
+      this.resetReceiveWatch();
+    }
 
     // Only the connected/logged-in states are ours to set here; when fully
     // down we leave the status the teardown path already settled.
@@ -494,6 +517,11 @@ export class HookSession extends EventEmitter {
   private handlePacket(packet: QqHookPacket): void {
     if (!this.loggedIn) return;
     const uin = packet.uin || this._uin;
+    // Routing requires a real UIN, but even a frame carrying UIN=0 proves the
+    // receive hook is alive. Attribute that evidence to the current epoch
+    // without forwarding the malformed packet into BridgeManager.
+    const receiveUin = isRealUin(uin) ? uin : (this.receiveWatchUin || this._uin);
+    if (isRealUin(receiveUin)) this.noteReceiveActivity(packet.cmd, receiveUin);
     if (!isRealUin(uin)) return;
     if (!this.onPacket) return;
     // Re-shape the hook-client wire packet into BridgeManager's PacketInfo
@@ -516,6 +544,85 @@ export class HookSession extends EventEmitter {
     this._status = status;
     this._error = error;
     this.emit('status-changed', status, error);
+  }
+
+  private noteReceiveActivity(cmd: string, uin: string): void {
+    // BridgeManager treats packet.uin as authoritative and may move this PID
+    // before the next loginState edge. Keep the watchdog on that same epoch.
+    if (this.receiveWatchUin !== uin) this.resetReceiveWatch(uin);
+
+    if (!this.receiveWatchArmed) {
+      if (cmd !== QQ_RECV_HEARTBEAT_CMD) return;
+      this.receiveWatchArmed = true;
+      this.log.debug('receive health armed by QQ heartbeat: PID=%d UIN=%s', this.pid, this.receiveWatchUin);
+    }
+
+    const now = Date.now();
+    const silentForMs = this.lastReceiveAt > 0 ? now - this.lastReceiveAt : 0;
+    this.lastReceiveAt = now;
+    this.scheduleReceiveStaleCheck();
+
+    if (!this._receiveHealthy) {
+      this.setReceiveHealthy(true);
+      this.log.info(
+        'receive path recovered: PID=%d UIN=%s silentFor=%dms',
+        this.pid,
+        this.receiveWatchUin,
+        silentForMs,
+      );
+    }
+  }
+
+  private scheduleReceiveStaleCheck(): void {
+    if (this.receiveWatchTimer) clearTimeout(this.receiveWatchTimer);
+    this.receiveWatchTimer = setTimeout(() => {
+      this.receiveWatchTimer = null;
+      if (!this.shouldWatchReceive()) return;
+
+      // A delayed event loop (notably system sleep/resume) lands here long
+      // after the nominal 90s deadline. Do not flip health immediately: give
+      // the real QQ heartbeat one short confirmation window to arrive.
+      this.receiveWatchTimer = setTimeout(() => {
+        this.receiveWatchTimer = null;
+        if (!this.shouldWatchReceive()) return;
+        const silentForMs = Date.now() - this.lastReceiveAt;
+        if (silentForMs < RECEIVE_STALE_AFTER_MS + RECEIVE_STALE_CONFIRM_MS) {
+          this.scheduleReceiveStaleCheck();
+          return;
+        }
+        this.setReceiveHealthy(false);
+        this.log.warn(
+          'receive path stale: PID=%d UIN=%s lastRecvAt=%s silentFor=%dms; reporting good=false',
+          this.pid,
+          this.receiveWatchUin,
+          new Date(this.lastReceiveAt).toISOString(),
+          silentForMs,
+        );
+      }, RECEIVE_STALE_CONFIRM_MS);
+      this.receiveWatchTimer.unref?.();
+    }, RECEIVE_STALE_AFTER_MS);
+    this.receiveWatchTimer.unref?.();
+  }
+
+  private shouldWatchReceive(): boolean {
+    return !this.disposed && this.connected && this.loggedIn && this.receiveWatchArmed;
+  }
+
+  private setReceiveHealthy(healthy: boolean): void {
+    if (this._receiveHealthy === healthy) return;
+    this._receiveHealthy = healthy;
+    this.emit('receive-health-changed', healthy);
+  }
+
+  private resetReceiveWatch(uin = ''): void {
+    if (this.receiveWatchTimer) {
+      clearTimeout(this.receiveWatchTimer);
+      this.receiveWatchTimer = null;
+    }
+    this.receiveWatchUin = uin;
+    this.receiveWatchArmed = false;
+    this.lastReceiveAt = 0;
+    this._receiveHealthy = true;
   }
 }
 

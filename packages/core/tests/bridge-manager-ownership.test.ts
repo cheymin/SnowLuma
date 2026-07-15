@@ -104,6 +104,24 @@ describe('BridgeManager PID ownership', () => {
       });
   });
 
+  it('reports an account healthy while any attached PID still receives packets', () => {
+    const manager = new BridgeManager();
+    manager.onHookLogin(101, '10001', makeSender().client);
+    manager.onHookLogin(202, '10001', makeSender().client);
+    const bridge = manager.getSession('10001')!.bridge;
+
+    expect(bridge.receiveHealthy).toBe(true);
+
+    manager.onPidReceiveHealthChanged(101, false);
+    expect(bridge.receiveHealthy).toBe(true);
+
+    manager.onPidReceiveHealthChanged(202, false);
+    expect(bridge.receiveHealthy).toBe(false);
+
+    manager.onPidReceiveHealthChanged(101, true);
+    expect(bridge.receiveHealthy).toBe(true);
+  });
+
   it('prefers the most recently rebound live PID, then falls back by recency', async () => {
     const manager = new BridgeManager();
     const first = makeSender();

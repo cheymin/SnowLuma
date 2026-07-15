@@ -60,6 +60,23 @@ export class BridgeManager {
     this.detachPidFromSession(pid, uin);
   }
 
+  onPidReceiveHealthChanged(pid: number, healthy: boolean): void {
+    const uin = this.pidToUin_.get(pid);
+    if (!uin) {
+      const message = `BridgeManager invariant violated: receive health for unmapped PID=${pid}`;
+      log.error(message);
+      throw new Error(message);
+    }
+
+    const session = this.sessions_.get(uin);
+    if (!session || !session.bridge.hasPid(pid)) {
+      const message = `BridgeManager invariant violated: receive health PID=${pid} is not owned by UIN=${uin}`;
+      log.error(message);
+      throw new Error(message);
+    }
+    session.bridge.setPidReceiveHealthy(pid, healthy);
+  }
+
   onHookLogin(pid: number, uin: string, packetClient: PacketSender): void {
     if (!isRealUin(uin)) return;
 

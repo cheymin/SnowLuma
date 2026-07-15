@@ -253,9 +253,11 @@ export type DebugStreamMessage =
 // server validates; the client never inspects its internals.
 export type BackupBundle = Record<string, unknown>;
 export interface BackupImportResult {
+  success: true;
+  transactionId: string;
   restored: string[];
   skipped: string[];
-  snapshotDir: string;
+  migrated: Array<{ name: string; fields: string[] }>;
   restartRequiredToApply: boolean;
 }
 

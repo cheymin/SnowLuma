@@ -465,7 +465,7 @@ export class OneBotInstance {
       sub_type: subType,
       status: {
         online: this.online,
-        good: this.online,
+        good: this.online && this.bridge.receiveHealthy,
       },
     };
   }
@@ -484,7 +484,7 @@ export class OneBotInstance {
       self_id: selfId,
       post_type: 'meta_event',
       meta_event_type: 'heartbeat',
-      status: { online: this.online, good: this.online },
+      status: { online: this.online, good: this.online && this.bridge.receiveHealthy },
       interval: OneBotInstance.HEARTBEAT_INTERVAL,
     };
   }

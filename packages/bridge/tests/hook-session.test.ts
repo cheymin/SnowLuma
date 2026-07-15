@@ -652,6 +652,163 @@ describe('HookSession — login reconcile (Docker auto-login safety net)', () =>
   });
 });
 
+describe('HookSession — end-to-end receive health (#233)', () => {
+  const HEARTBEAT_CMD = 'trpc.qq_new_tech.status_svc.StatusService.SsoHeartBeat';
+  const MESSAGE_CMD = 'trpc.msg.olpush.OlPushService.MsgPush';
+
+  async function startReceiveSession(onPacket?: PacketSink) {
+    const ctx = makeSession({ pipeLive: true, onPacket });
+    const healthChanges: boolean[] = [];
+    ctx.session.on('receive-health-changed', (healthy: boolean) => healthChanges.push(healthy));
+    await ctx.session.load();
+    ctx.session.onPipeUp();
+    await flush();
+    ctx.currentClient().fireLogin('10001');
+    return { ctx, healthChanges };
+  }
+
+  function firePacket(
+    ctx: ReturnType<typeof makeSession>,
+    cmd: string,
+    uin = '10001',
+    seq = 1,
+  ): void {
+    ctx.currentClient().firePacket({ seq, error: 0, cmd, uin, body: Buffer.alloc(0) });
+  }
+
+  it('becomes unhealthy only after an observed QQ heartbeat stays silent, then recovers on the next packet', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const { ctx, healthChanges } = await startReceiveSession();
+
+    try {
+      firePacket(ctx, HEARTBEAT_CMD);
+
+      vi.advanceTimersByTime(90_000);
+      expect(ctx.session.receiveHealthy).toBe(true);
+
+      vi.advanceTimersByTime(15_000);
+      expect(ctx.session.receiveHealthy).toBe(false);
+      expect(healthChanges).toEqual([false]);
+
+      firePacket(ctx, MESSAGE_CMD, '10001', 2);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(healthChanges).toEqual([false, true]);
+    } finally {
+      ctx.session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not arm the watchdog when this QQ session has never exposed its heartbeat', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const { ctx, healthChanges } = await startReceiveSession();
+
+    try {
+      firePacket(ctx, MESSAGE_CMD);
+
+      vi.advanceTimersByTime(10 * 60_000);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(healthChanges).toEqual([]);
+    } finally {
+      ctx.session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the confirmation window to avoid a sleep-resume false alarm', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const { ctx, healthChanges } = await startReceiveSession();
+
+    try {
+      firePacket(ctx, HEARTBEAT_CMD);
+
+      vi.advanceTimersByTime(90_000);
+      vi.advanceTimersByTime(14_999);
+      firePacket(ctx, HEARTBEAT_CMD, '10001', 2);
+      vi.advanceTimersByTime(1);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(healthChanges).toEqual([]);
+    } finally {
+      ctx.session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not carry an armed watchdog across a direct account switch', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const { ctx, healthChanges } = await startReceiveSession();
+
+    try {
+      firePacket(ctx, HEARTBEAT_CMD);
+
+      ctx.currentClient().fireLogin('20002');
+      vi.advanceTimersByTime(10 * 60_000);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(healthChanges).toEqual([]);
+    } finally {
+      ctx.session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('requires the new account heartbeat after packet-driven PID migration', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const { ctx, healthChanges } = await startReceiveSession();
+
+    try {
+      firePacket(ctx, HEARTBEAT_CMD);
+      firePacket(ctx, MESSAGE_CMD, '20002', 2);
+      vi.advanceTimersByTime(10 * 60_000);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(healthChanges).toEqual([]);
+
+      firePacket(ctx, HEARTBEAT_CMD, '20002', 3);
+      vi.advanceTimersByTime(105_000);
+
+      expect(ctx.session.receiveHealthy).toBe(false);
+      expect(healthChanges).toEqual([false]);
+    } finally {
+      ctx.session.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts an invalid-UIN frame as receive activity without routing it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const onPacket = vi.fn();
+    const { ctx, healthChanges } = await startReceiveSession(onPacket);
+
+    try {
+      firePacket(ctx, HEARTBEAT_CMD);
+      onPacket.mockClear();
+
+      vi.advanceTimersByTime(80_000);
+      firePacket(ctx, 'trpc.status.invalid-uin-probe', '0', 2);
+      vi.advanceTimersByTime(104_999);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(onPacket).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(ctx.session.receiveHealthy).toBe(false);
+
+      firePacket(ctx, 'trpc.status.invalid-uin-probe', '0', 3);
+
+      expect(ctx.session.receiveHealthy).toBe(true);
+      expect(healthChanges).toEqual([false, true]);
+      expect(onPacket).not.toHaveBeenCalled();
+    } finally {
+      ctx.session.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('HookSession — login reconcile does not stack concurrent probes', () => {
   it('skips overlapping ticks while a slow probe is in flight', async () => {
     vi.useFakeTimers();
