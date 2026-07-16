@@ -25,6 +25,29 @@ describe('highway source paths', () => {
       try { fs.unlinkSync(filePath); } catch { /* ignore */ }
     }
   });
+
+  it('loads base64 data URLs as inline bytes', async () => {
+    const loaded = await loadBinarySource('data:audio/webm;base64,AQID', 'record', 64);
+
+    expect({ bytes: Array.from(loaded.bytes), fileName: loaded.fileName })
+      .toEqual({ bytes: [1, 2, 3], fileName: '' });
+  });
+
+  it('never classifies data URLs as local file paths', () => {
+    expect(resolveLocalFilePath('data:audio/webm;base64,AQID')).toBeNull();
+  });
+
+  it('rejects non-base64 data URLs explicitly', async () => {
+    await expect(
+      loadBinarySource('data:text/plain,hello', 'record', 64),
+    ).rejects.toThrow(/data URL source must use base64 encoding/);
+  });
+
+  it('requires the RFC 2397 base64 flag instead of a base64 media type', async () => {
+    await expect(
+      loadBinarySource('data:base64,AQID', 'record', 64),
+    ).rejects.toThrow(/data URL source must use base64 encoding/);
+  });
 });
 
 describe('loadBinarySource maxBytes enforcement', () => {
@@ -96,6 +119,13 @@ describe('loadBinarySource maxBytes enforcement', () => {
     const big = Buffer.alloc(128).toString('base64');
     await expect(
       loadBinarySource(`base64://${big}`, 'test', 64),
+    ).rejects.toThrow(/too large: 128 > 64/);
+  });
+
+  it('rejects oversized base64 data URL payloads', async () => {
+    const big = Buffer.alloc(128).toString('base64');
+    await expect(
+      loadBinarySource(`data:audio/webm;base64,${big}`, 'test', 64),
     ).rejects.toThrow(/too large: 128 > 64/);
   });
 });

@@ -10,7 +10,7 @@
 //   http(s)://         → stream the download to a .part file, fsync, atomic
 //                        rename (shares the exact transport of loadBinarySource
 //                        via downloadHttp — same UA/redirect/timeout/retry/caps).
-//   base64://          → enforce maxBytes on the DECODED length, then decode to
+//   base64:// / data:  → enforce maxBytes on the DECODED length, then decode to
 //                        a .part file and rename.
 //
 // Crash safety: staged temps are written `.part` → fsync → rename → fsync(dir),
@@ -23,7 +23,12 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { createLogger } from '@snowluma/common/logger';
-import { downloadHttp, resolveLocalFilePath, type DownloadSink } from './utils';
+import {
+  downloadHttp,
+  inlineBase64Payload,
+  resolveLocalFilePath,
+  type DownloadSink,
+} from './utils';
 
 const log = createLogger('Highway.Stage');
 
@@ -155,9 +160,9 @@ export async function stageSourceToDisk(source: string, maxBytes: number): Promi
   ensureReaper();
   await fsp.mkdir(STAGE_DIR, { recursive: true });
 
-  // ── base64:// ──────────────────────────────────────────────────────────
-  if (/^base64:\/\//i.test(source)) {
-    const b64 = source.slice(9);
+  // ── inline Base64 (`base64://` or RFC 2397 `data:`) ────────────────────
+  const b64 = inlineBase64Payload(source);
+  if (b64 !== null) {
     const decodedLen = base64DecodedLength(b64);
     if (decodedLen > maxBytes) {
       throw new Error(`stage source too large: ${decodedLen} > ${maxBytes}`);
@@ -178,7 +183,7 @@ export async function stageSourceToDisk(source: string, maxBytes: number): Promi
     } finally {
       active.delete(partPath);
     }
-    log.debug('staged base64 source (%d bytes)', bytes.length);
+    log.debug('staged inline base64 source (%d bytes)', bytes.length);
     return registerStaged(finalPath, bytes.length, '');
   }
 

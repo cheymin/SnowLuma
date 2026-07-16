@@ -38,9 +38,31 @@ describe('stageSourceToDisk — base64', () => {
     } finally { await staged.cleanup(); }
   });
 
+  it('stages base64 data URLs to disk', async () => {
+    const data = Buffer.from('hello data URL');
+    const staged = await stageSourceToDisk(
+      `data:audio/webm;codecs=opus;base64,${data.toString('base64')}`,
+      1024,
+    );
+    try {
+      expect(staged.fileSize).toBe(data.length);
+      expect(staged.fileName).toBe('');
+      expect((await readStaged(staged.filePath)).equals(data)).toBe(true);
+    } finally { await staged.cleanup(); }
+  });
+
   it('rejects oversized base64 on decoded length (before allocation) and leaves no temp', async () => {
     const big = Buffer.alloc(4096).toString('base64');
     await expect(stageSourceToDisk(`base64://${big}`, 64)).rejects.toThrow(/too large/);
+    const parts = (await fsp.readdir(STAGE_DIR).catch(() => [] as string[])).filter((n) => n.endsWith('.part'));
+    expect(parts).toEqual([]);
+  });
+
+  it('rejects oversized base64 data URLs before allocation and leaves no temp', async () => {
+    const big = Buffer.alloc(4096).toString('base64');
+    await expect(
+      stageSourceToDisk(`data:audio/webm;base64,${big}`, 64),
+    ).rejects.toThrow(/too large/);
     const parts = (await fsp.readdir(STAGE_DIR).catch(() => [] as string[])).filter((n) => n.endsWith('.part'));
     expect(parts).toEqual([]);
   });

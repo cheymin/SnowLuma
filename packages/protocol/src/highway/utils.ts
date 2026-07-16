@@ -50,9 +50,31 @@ export interface ImageFormat {
 
 // --- Binary source loading ---
 
+/**
+ * Return the encoded payload for an inline Base64 source.
+ *
+ * OneBot historically accepts the shorthand `base64://...`; media elements
+ * also accept RFC 2397 Data URLs such as `data:audio/webm;base64,...`. Keep
+ * their classification in one place so Data URLs can never fall through to
+ * the local-file path.
+ */
+export function inlineBase64Payload(source: string): string | null {
+  if (/^base64:\/\//i.test(source)) return source.slice(9);
+  if (!/^data:/i.test(source)) return null;
+
+  const comma = source.indexOf(',');
+  if (comma < 0) throw new Error('data URL source is missing its payload separator');
+
+  const metadata = source.slice(5, comma);
+  if (!/;base64$/i.test(metadata)) {
+    throw new Error('data URL source must use base64 encoding');
+  }
+  return source.slice(comma + 1);
+}
+
 export function resolveLocalFilePath(source: string): string | null {
   if (!source) return null;
-  if (/^base64:\/\//i.test(source)) return null;
+  if (/^(?:base64:\/\/|data:)/i.test(source)) return null;
   if (/^https?:\/\//i.test(source)) return null;
 
   let filePath = source;
@@ -187,8 +209,9 @@ export async function loadBinarySource(
 ): Promise<LoadedBinary> {
   if (!source) throw new Error(`${resourceName} source is empty`);
 
-  if (/^base64:\/\//i.test(source)) {
-    const bytes = Buffer.from(source.slice(9), 'base64');
+  const inlinePayload = inlineBase64Payload(source);
+  if (inlinePayload !== null) {
+    const bytes = Buffer.from(inlinePayload, 'base64');
     if (bytes.length > maxBytes) {
       throw new Error(`${resourceName} too large: ${bytes.length} > ${maxBytes}`);
     }
