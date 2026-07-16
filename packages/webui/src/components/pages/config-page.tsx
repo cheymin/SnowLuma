@@ -12,6 +12,7 @@ import { Check, Loader2, MousePointerClick, Plus, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import { ScrollableTabList } from '@/components/ui/tabs';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { cn } from '@/lib/utils';
 import type {
@@ -202,19 +203,25 @@ export function ConfigPage() {
               counts={countMap(config.networks)}
             />
 
-            {activeTab === 'general' ? (
-              <GeneralSettingsTab config={config} onChange={setConfig} />
-            ) : (
-              <NetworkTabView
-                kind={activeTab}
-                config={config}
-                statusByName={liveStatusByName}
-                onCreateClick={() => openCreate(activeTab)}
-                onEdit={(idx) => openEdit(activeTab, idx)}
-                onDelete={(idx) => handleDelete(activeTab, idx)}
-                onToggleEnabled={(idx, v) => handleToggleEnabled(activeTab, idx, v)}
-              />
-            )}
+            <div
+              id={`config-panel-${activeTab}`}
+              role="tabpanel"
+              aria-labelledby={`config-tab-${activeTab}`}
+            >
+              {activeTab === 'general' ? (
+                <GeneralSettingsTab config={config} onChange={setConfig} />
+              ) : (
+                <NetworkTabView
+                  kind={activeTab}
+                  config={config}
+                  statusByName={liveStatusByName}
+                  onCreateClick={() => openCreate(activeTab)}
+                  onEdit={(idx) => openEdit(activeTab, idx)}
+                  onDelete={(idx) => handleDelete(activeTab, idx)}
+                  onToggleEnabled={(idx, v) => handleToggleEnabled(activeTab, idx, v)}
+                />
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -318,19 +325,53 @@ interface TabStripProps {
 }
 
 function TabStrip({ activeTab, onChange, counts }: TabStripProps) {
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const moveTab = (from: number, direction: 1 | -1 | 'home' | 'end') => {
+    const length = ALL_TABS.length;
+    const nextIndex = direction === 'home'
+      ? 0
+      : direction === 'end'
+        ? length - 1
+        : (from + direction + length) % length;
+    const next = ALL_TABS[nextIndex];
+    if (!next) return;
+    onChange(next);
+    tabRefs.current[nextIndex]?.focus();
+  };
+
   return (
-    <div className="flex gap-1 overflow-x-auto border-b [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {ALL_TABS.map((key) => {
+    <ScrollableTabList
+      activeValue={activeTab}
+      role="tablist"
+      aria-label="节点配置分类"
+      className="gap-1 border-b"
+    >
+      {ALL_TABS.map((key, index) => {
         const label = key === 'general' ? '通用设置' : NETWORK_TABS[key].title;
         const count = key === 'general' ? null : counts[key];
         const active = activeTab === key;
         return (
           <button
             key={key}
+            ref={(element) => { tabRefs.current[index] = element; }}
+            id={`config-tab-${key}`}
+            role="tab"
             type="button"
+            aria-selected={active}
+            aria-controls={`config-panel-${key}`}
+            data-tab-active={active ? 'true' : undefined}
+            tabIndex={active ? 0 : -1}
             onClick={() => onChange(key)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowRight') { event.preventDefault(); moveTab(index, 1); }
+              else if (event.key === 'ArrowLeft') { event.preventDefault(); moveTab(index, -1); }
+              else if (event.key === 'Home') { event.preventDefault(); moveTab(index, 'home'); }
+              else if (event.key === 'End') { event.preventDefault(); moveTab(index, 'end'); }
+            }}
             className={cn(
-              'group relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2 text-sm transition-colors cursor-pointer',
+              'group relative inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2 text-sm outline-none transition-colors cursor-pointer md:min-h-10',
+              'focus-visible:ring-[3px] focus-visible:ring-ring/40',
               active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -353,7 +394,7 @@ function TabStrip({ activeTab, onChange, counts }: TabStripProps) {
           </button>
         );
       })}
-    </div>
+    </ScrollableTabList>
   );
 }
 
