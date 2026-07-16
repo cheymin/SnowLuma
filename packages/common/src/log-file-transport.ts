@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { sanitizeLogLine } from './log-sanitize';
 
 const DEFAULT_DIR = 'logs';
 const DEFAULT_MAX_MB = 50;
@@ -7,13 +8,6 @@ const DEFAULT_RETAIN_DAYS = 7;
 const FILE_PREFIX = 'snowluma-';
 const FILE_SUFFIX = '.log';
 const FILE_RE = /^snowluma-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$/;
-
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
-// Preserve TAB (0x09), LF (0x0A) and ESC (0x1B) — TAB / LF for legit
-// multi-line records (stack traces), ESC is stripped through ANSI_RE.
-// eslint-disable-next-line no-control-regex
-const CTRL_RE = /[\x00-\x08\x0B-\x1A\x1C-\x1F\x7F]/g;
 
 function parsePositiveInt(v: string | undefined, dflt: number): number {
   if (!v) return dflt;
@@ -31,10 +25,6 @@ function todayString(d: Date = new Date()): string {
 function dateOf(s: string): Date {
   const [y, m, d] = s.split('-').map((v) => Number.parseInt(v, 10));
   return new Date(y!, m! - 1, d!);
-}
-
-function stripAnsi(line: string): string {
-  return line.replace(ANSI_RE, '').replace(CTRL_RE, '');
 }
 
 interface OpenFile {
@@ -234,7 +224,7 @@ export class FileTransport {
 
   write(line: string, uin?: number): void {
     if (!this.shared) return;
-    const data = stripAnsi(line) + '\n';
+    const data = sanitizeLogLine(line) + '\n';
     const bytes = Buffer.byteLength(data, 'utf8');
 
     this.shared.write(data, bytes);

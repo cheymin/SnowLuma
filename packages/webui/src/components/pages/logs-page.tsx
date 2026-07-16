@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { sanitizeLogLine } from '@snowluma/common/log-sanitize';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowDownToLine, Download, Filter, Highlighter, Inbox, Pause, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, Trash2, WrapText, X } from 'lucide-react';
@@ -317,9 +318,9 @@ export function LogsPage() {
   // Dump the current (filtered) view to a .log text file — purely client-side.
   const exportLogs = useCallback(() => {
     if (filtered.length === 0) return;
-    const lines = filtered.map(
-      (l) => l.line || `${l.time} ${l.level.toUpperCase().padEnd(7)} [${l.scope}] ${l.message}`,
-    );
+    const lines = filtered.map((l) => sanitizeLogLine(
+      l.line || `${l.time} ${l.level.toUpperCase().padEnd(7)} [${l.scope}] ${l.message}`,
+    ));
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

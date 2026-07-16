@@ -1,5 +1,6 @@
 import { format } from 'util';
 import { getFileTransport } from './log-file-transport';
+import { sanitizeLogLine } from './log-sanitize';
 import { currentRequestId } from './request-context';
 
 type LogLevel = 'trace' | 'debug' | 'info' | 'success' | 'warn' | 'error';
@@ -212,7 +213,7 @@ function emit(level: LogLevel, options: LogOptions, args: unknown[]): void {
     ...(options.uin !== undefined ? { uin: options.uin } : {}),
     ...(reqId !== undefined ? { req: reqId } : {}),
     message,
-    line,
+    line: sanitizeLogLine(line),
   };
 
   if (passesConsole) {

@@ -40,6 +40,10 @@
       "types": "./src/log-file-transport.ts",
       "default": "./src/log-file-transport.ts"
     },
+    "./log-sanitize": {
+      "types": "./src/log-sanitize.ts",
+      "default": "./src/log-sanitize.ts"
+    },
     "./log-summary": {
       "types": "./src/log-summary.ts",
       "default": "./src/log-summary.ts"
