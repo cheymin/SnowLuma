@@ -166,7 +166,7 @@ export function DashboardGrid({
                     onClick={() => onConfigOpen(b.id)}
                     title="设置"
                     aria-label="设置"
-                    className="pointer-events-auto absolute right-1.5 top-1.5 z-20 inline-flex size-6 items-center justify-center rounded-md bg-background/70 text-muted-foreground opacity-60 backdrop-blur-sm transition-all outline-none hover:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/40 cursor-pointer"
+                    className="pointer-events-auto absolute right-1.5 top-1.5 z-20 inline-flex size-6 items-center justify-center rounded-md bg-background/70 text-muted-foreground opacity-60 backdrop-blur-sm transition-[color,opacity,box-shadow] duration-150 ease-out outline-none hover:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/40 cursor-pointer"
                   >
                     <Settings2 className="size-3.5" />
                   </button>

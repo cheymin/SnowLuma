@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { motion, Reorder } from 'motion/react';
 import { Link } from '@tanstack/react-router';
 import {
   Activity, ArrowRight, Bell, Cable, Check, Cpu, ExternalLink, Eye, EyeOff, GripVertical,
-  LayoutGrid, MemoryStick, MonitorCog, Pencil, Plus, PlugZap, RefreshCw, RotateCcw, Server,
+  Info, LayoutGrid, MemoryStick, MonitorCog, Pencil, Plus, PlugZap, RefreshCw, RotateCcw, Server,
   Settings2, Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -380,6 +380,65 @@ function DropPlaceholder({ onAdd }: { onAdd: (id: string, x: number, y: number) 
 
 // ─────────────── stat tiles (one widget each) ───────────────
 
+function StatTileDetails({
+  label,
+  details,
+  children,
+}: {
+  label: string;
+  details: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const detailsId = useId();
+  const dismiss = () => {
+    setPinned(false);
+    setOpen(false);
+  };
+  return (
+    <Tooltip
+      open={open}
+      onOpenChange={(next) => {
+        if (next || !pinned) setOpen(next);
+      }}
+    >
+      <TooltipTrigger asChild>
+        <div className="group/details relative min-w-0 flex-1 pr-10 md:pr-9">
+          {children}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`查看${label}完整信息`}
+            aria-describedby={detailsId}
+            aria-expanded={open}
+            className="absolute -right-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-muted-foreground"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              const next = !pinned;
+              setPinned(next);
+              setOpen(next);
+            }}
+          >
+            <Info aria-hidden="true" className="size-3.5" />
+          </Button>
+          <span id={detailsId} className="sr-only">{details}</span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        className="max-w-xs whitespace-pre-line break-words text-center"
+        onEscapeKeyDown={dismiss}
+        onPointerDownOutside={dismiss}
+      >
+        {details}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function shortDistro(distro: string): string {
   let s = distro;
   s = s.replace(/^Debian GNU\/Linux /, 'Debian ');
@@ -409,15 +468,23 @@ function shortDistro(distro: string): string {
 }
 
 function StatTile({
-  icon, label, value, subtext, accent = false, to,
+  icon, label, value, subtext, details, accent = false, to,
 }: {
   icon: ReactNode;
   label: string;
   value: ReactNode;
   subtext?: ReactNode;
+  details?: string;
   accent?: boolean;
   to?: AppPath;
 }) {
+  const copy = (
+    <>
+      <p className="truncate text-[11px] font-medium uppercase leading-tight tracking-wider text-muted-foreground">{label}</p>
+      <div className="mt-1 truncate text-lg font-semibold leading-tight tabular-nums">{value}</div>
+      {subtext && <p className="mt-1 truncate text-[11px] leading-tight text-muted-foreground">{subtext}</p>}
+    </>
+  );
   const body = (
     <CardContent className="flex h-full items-center gap-3 overflow-hidden px-4 py-3.5">
       <div
@@ -428,11 +495,11 @@ function StatTile({
       >
         {icon}
       </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[11px] font-medium uppercase leading-tight tracking-wider text-muted-foreground">{label}</p>
-        <div className="mt-1 truncate text-lg font-semibold leading-tight tabular-nums">{value}</div>
-        {subtext && <p className="mt-1 truncate text-[11px] leading-tight text-muted-foreground">{subtext}</p>}
-      </div>
+      {details ? (
+        <StatTileDetails label={label} details={details}>{copy}</StatTileDetails>
+      ) : (
+        <div className="min-w-0 flex-1">{copy}</div>
+      )}
       {to && <ArrowRight className="size-4 shrink-0 text-muted-foreground/60" />}
     </CardContent>
   );
@@ -484,24 +551,36 @@ function StatTileWidget({ id }: { id: string }) {
         />
       );
     }
-    case 'stat:host':
+    case 'stat:host': {
+      const value = systemInfo?.hostname ?? '—';
+      const subtext = systemInfo ? `${shortDistro(systemInfo.distro)} · ${systemInfo.archLabel}` : '加载中';
       return (
         <StatTile
           icon={<Server className="size-5" />}
           label="主机名"
-          value={systemInfo?.hostname ?? '—'}
-          subtext={systemInfo ? <Tooltip><TooltipTrigger className="block truncate text-left min-w-0">{shortDistro(systemInfo.distro)} · {systemInfo.archLabel}</TooltipTrigger><TooltipContent>{systemInfo.distro} · {systemInfo.archLabel}</TooltipContent></Tooltip> : '加载中'}
+          value={value}
+          subtext={subtext}
+          details={systemInfo
+            ? `主机名：${systemInfo.hostname}\n系统：${systemInfo.distro} · ${systemInfo.archLabel}`
+            : undefined}
         />
       );
-    case 'stat:uptime':
+    }
+    case 'stat:uptime': {
+      const systemUptime = systemInfo ? formatUptime(systemInfo.uptime) : '—';
+      const processUptime = systemInfo ? formatUptime(systemInfo.processUptime) : undefined;
       return (
         <StatTile
           icon={<MonitorCog className="size-5" />}
           label="系统运行"
-          value={systemInfo ? formatUptime(systemInfo.uptime) : '—'}
-          subtext={systemInfo ? `进程 ${formatUptime(systemInfo.processUptime)}` : undefined}
+          value={systemUptime}
+          subtext={processUptime ? `进程 ${processUptime}` : undefined}
+          details={processUptime
+            ? `系统运行：${systemUptime}\nSnowLuma 进程：${processUptime}`
+            : undefined}
         />
       );
+    }
     default:
       return null;
   }

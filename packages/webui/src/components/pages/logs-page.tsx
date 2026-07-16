@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { sanitizeLogLine } from '@snowluma/common/log-sanitize';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowDownToLine, Download, Filter, Highlighter, Inbox, Pause, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, Trash2, WrapText, X } from 'lucide-react';
@@ -317,9 +318,9 @@ export function LogsPage() {
   // Dump the current (filtered) view to a .log text file — purely client-side.
   const exportLogs = useCallback(() => {
     if (filtered.length === 0) return;
-    const lines = filtered.map(
-      (l) => l.line || `${l.time} ${l.level.toUpperCase().padEnd(7)} [${l.scope}] ${l.message}`,
-    );
+    const lines = filtered.map((l) => sanitizeLogLine(
+      l.line || `${l.time} ${l.level.toUpperCase().padEnd(7)} [${l.scope}] ${l.message}`,
+    ));
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -442,7 +443,7 @@ export function LogsPage() {
                 onClick={() => toggleLevel(lv)}
                 aria-pressed={active}
                 className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer',
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer',
                   active
                     ? cn('bg-card shadow-sm ring-1 ring-border/60', levelClass[lv])
                     : 'text-muted-foreground/55 hover:text-foreground',
@@ -486,7 +487,7 @@ export function LogsPage() {
                         aria-pressed={active}
                         title={p.hint}
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
                           active ? 'bg-card text-foreground shadow-sm ring-1 ring-border/60' : 'text-muted-foreground/70 hover:text-foreground',
                         )}
                       >
@@ -522,7 +523,7 @@ export function LogsPage() {
                         disabled={levelBusy || serverLevel === null}
                         aria-pressed={active}
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
+                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow,opacity] duration-150 ease-out cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
                           active
                             ? cn('bg-card shadow-sm ring-1 ring-border/60', levelClass[lv])
                             : 'text-muted-foreground/70 hover:text-foreground',

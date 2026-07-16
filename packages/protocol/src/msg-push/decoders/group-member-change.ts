@@ -4,6 +4,15 @@ import type { GroupChange, SelfJoinInGroup } from '@snowluma/proto-defs/notify';
 import { decodeNestedOperatorUid, decodeRawOperatorUid, resolveUidToUin } from '../helpers';
 import type { MsgPushDecoder } from '../registry';
 
+function joinTypeFromOperationType(raw: number): NonNullable<GroupMemberJoin['joinType']> {
+  // QQ uses bit 0x80 as a flag on the PkgType=33 operation code. Clear only
+  // that bit: other high bits remain significant in the native handler. The
+  // normalized code 3 means an invitation; all other values mean approval.
+  // Do not use the nested `join_type`: that is an invitation-source enum.
+  const normalized = raw - (raw & 0x80);
+  return normalized === 3 ? 'invite' : 'approve';
+}
+
 export const decodeGroupMemberJoin: MsgPushDecoder = (ctx) => {
   const change = protobuf_decode<GroupChange>(ctx.content);
   if (!change) return [];
@@ -22,6 +31,7 @@ export const decodeGroupMemberJoin: MsgPushDecoder = (ctx) => {
     operatorUin: resolveUidToUin(ctx.identity, groupId, operatorUid, 0),
     userUid,
     operatorUid,
+    joinType: joinTypeFromOperationType(change.decreaseType ?? 0),
   };
   return [ev];
 };
@@ -52,19 +62,32 @@ export const decodeGroupMemberLeave: MsgPushDecoder = (ctx) => {
   const dt = change.decreaseType ?? 0;
   const groupId = change.groupUin ?? 0;
   const userUid = change.memberUid ?? '';
-  const operatorBytes = change.operatorBytes ?? new Uint8Array(0);
-  // QQ sends the operator as a raw UTF-8 UID for normal member changes.
-  // Only the bot-self-kicked variant (decreaseType=3) wraps it in OperatorInfo.
-  const operatorUid = dt === 3
-    ? decodeNestedOperatorUid(operatorBytes, 'group member decrease type=3')
-    : decodeRawOperatorUid(operatorBytes, `group member decrease type=${dt}`);
+  const userUin = resolveUidToUin(ctx.identity, groupId, userUid, 0);
+
+  let operatorUid: string;
+  let operatorUin: number;
+  if (dt === 130) {
+    // A voluntary leave has no independent operator. QQ may place structured
+    // metadata in field 5, so it must not be decoded as a UID. OneBot models
+    // the leaving member as the operator for this event.
+    operatorUid = userUid;
+    operatorUin = userUin;
+  } else {
+    const operatorBytes = change.operatorBytes ?? new Uint8Array(0);
+    // QQ sends the operator as a raw UTF-8 UID for normal member changes.
+    // Only the bot-self-kicked variant (decreaseType=3) wraps it in OperatorInfo.
+    operatorUid = dt === 3
+      ? decodeNestedOperatorUid(operatorBytes, 'group member decrease type=3')
+      : decodeRawOperatorUid(operatorBytes, `group member decrease type=${dt}`);
+    operatorUin = resolveUidToUin(ctx.identity, groupId, operatorUid, 0);
+  }
   const ev: GroupMemberLeave = {
     kind: 'group_member_leave',
     time: ctx.head.timestamp,
     selfUin: ctx.selfUin,
     groupId,
-    userUin: resolveUidToUin(ctx.identity, groupId, userUid, 0),
-    operatorUin: resolveUidToUin(ctx.identity, groupId, operatorUid, 0),
+    userUin,
+    operatorUin,
     userUid,
     operatorUid,
     leaveType: leaveTypeFromDecreaseType(dt),

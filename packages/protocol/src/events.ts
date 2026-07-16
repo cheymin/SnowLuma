@@ -270,6 +270,12 @@ export interface GroupMemberJoin extends QQEvent {
   operatorUin: number;
   userUid?: string;
   operatorUid?: string;
+  /**
+   * Admission mode derived from GroupChange field 4. This is deliberately
+   * separate from QQ's nested invitation-source enum, which has different
+   * wire semantics. It is absent on the separate self-join push path.
+   */
+  joinType?: 'approve' | 'invite';
 }
 
 export interface GroupMemberLeave extends QQEvent {

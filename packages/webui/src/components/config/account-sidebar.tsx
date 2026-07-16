@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useTheme } from '@/contexts/ThemeContext';
 import { cn } from '@/lib/utils';
 import type { QQInfo } from '@/types';
 
@@ -31,6 +32,9 @@ export function AccountSidebar({
   collapsed,
   onToggleCollapsed,
 }: AccountSidebarProps) {
+  const { appearance } = useTheme();
+  const reduceMotion = appearance.reduceMotion || appearance.disableMotion;
+
   return (
     <motion.aside
       animate={{ width: collapsed ? 56 : 248 }}
@@ -64,8 +68,8 @@ export function AccountSidebar({
                   <motion.button
                     key={q.uin}
                     type="button"
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
+                    whileHover={reduceMotion ? undefined : { scale: 1.01 }}
+                    whileTap={reduceMotion ? undefined : { scale: 0.96 }}
                     onClick={() => onSelect(q.uin)}
                     className={cn(
                       'flex items-center gap-2.5 rounded-lg border text-left transition-colors cursor-pointer',

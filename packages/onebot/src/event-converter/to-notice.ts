@@ -27,7 +27,10 @@ type BotOffline = Extract<QQEventVariant, { kind: 'bot_offline' }>;
 export function convertGroupMemberJoin(ctx: ConverterContext, event: GroupMemberJoin): JsonObject {
   return notice(ctx, event, {
     notice_type: 'group_increase',
-    sub_type: isSameActor(event.operatorUin, event.operatorUid, event.userUin, event.userUid) ? 'approve' : 'invite',
+    sub_type: event.joinType
+      ?? (isSameActor(event.operatorUin, event.operatorUid, event.userUin, event.userUid)
+        ? 'approve'
+        : 'invite'),
     group_id: event.groupId,
     operator_id: event.operatorUin,
     user_id: event.userUin,

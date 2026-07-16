@@ -283,8 +283,8 @@ export function ActionTester({ accounts, docs, presetAction }: { accounts: QQInf
         )}
 
         <div className="flex gap-2">
-          <button type="button" onClick={onExecute} disabled={invoking}
-            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-50">
+          <button type="button" onClick={onExecute} disabled={invoking} data-press-scale=""
+            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-medium text-primary-foreground shadow-sm transition-[background-color,opacity,scale] duration-150 ease-out hover:bg-primary/90 active:not-disabled:scale-[0.96] motion-reduce:active:scale-100 disabled:opacity-50">
             {invoking ? <Loader2 className="h-4 w-4 animate-spin" /> : isStream ? <Zap className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             {invoking ? '执行中…' : isStream ? '流式执行' : '执行'}
           </button>

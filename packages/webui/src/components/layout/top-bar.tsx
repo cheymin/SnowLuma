@@ -48,37 +48,37 @@ export function TopBar({
   );
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 bg-background/55 px-3 backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/45 sm:px-4">
+    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-[4px] bg-background/55 px-[10px] backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/45 md:gap-2 md:px-4">
       {/* Mobile-only menu trigger. On desktop there's no collapse button — the
           sidebar auto-expands on hover/focus, and its boundary with the content
           is a soft surface-tone shift, not a hard border. */}
       {isMobile && (
-        <Button variant="ghost" size="icon-sm" onClick={onOpenMobile} aria-label="打开菜单">
+        <Button variant="ghost" size="icon-sm" onClick={onOpenMobile} aria-label="打开菜单" className="topbar-control">
           <Menu className="size-4" />
         </Button>
       )}
 
       {/* Page title */}
-      <AnimatePresence mode="wait">
+      <AnimatePresence initial={false} mode="wait">
         <motion.div
           key={pathname}
           initial={{ opacity: 0, x: -8 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 8 }}
           transition={{ duration: 0.18 }}
-          className="flex min-w-0 items-center gap-2"
+          className="flex min-w-0 flex-1 items-center gap-2"
         >
-          {PageIcon && <PageIcon className="size-4 text-primary" />}
-          <h1 className="truncate text-sm font-semibold tracking-tight">{meta?.label}</h1>
-          <span className="hidden sm:inline truncate text-xs text-muted-foreground">{meta?.description}</span>
+          {PageIcon && <PageIcon className="hidden size-4 shrink-0 text-primary min-[400px]:block" />}
+          <h1 className="truncate text-sm font-semibold tracking-tight" title={meta?.label}>{meta?.label}</h1>
+          <span className="hidden md:inline truncate text-xs text-muted-foreground">{meta?.description}</span>
         </motion.div>
       </AnimatePresence>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-[2px] md:gap-2">
         {shown.has('status') && (
           <Badge
             variant={online ? 'success' : 'destructive'}
-            className="hidden sm:inline-flex gap-1.5"
+            className="hidden md:inline-flex gap-1.5"
           >
             <span
               className={`size-1.5 rounded-full ${online ? 'bg-success' : 'bg-destructive'} ${online ? 'animate-pulse' : ''}`}
@@ -96,7 +96,7 @@ export function TopBar({
             onClick={enterKiosk}
             aria-label="展示模式"
             title="展示模式（隐藏侧栏与顶栏，Esc 退出）"
-            className="text-muted-foreground hover:text-foreground"
+            className="topbar-control max-[379px]:hidden text-muted-foreground hover:text-foreground"
           >
             <Monitor className="size-4" />
           </Button>
@@ -108,7 +108,7 @@ export function TopBar({
           onClick={() => setConfirmLogout(true)}
           aria-label="登出"
           title="登出"
-          className="text-muted-foreground hover:text-destructive"
+          className="topbar-control text-muted-foreground hover:text-destructive"
         >
           <LogOut className="size-4" />
         </Button>

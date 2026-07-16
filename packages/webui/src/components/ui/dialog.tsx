@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 const Dialog = DialogPrimitive.Root;
@@ -36,18 +37,27 @@ const DialogContent = React.forwardRef<
         // phones (plain `w-full` made the dialog touch both edges). Callers
         // only ever override `max-w-*` (the desktop cap), so the width floor
         // here survives those overrides — width and max-width are distinct.
-        'fixed left-1/2 top-1/2 z-50 grid w-[calc(100vw_-_2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-card p-6 shadow-lg outline-none',
+        'fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh_-_2rem)] w-[calc(100vw_-_2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-card shadow-lg outline-none',
         'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
         className
       )}
       {...props}
     >
-      {children}
+      <div className="grid max-h-[calc(100dvh_-_2rem)] gap-4 overflow-y-auto overscroll-contain p-6">
+        {children}
+      </div>
       {showClose && (
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer">
-          <X className="size-4" />
-          <span className="sr-only">Close</span>
+        <DialogPrimitive.Close asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="absolute right-2 top-2 z-10 text-muted-foreground hover:text-foreground"
+          >
+            <X className="size-4" />
+            <span className="sr-only">关闭</span>
+          </Button>
         </DialogPrimitive.Close>
       )}
     </DialogPrimitive.Content>

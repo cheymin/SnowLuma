@@ -10,8 +10,9 @@ const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HT
     <div className="relative w-full">
       <select
         ref={ref}
+        data-ui-control=""
         className={cn(
-          'flex h-9 w-full min-w-0 appearance-none rounded-md border border-border bg-transparent px-3 py-1 pr-8 text-sm shadow-xs transition-[color,box-shadow] outline-none',
+          'flex h-10 w-full min-w-0 appearance-none rounded-md border border-border bg-transparent px-3 py-1 pr-8 text-sm shadow-xs transition-[color,box-shadow] outline-none',
           'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
           className

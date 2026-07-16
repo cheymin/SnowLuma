@@ -71,10 +71,12 @@ function makeGroupIncreasePacket(
   operatorUid = '',
   fromUin = GROUP_ID,
   operatorBytes: Uint8Array = Buffer.from(operatorUid, 'utf8'),
+  operationType = 130,
 ): PacketInfo {
   const content = protobuf_encode<GroupChange>({
     groupUin: GROUP_ID,
     memberUid,
+    decreaseType: operationType,
     operatorBytes,
   });
   const body = protobuf_encode<PushMsg>({
@@ -154,6 +156,47 @@ describe('parseMsgPush group member increase', () => {
     expect(event.operatorUid).toBe(operator.uid);
   });
 
+  it('derives approve vs invite from the member-change operation code (#237)', () => {
+    const member = makeGroupMember(22222, 'u_member');
+    const operator = makeGroupMember(33333, 'u_operator');
+    const identity = makeIdentity([member, operator]);
+
+    const [approved] = parseMsgPush(
+      makeGroupIncreasePacket(
+        member.uid,
+        operator.uid,
+        GROUP_ID,
+        Buffer.from(operator.uid, 'utf8'),
+        130,
+      ),
+      identity,
+    ) as GroupMemberJoin[];
+    const [invited] = parseMsgPush(
+      makeGroupIncreasePacket(
+        member.uid,
+        operator.uid,
+        GROUP_ID,
+        Buffer.from(operator.uid, 'utf8'),
+        131,
+      ),
+      identity,
+    ) as GroupMemberJoin[];
+    const [unknownHighBits] = parseMsgPush(
+      makeGroupIncreasePacket(
+        member.uid,
+        operator.uid,
+        GROUP_ID,
+        Buffer.from(operator.uid, 'utf8'),
+        0x103,
+      ),
+      identity,
+    ) as GroupMemberJoin[];
+
+    expect(approved.joinType).toBe('approve');
+    expect(invited.joinType).toBe('invite');
+    expect(unknownHighBits.joinType).toBe('approve');
+  });
+
   it('reports malformed raw operator bytes with bounded context', () => {
     const captured: string[] = [];
     const unsubscribe = subscribeLogs((entry) => {
@@ -177,6 +220,23 @@ describe('parseMsgPush group member increase', () => {
 });
 
 describe('parseMsgPush group member decrease', () => {
+  it('ignores structured field 5 metadata for a voluntary leave (#237)', () => {
+    const member = makeGroupMember(22222, 'u_member');
+    const [event] = parseMsgPush(
+      makeGroupDecreasePacket(
+        member.uid,
+        130,
+        new Uint8Array([0x12, 0x02, 0x08, 0x00]),
+      ),
+      makeIdentity([member]),
+    ) as Extract<QQEventVariant, { kind: 'group_member_leave' }>[];
+
+    expect(event.leaveType).toBe('leave');
+    expect(event.userUin).toBe(member.uin);
+    expect(event.operatorUin).toBe(member.uin);
+    expect(event.operatorUid).toBe(member.uid);
+  });
+
   it('decodes a raw operator uid for ordinary member removals', () => {
     const member = makeGroupMember(22222, 'u_member');
     const operator = makeGroupMember(33333, 'u_operator');

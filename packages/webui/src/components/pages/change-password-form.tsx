@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Check, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PasswordVisibilityIcon } from '@/components/ui/password-visibility-icon';
+import { useTheme } from '@/contexts/ThemeContext';
 import { cn } from '@/lib/utils';
 
 export interface PasswordRule {
@@ -48,6 +50,8 @@ export function ChangePasswordForm({
   submitLabel = '保存新密码',
 }: ChangePasswordFormProps) {
   const carriesOld = knownOldPassword !== undefined;
+  const { appearance } = useTheme();
+  const reduceMotion = appearance.reduceMotion || appearance.disableMotion;
 
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -124,7 +128,7 @@ export function ChangePasswordForm({
               tabIndex={-1}
               className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
             >
-              {showOld ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              <PasswordVisibilityIcon visible={showOld} reduceMotion={reduceMotion} />
             </button>
           </div>
         </div>
@@ -149,7 +153,7 @@ export function ChangePasswordForm({
             tabIndex={-1}
             className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            {showNew ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            <PasswordVisibilityIcon visible={showNew} reduceMotion={reduceMotion} />
           </button>
         </div>
       </div>
@@ -170,7 +174,7 @@ export function ChangePasswordForm({
         )}
       </div>
 
-      <RuleList rules={rules} />
+      <RuleList rules={rules} reduceMotion={reduceMotion} />
 
       <AnimatePresence>
         {error && (
@@ -205,7 +209,7 @@ export function ChangePasswordForm({
   );
 }
 
-function RuleList({ rules }: { rules: PasswordRule[] }) {
+function RuleList({ rules, reduceMotion }: { rules: PasswordRule[]; reduceMotion: boolean }) {
   // Initial empty state: show a placeholder set so the user knows the rules
   // exist even before any input.
   const display = useMemo<PasswordRule[]>(() => {
@@ -228,19 +232,20 @@ function RuleList({ rules }: { rules: PasswordRule[] }) {
             animate={{
               backgroundColor: rule.ok ? 'color-mix(in oklab, var(--primary) 20%, transparent)' : 'transparent',
               borderColor: rule.ok ? 'var(--primary)' : 'var(--border)',
-              scale: rule.ok ? [1, 1.18, 1] : 1,
             }}
-            transition={{ duration: 0.25 }}
+            transition={{ duration: reduceMotion ? 0 : 0.2 }}
             className={cn('flex size-4 items-center justify-center rounded-full border')}
           >
-            <AnimatePresence>
+            <AnimatePresence initial={false}>
               {rule.ok && (
                 <motion.span
                   key="check"
-                  initial={{ opacity: 0, scale: 0.4 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.4 }}
-                  transition={{ duration: 0.18 }}
+                  initial={reduceMotion ? false : { opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                  exit={reduceMotion
+                    ? { opacity: 1, scale: 1, filter: 'blur(0px)' }
+                    : { opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
+                  transition={reduceMotion ? { duration: 0 } : { type: 'spring', duration: 0.3, bounce: 0 }}
                 >
                   <Check className="size-3 text-primary" strokeWidth={3} />
                 </motion.span>
@@ -250,7 +255,7 @@ function RuleList({ rules }: { rules: PasswordRule[] }) {
           <motion.span
             initial={false}
             animate={{ color: rule.ok ? 'var(--foreground)' : 'var(--muted-foreground)' }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: reduceMotion ? 0 : 0.2 }}
             className="text-xs"
           >
             {rule.label}

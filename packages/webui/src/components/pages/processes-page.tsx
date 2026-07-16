@@ -85,7 +85,7 @@ export function ProcessesPage() {
                       aria-checked={active}
                       onClick={() => setPages({ processesSort: o.id })}
                       className={cn(
-                        'rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+                        'rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
                         active ? 'bg-card font-semibold text-foreground shadow-sm ring-1 ring-border' : 'text-muted-foreground hover:text-foreground',
                       )}
                     >

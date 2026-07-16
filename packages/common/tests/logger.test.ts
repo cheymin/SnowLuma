@@ -5,7 +5,7 @@ vi.mock('../src/log-file-transport', () => ({
   getFileTransport: () => ({ write: () => {} }),
 }));
 
-import { createLogger } from '../src/logger';
+import { createLogger, subscribeLogs, type LogEntry } from '../src/logger';
 
 // Regression for issue #162: a hook-reported garbage UIN (13-digit, timestamp
 // shaped) produced a `[…]` tag wider than the fixed UIN slot, and the colored
@@ -41,5 +41,17 @@ describe('logger UIN slot padding', () => {
   it('still renders a normal-width UIN and a no-UIN logger', () => {
     expect(() => createLogger('Test').child({ uin: '10001' }).info('ok')).not.toThrow();
     expect(() => createLogger('Test').info('no uin')).not.toThrow();
+  });
+
+  it('keeps structured subscriber lines plain while terminal output stays colored', () => {
+    const captured: LogEntry[] = [];
+    const unsubscribe = subscribeLogs((entry) => captured.push(entry));
+
+    createLogger('WebUI.Export').info('download me');
+    unsubscribe();
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.line).toMatch(/INFO\s+\[WebUI\.Export\] download me$/);
+    expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('\x1b['));
   });
 });

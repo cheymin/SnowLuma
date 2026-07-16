@@ -29,7 +29,7 @@ function Row({ task, onDismiss }: { task: DebugTask; onDismiss: () => void }) {
       {task.status === 'running' && (
         <div className="h-1 overflow-hidden rounded-full bg-muted">
           <div
-            className={cn('h-full rounded-full bg-primary transition-all', pct === null && 'animate-pulse')}
+            className={cn('h-full rounded-full bg-primary transition-[width] duration-300 ease-out', pct === null && 'animate-pulse')}
             style={{ width: pct === null ? '40%' : `${pct}%` }}
           />
         </div>

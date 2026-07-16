@@ -49,7 +49,7 @@ export function DebugPage() {
             <Bug className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">调试</h1>
+            <h2 className="text-2xl font-semibold tracking-tight">开发者工具</h2>
             <p className="text-sm text-muted-foreground">接口测试 · 消息构建 · 实时观测 · API 参考</p>
           </div>
         </div>
