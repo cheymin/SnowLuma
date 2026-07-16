@@ -132,13 +132,31 @@ describe('convertEvent — message kinds', () => {
 });
 
 describe('convertEvent — notice kinds', () => {
-  it('group_member_join: same-actor approve, else invite', async () => {
+  it('group_member_join: protocol admission type overrides actor identity (#237)', async () => {
+    const approve = await convertEvent(bareCtx(), {
+      kind: 'group_member_join',
+      time: 1, selfUin: SELF_ID, groupId: GROUP_ID,
+      userUin: PEER_UIN, operatorUin: 33333,
+      joinType: 'approve',
+    } as QQEventVariant);
+    expect(approve!.notice_type).toBe('group_increase');
+    expect(approve!.sub_type).toBe('approve');
+
+    const invite = await convertEvent(bareCtx(), {
+      kind: 'group_member_join',
+      time: 1, selfUin: SELF_ID, groupId: GROUP_ID,
+      userUin: PEER_UIN, operatorUin: PEER_UIN,
+      joinType: 'invite',
+    } as QQEventVariant);
+    expect(invite!.sub_type).toBe('invite');
+  });
+
+  it('group_member_join: falls back to actor identity when admission type is absent', async () => {
     const approve = await convertEvent(bareCtx(), {
       kind: 'group_member_join',
       time: 1, selfUin: SELF_ID, groupId: GROUP_ID,
       userUin: PEER_UIN, operatorUin: PEER_UIN,
     } as QQEventVariant);
-    expect(approve!.notice_type).toBe('group_increase');
     expect(approve!.sub_type).toBe('approve');
 
     const invite = await convertEvent(bareCtx(), {

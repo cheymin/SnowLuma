@@ -16,6 +16,7 @@ export interface GroupChange {
   groupUin?:      pb<1, uint_32>;
   flag?:          pb<2, uint_32>;
   memberUid?:     pb<3, string>;
+  /** Shared member-change operation code; used by both increase and decrease pushes. */
   decreaseType?:  pb<4, uint_32>;
   operatorBytes?: pb<5, bytes>;
   increaseType?:  pb<6, uint_32>;
