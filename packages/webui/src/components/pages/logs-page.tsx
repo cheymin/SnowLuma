@@ -443,7 +443,7 @@ export function LogsPage() {
                 onClick={() => toggleLevel(lv)}
                 aria-pressed={active}
                 className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer',
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer',
                   active
                     ? cn('bg-card shadow-sm ring-1 ring-border/60', levelClass[lv])
                     : 'text-muted-foreground/55 hover:text-foreground',
@@ -474,7 +474,7 @@ export function LogsPage() {
                 <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                   <SlidersHorizontal className="size-3.5 text-muted-foreground" />
                   <span className="text-xs font-medium text-foreground">视图预设</span>
-                  <span className="text-[10px] text-muted-foreground">· 一键套用级别 / 行数 / 换行；手动调整后变为「自定义」</span>
+                  <span className="text-xs text-muted-foreground">· 一键套用级别 / 行数 / 换行；手动调整后变为「自定义」</span>
                 </div>
                 <div className="inline-flex flex-wrap gap-1 rounded-lg bg-muted/60 p-1">
                   {LOG_PRESETS.map((p) => {
@@ -487,7 +487,7 @@ export function LogsPage() {
                         aria-pressed={active}
                         title={p.hint}
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
                           active ? 'bg-card text-foreground shadow-sm ring-1 ring-border/60' : 'text-muted-foreground/70 hover:text-foreground',
                         )}
                       >
@@ -497,7 +497,7 @@ export function LogsPage() {
                   })}
                   <span
                     className={cn(
-                      'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium',
+                      'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium',
                       prefs.preset === 'custom' ? 'bg-card text-foreground shadow-sm ring-1 ring-border/60' : 'text-muted-foreground/40',
                     )}
                   >
@@ -510,7 +510,7 @@ export function LogsPage() {
               <div>
                 <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                   <span className="text-xs font-medium text-foreground">服务端日志级别</span>
-                  <span className="text-[10px] text-muted-foreground">· 仅影响控制台 / 实时流，文件始终落盘 debug</span>
+                  <span className="text-xs text-muted-foreground">· 仅影响控制台 / 实时流，文件始终落盘 debug</span>
                 </div>
                 <div className="inline-flex flex-wrap gap-1 rounded-lg bg-muted/60 p-1">
                   {LEVELS.map((lv) => {
@@ -523,7 +523,7 @@ export function LogsPage() {
                         disabled={levelBusy || serverLevel === null}
                         aria-pressed={active}
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-[background-color,color,box-shadow,opacity] duration-150 ease-out cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
+                          'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-[background-color,color,box-shadow,opacity] duration-150 ease-out cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
                           active
                             ? cn('bg-card shadow-sm ring-1 ring-border/60', levelClass[lv])
                             : 'text-muted-foreground/70 hover:text-foreground',
@@ -542,7 +542,7 @@ export function LogsPage() {
                 <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                   <Highlighter className="size-3.5 text-muted-foreground" />
                   <span className="text-xs font-medium text-foreground">高亮规则</span>
-                  <span className="text-[10px] text-muted-foreground">· 命中关键词的行会被着色</span>
+                  <span className="text-xs text-muted-foreground">· 命中关键词的行会被着色</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Input
@@ -578,7 +578,7 @@ export function LogsPage() {
                 {prefs.highlightRules.length > 0 && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {prefs.highlightRules.map((r, i) => (
-                      <span key={i} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]" style={{ borderColor: colorSwatch(r.color) }}>
+                      <span key={i} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta" style={{ borderColor: colorSwatch(r.color) }}>
                         <span className="size-2 rounded-full" style={{ backgroundColor: colorSwatch(r.color) }} />
                         {r.keyword}
                         <button type="button" onClick={() => removeHighlight(i)} className="text-muted-foreground hover:text-destructive cursor-pointer" aria-label={`移除高亮规则 ${r.keyword}`}>
@@ -600,7 +600,7 @@ export function LogsPage() {
           {/* Column header lives OUTSIDE the scroll viewport so the virtualizer's
               scroll element contains only the rows (no sticky-offset math). */}
           {filtered.length > 0 && (
-            <div className="hidden items-center gap-3 border-b border-border/60 bg-card/60 px-3 py-2 font-mono text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70 sm:flex">
+            <div className="hidden items-center gap-3 border-b border-border/60 bg-card/60 px-3 py-2 font-mono text-micro font-medium uppercase tracking-wider text-muted-foreground/70 sm:flex">
               <span className="w-[104px] shrink-0">时间</span>
               <span className="w-[76px] shrink-0">级别</span>
               <span className="w-28 shrink-0">模块</span>
@@ -665,7 +665,7 @@ export function LogsPage() {
                             title={prefs.wrap ? undefined : log.message}
                           >
                             {log.req !== undefined && (
-                              <span className="mr-1.5 rounded bg-primary/10 px-1 text-[10px] text-primary tabular-nums" title="请求关联号">#{log.req}</span>
+                              <span className="mr-1.5 rounded bg-primary/10 px-1 text-micro text-primary tabular-nums" title="请求关联号">#{log.req}</span>
                             )}
                             {log.message}
                           </span>

@@ -65,7 +65,7 @@ function StreamRowItem({ row }: { row: StreamRow }) {
   const time = new Date(row.at).toLocaleTimeString('zh-CN', { hour12: false });
 
   if (msg.kind === 'dropped') {
-    return <div className="px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">因客户端过慢丢弃了 {msg.count} 条</div>;
+    return <div className="px-2 py-1.5 text-xs text-amber-600 dark:text-amber-400">因客户端过慢丢弃了 {msg.count} 条</div>;
   }
 
   const { label, detail, isAction, ok } = rowLabel(msg);
@@ -73,14 +73,14 @@ function StreamRowItem({ row }: { row: StreamRow }) {
     <div className="group rounded-xl transition-colors hover:bg-muted/40">
       <button type="button" aria-expanded={open} className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left text-[13px]" onClick={() => setOpen((v) => !v)}>
         <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground/60 transition-transform', open && 'rotate-90')} />
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{time}</span>
-        <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold', isAction ? 'bg-primary/12 text-primary' : 'bg-muted text-muted-foreground')}>
+        <span className="shrink-0 font-mono text-meta text-muted-foreground tabular-nums">{time}</span>
+        <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-micro font-semibold', isAction ? 'bg-primary/12 text-primary' : 'bg-muted text-muted-foreground')}>
           {isAction ? '调用' : '事件'}
         </span>
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/80">{msg.uin}</span>
+        <span className="shrink-0 font-mono text-meta text-muted-foreground/80">{msg.uin}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-foreground/90">{label}</span>
         {msg.kind === 'action' && (
-          <span className={cn('shrink-0 text-[11px] tabular-nums', ok ? 'text-success' : 'text-destructive')}>
+          <span className={cn('shrink-0 text-meta tabular-nums', ok ? 'text-success' : 'text-destructive')}>
             {ok ? 'ok' : 'failed'} · {msg.ms}ms
           </span>
         )}

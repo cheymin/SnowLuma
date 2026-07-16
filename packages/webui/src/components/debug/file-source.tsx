@@ -86,7 +86,7 @@ export function FileSource({ value, onChange, role, placeholder }: {
       {mode === 'server' && (
         <div className="flex flex-col gap-1">
           <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="/path/on/server/file.jpg" />
-          <span className="text-[11px] text-muted-foreground">这是 <strong>运行 bot 的服务器</strong> 上的路径,不是你本机的。</span>
+          <span className="text-xs text-muted-foreground">这是 <strong>运行 bot 的服务器</strong> 上的路径,不是你本机的。</span>
         </div>
       )}
 
@@ -108,13 +108,13 @@ export function FileSource({ value, onChange, role, placeholder }: {
             {uploading ? <><Loader2 className="h-4 w-4 animate-spin" /> 上传中…</> : <><FileUp className="h-4 w-4" /> 选择文件上传到服务器</>}
           </button>
           {value && uploadName && !uploading && (
-            <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-2.5 py-1.5 text-[11px]">
+            <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-2.5 py-1.5 text-meta">
               <span className="truncate text-muted-foreground">已上传:{uploadName}</span>
               <code className="ml-auto max-w-[55%] truncate font-mono text-muted-foreground/80" title={value}>{value}</code>
               <button type="button" onClick={() => { onChange(''); setUploadName(null); }} className="shrink-0 text-muted-foreground hover:text-destructive"><X className="h-3.5 w-3.5" /></button>
             </div>
           )}
-          {uploadErr && <span className="text-[11px] text-destructive">{uploadErr}</span>}
+          {uploadErr && <span className="text-xs text-destructive">{uploadErr}</span>}
         </div>
       )}
     </div>

@@ -103,7 +103,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               <div>
                 <div className="flex items-center justify-center gap-2">
                   <span className="text-2xl font-semibold tracking-tight">{APP_NAME}</span>
-                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary tabular-nums">v{APP_VERSION}</span>
+                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-mono text-micro text-primary tabular-nums">v{APP_VERSION}</span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">OneBot v11 协议网关 · 安全登录</p>
               </div>
@@ -155,7 +155,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               </Button>
             </form>
 
-            <p className="mt-7 text-center text-[11px] text-muted-foreground">
+            <p className="mt-7 text-center text-meta text-muted-foreground">
               © {new Date().getFullYear()} SnowLuma. All rights reserved.
             </p>
           </CardContent>
@@ -187,12 +187,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           <div className="flex items-center justify-between gap-4 rounded-xl border bg-muted/30 px-4 py-3">
             <div className="min-w-0">
               <p className="text-sm font-medium">登录页动态背景</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{fxOn ? '已开启 · 关闭后背景为静态' : '已关闭 · 背景为静态'}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{fxOn ? '已开启 · 关闭后背景为静态' : '已关闭 · 背景为静态'}</p>
             </div>
             <ToggleSwitch value={fxOn} onChange={toggleFx} ariaLabel="登录页动态背景" />
           </div>
 
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             登录后，你还可以在「系统设置 → 无障碍」里进一步「减弱动效」或「关闭全部动效」。
           </p>
         </DialogContent>

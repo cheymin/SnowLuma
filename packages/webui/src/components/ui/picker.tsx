@@ -220,7 +220,7 @@ export function Picker({
                             ? <img src={opt.avatar} alt="" className="h-7 w-7 shrink-0 rounded-full" />
                             : <span className="h-7 w-7 shrink-0 rounded-full bg-muted" />}
                           <span className="min-w-0 flex-1 truncate text-sm">{opt.label}</span>
-                          {opt.sub && <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{opt.sub}</span>}
+                          {opt.sub && <span className="shrink-0 font-mono text-meta text-muted-foreground tabular-nums">{opt.sub}</span>}
                         </>
                       ) : (
                         <span className="text-sm">使用 <span className="font-mono text-primary">{rawRow}</span></span>

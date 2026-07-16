@@ -208,7 +208,7 @@ export function Tabs<T extends string>({ value, onChange, items, className, ...r
             {it.icon}
             <span>{it.label}</span>
             {it.badge != null && (
-              <span className={cn('rounded-full px-1.5 text-[11px] tabular-nums',
+              <span className={cn('rounded-full px-1.5 text-meta tabular-nums',
                 active ? 'bg-primary/12 text-primary' : 'bg-muted text-muted-foreground')}>
                 {it.badge}
               </span>

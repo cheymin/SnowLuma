@@ -170,7 +170,7 @@ export function ChangePasswordForm({
           className="h-10 text-sm"
         />
         {confirmPassword.length > 0 && !confirmMatches && (
-          <span className="text-[11px] text-destructive">两次输入的密码不一致</span>
+          <span className="text-xs text-destructive">两次输入的密码不一致</span>
         )}
       </div>
 

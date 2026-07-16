@@ -88,7 +88,7 @@ export function AccountSidebar({
                         >
                           {q.nickname || q.uin}
                         </div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground tabular-nums">
+                        <div className="truncate font-mono text-micro text-muted-foreground tabular-nums">
                           {q.uin}
                         </div>
                       </div>
@@ -101,7 +101,7 @@ export function AccountSidebar({
                     <TooltipContent side="right" sideOffset={8}>
                       <div className="flex flex-col leading-tight">
                         <span className="font-medium">{q.nickname || q.uin}</span>
-                        <span className="font-mono text-[10px] text-muted-foreground tabular-nums">{q.uin}</span>
+                        <span className="font-mono text-micro text-muted-foreground tabular-nums">{q.uin}</span>
                       </div>
                     </TooltipContent>
                   </Tooltip>

@@ -131,7 +131,7 @@ export function NotificationsPanel() {
     <div className="flex flex-col gap-4">
       {/* Global settings */}
       <div className="flex flex-col gap-4 rounded-xl border bg-card/40 p-4">
-        <div className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
+        <div className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
           <Bell className="mt-0.5 size-3.5 shrink-0" />
           <p>
             账号上线 / 下线时向启用的渠道 POST 一条通知（机械转发，仅去抖防刷屏）。渠道在此全局定义，每个账号在其「配置」页勾选启用哪些。
@@ -150,7 +150,7 @@ export function NotificationsPanel() {
               commit({ ...config, debounceSeconds: Number.isFinite(n) ? Math.min(3600, Math.max(0, n)) : 0 });
             }}
           />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             下线后在该秒数内自愈则不发；超时才发「下线」，恢复时再发「上线」。<code className="font-mono">0</code> = 立即发、不去抖。
           </p>
         </div>
@@ -237,7 +237,7 @@ function ChannelCard({ channel, testing, onToggle, onTest, onEdit, onDelete }: C
           {!channel.enabled && <Badge variant="secondary" className="font-normal">已停用</Badge>}
         </div>
         <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{channel.url}</div>
-        <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground/80">{channel.bodyTemplate}</div>
+        <div className="mt-1 truncate font-mono text-meta text-muted-foreground/80">{channel.bodyTemplate}</div>
       </div>
 
       <div className="flex items-center gap-1.5 sm:justify-end">

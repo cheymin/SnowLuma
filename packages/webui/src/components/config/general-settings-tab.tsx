@@ -28,7 +28,7 @@ export function GeneralSettingsTab({ config, onChange }: GeneralSettingsTabProps
             <Label>
               内置状态命令 <code className="font-mono text-xs">#sl</code>
             </Label>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               收到纯文本 <code className="font-mono">#sl</code> 时回复 SnowLuma 版本 / 平台 / 运行时长。任何人可触发，关闭后完全不响应。
             </p>
           </div>
@@ -48,7 +48,7 @@ export function GeneralSettingsTab({ config, onChange }: GeneralSettingsTabProps
             maxLength={32}
             onChange={(e) => setStatusCommand({ trigger: e.target.value })}
           />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             自定义触发词，默认 <code className="font-mono">#sl</code>。最长 32 字符，匹配前会去除首尾空格并转为小写。
           </p>
         </div>
@@ -56,7 +56,7 @@ export function GeneralSettingsTab({ config, onChange }: GeneralSettingsTabProps
         <div className="flex items-start justify-between gap-3 border-t pt-3">
           <div className="min-w-0">
             <Label className={sc.enabled ? undefined : 'text-muted-foreground'}>不转发给下游（swallow）</Label>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               开启后，命中的 <code className="font-mono">#sl</code> 不再投递给已连接的 Bot（仍会回复并本地记录）。默认关闭即透传。
             </p>
           </div>
@@ -81,7 +81,7 @@ export function GeneralSettingsTab({ config, onChange }: GeneralSettingsTabProps
               setStatusCommand({ cooldownSeconds: Number.isFinite(n) && n >= 0 ? n : 0 });
             }}
           />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             同一会话在该秒数内重复 <code className="font-mono">#sl</code> 不再回复，防刷屏。<code className="font-mono">0</code> 表示不限制。
           </p>
         </div>

@@ -137,7 +137,7 @@ function SettingsNav({ tab, onChange }: { tab: SettingsTab; onChange: (t: Settin
           <p
             id={`settings-nav-group-${gi}`}
             className={cn(
-              'hidden select-none px-3 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 lg:block',
+              'hidden select-none px-3 pb-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground/60 lg:block',
               gi === 0 ? 'lg:pt-1' : 'lg:pt-3',
             )}
           >
@@ -404,7 +404,7 @@ function AppearancePanel() {
                       ))}
                     </span>
                   </span>
-                  <span className="text-[11px] font-medium">{p.label}</span>
+                  <span className="text-xs font-medium">{p.label}</span>
                 </button>
               );
             })}
@@ -499,7 +499,7 @@ function AppearancePanel() {
         </SettingRow>
         <SettingRow label={`界面缩放（${Math.round(a.uiScale * 100)}%）`} hint="整体放大或缩小界面，适合高分屏或视力需要。" layout="stack">
           <div className="flex items-center gap-3">
-            <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(UI_SCALE.min * 100)}%</span>
+            <span className="text-meta text-muted-foreground tabular-nums">{Math.round(UI_SCALE.min * 100)}%</span>
             <Slider
               min={UI_SCALE.min}
               max={UI_SCALE.max}
@@ -509,7 +509,7 @@ function AppearancePanel() {
               className="flex-1"
               aria-label="界面缩放"
             />
-            <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(UI_SCALE.max * 100)}%</span>
+            <span className="text-meta text-muted-foreground tabular-nums">{Math.round(UI_SCALE.max * 100)}%</span>
           </div>
         </SettingRow>
         <SettingRow label="显示密度">
@@ -755,7 +755,7 @@ function FontField({
               {fonts.map((f) => <option key={f} value={f} />)}
             </datalist>
           )}
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-xs leading-snug text-muted-foreground">
             {canQuery
               ? '可输入字体名称，或聚焦后从已安装字体中选择；找不到时回退到系统字体。'
               : '输入已安装的字体名称（可写多个，用逗号分隔）；找不到时回退到系统字体。'}
@@ -804,12 +804,12 @@ function ThemeVarsPanel({
       {CSS_VAR_FIELDS.map((f) => {
         const override = cssVars[f.token];
         return (
-          <SettingRow key={f.token} label={f.label} hint={<code className="font-mono text-[11px]">{f.token}</code>} layout="inline">
+          <SettingRow key={f.token} label={f.label} hint={<code className="font-mono text-meta">{f.token}</code>} layout="inline">
             <div className="flex items-center gap-2.5">
               {override ? (
-                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">{override}</span>
+                <span className="font-mono text-meta text-muted-foreground tabular-nums">{override}</span>
               ) : (
-                <span className="text-[11px] text-muted-foreground">默认</span>
+                <span className="text-meta text-muted-foreground">默认</span>
               )}
               <label
                 title="选择颜色"
@@ -839,7 +839,7 @@ function ThemeVarsPanel({
       })}
       {count > 0 && (
         <div className="flex items-center justify-between gap-4 px-5 py-3">
-          <span className="text-[11px] text-muted-foreground">已覆盖 {count} 个变量</span>
+          <span className="text-meta text-muted-foreground">已覆盖 {count} 个变量</span>
           <Button variant="ghost" size="sm" onClick={() => onChange({})} className="text-destructive hover:text-destructive">
             <RotateCcw className="size-4" /> 全部恢复默认
           </Button>
@@ -1009,18 +1009,18 @@ function AdvancedPanel() {
           <CardTitle className="flex items-center gap-2 text-[15px]"><Code2 className="size-4 text-primary" /> 自定义 CSS</CardTitle>
           <CardDescription className="text-[12px] leading-relaxed">
             高级用户可注入自定义样式，登录后全局生效（登录页不受影响）。
-            若改坏了界面，在地址后加 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">?safe-mode=1</code> 可临时禁用自定义 CSS 进来修复。
+            若改坏了界面，在地址后加 <code className="rounded bg-muted px-1 py-0.5 font-mono text-meta">?safe-mode=1</code> 可临时禁用自定义 CSS 进来修复。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-[11px] text-muted-foreground">插入模板：</span>
+            <span className="mr-1 text-xs text-muted-foreground">插入模板：</span>
             {CSS_SNIPPETS.map((s) => (
               <button
                 key={s.label}
                 type="button"
                 onClick={() => insertSnippet(s.css)}
-                className="inline-flex items-center gap-1 rounded-md border bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors cursor-pointer outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                className="inline-flex items-center gap-1 rounded-md border bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground transition-colors cursor-pointer outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40"
               >
                 <Plus className="size-3" /> {s.label}
               </button>
@@ -1037,12 +1037,12 @@ function AdvancedPanel() {
             className="h-64 resize-y rounded-lg bg-card/40 p-3 font-mono text-[12px] leading-relaxed"
           />
           {cssWarn && (
-            <p className="flex items-start gap-1.5 text-[11px] text-warning">
+            <p className="flex items-start gap-1.5 text-xs text-warning">
               <AlertTriangle className="mt-px size-3.5 shrink-0" /> {cssWarn}
             </p>
           )}
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-muted-foreground">{appearance.customCss.length} / 50000 字符</span>
+            <span className="text-meta text-muted-foreground">{appearance.customCss.length} / 50000 字符</span>
             <Button
               variant="ghost"
               size="sm"
@@ -1075,7 +1075,7 @@ function AdvancedPanel() {
             </Button>
           </div>
           {msg && (
-            <span className={cn('text-[11px]', msg.kind === 'ok' ? 'text-success' : 'text-destructive')}>{msg.text}</span>
+            <span className={cn('text-xs', msg.kind === 'ok' ? 'text-success' : 'text-destructive')}>{msg.text}</span>
           )}
         </CardContent>
       </Card>
@@ -1172,19 +1172,19 @@ function UpdateGroup() {
           <Sparkles className="size-4 text-primary" />
           <span className="text-sm font-medium">v{latest}</span>
           {updateInfo.publishedAt && (
-            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+            <span className="ml-auto text-meta tabular-nums text-muted-foreground">
               {new Date(updateInfo.publishedAt).toLocaleDateString()}
             </span>
           )}
         </div>
-        <p className="mt-1 text-[11px] text-muted-foreground">当前 v{updateInfo.current} → 最新 v{latest}</p>
+        <p className="mt-1 text-xs text-muted-foreground">当前 v{updateInfo.current} → 最新 v{latest}</p>
         {updateInfo.notes && (
-          <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 text-[11px] leading-relaxed text-muted-foreground">
+          <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
             {updateInfo.notes}
           </pre>
         )}
         {hint && (
-          <p className="mt-3 text-[11px] text-muted-foreground">
+          <p className="mt-3 text-xs text-muted-foreground">
             适合你的平台：<code className="rounded bg-muted px-1 py-0.5 font-mono">{hint}</code>（在下载页选择）
           </p>
         )}
@@ -1238,7 +1238,7 @@ function AboutPanel() {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-2xl font-semibold tracking-tight">SnowLuma</span>
-              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary tabular-nums">
+              <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-meta text-primary tabular-nums">
                 v{__APP_VERSION__}
               </span>
             </div>
@@ -1259,7 +1259,7 @@ function AboutPanel() {
           <Star className="size-7 fill-primary/15 text-primary" />
           <div className="flex flex-col items-center gap-1">
             <p className="text-sm font-medium">喜欢 SnowLuma？给个 Star 支持一下</p>
-            <p className="max-w-xs text-[11px] leading-relaxed text-muted-foreground">
+            <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
               开源不易，你的 ⭐ 是我们持续维护的最大动力。
             </p>
           </div>

@@ -162,7 +162,7 @@ export function MessageBuilder({ segments, onChange, uin, groupId, depth = 0 }: 
               >
                 <GripVertical className="h-3.5 w-3.5" />
               </span>
-              <span className="truncate text-[11px] font-semibold text-muted-foreground">{LABELS[s.k]}</span>
+              <span className="truncate text-xs font-semibold text-muted-foreground">{LABELS[s.k]}</span>
             </span>
             <div className="flex shrink-0 items-center gap-0.5">
               <button type="button" onClick={() => move(i, i - 1)} disabled={i === 0} className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30" title="上移">↑</button>
@@ -184,17 +184,17 @@ export function MessageBuilder({ segments, onChange, uin, groupId, depth = 0 }: 
             <div className="grid grid-cols-4 gap-1">
               {COMMON.map((c) => (
                 <button key={c.k} type="button" onClick={() => add(c.k)}
-                  className="flex flex-col items-center gap-1 rounded-lg p-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground">
+                  className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
                   {c.icon}{c.label}
                 </button>
               ))}
             </div>
             <details className="mt-1.5">
-              <summary className="cursor-pointer list-none px-1 text-[11px] text-muted-foreground hover:text-foreground"><span className="inline-flex items-center gap-1"><ChevronDown className="h-3 w-3" /> 进阶段</span></summary>
+              <summary className="cursor-pointer list-none px-1 text-xs text-muted-foreground hover:text-foreground"><span className="inline-flex items-center gap-1"><ChevronDown className="h-3 w-3" /> 进阶段</span></summary>
               <div className="mt-1 grid grid-cols-4 gap-1">
                 {ADVANCED.map((c) => (
                   <button key={c.k} type="button" onClick={() => add(c.k)}
-                    className="flex flex-col items-center gap-1 rounded-lg p-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground">
+                    className="flex flex-col items-center gap-1 rounded-lg p-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
                     {c.icon}{c.label}
                   </button>
                 ))}
@@ -257,11 +257,11 @@ function SegmentEditor({ seg, onChange, uin, groupId, depth }: { seg: Seg; onCha
             <Input value={seg.nickname} onChange={(e) => onChange({ ...seg, nickname: e.target.value })} placeholder="发送者昵称" className="text-xs" />
           </div>
           <div>
-            <span className="mb-1 block text-[11px] text-muted-foreground">节点内容(可再嵌套)</span>
+            <span className="mb-1 block text-xs text-muted-foreground">节点内容(可再嵌套)</span>
             {depth < 3 ? (
               <MessageBuilder segments={seg.content} onChange={(c) => onChange({ ...seg, content: c })} uin={uin} groupId={groupId} depth={depth + 1} />
             ) : (
-              <p className="text-[11px] text-destructive">嵌套层级过深</p>
+              <p className="text-xs text-destructive">嵌套层级过深</p>
             )}
           </div>
         </div>

@@ -92,11 +92,11 @@ export function ActionTester({ accounts, docs, presetAction }: { accounts: QQInf
     () => accounts.length === 0
       ? [{ value: '', label: '(无在线账号)' }]
       : accounts.map((a) => ({
-          value: a.uin,
-          label: a.nickname || a.uin,
-          sub: a.nickname ? a.uin : undefined,
-          avatar: qqAvatarUrl(a.uin),
-        })),
+        value: a.uin,
+        label: a.nickname || a.uin,
+        sub: a.nickname ? a.uin : undefined,
+        avatar: qqAvatarUrl(a.uin),
+      })),
     [accounts],
   );
 
@@ -244,10 +244,10 @@ export function ActionTester({ accounts, docs, presetAction }: { accounts: QQInf
         {doc && (
           <div className="-mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
             {doc.readOnly
-              ? <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/12 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-3 w-3" /> 只读·安全</span>
-              : <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3 w-3" /> 有副作用</span>}
-            {isStream && <span className="inline-flex items-center gap-1 rounded-md bg-primary/12 px-1.5 py-0.5 text-[11px] font-medium text-primary"><Zap className="h-3 w-3" /> 流式</span>}
-            <span>{doc.summary}{doc.returns ? <> · 返回 <code className="font-mono text-[11px]">{doc.returns}</code></> : null}</span>
+              ? <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/12 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-3 w-3" /> 只读·安全</span>
+              : <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/12 px-2 py-0.5 text-sm font-semibold text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3.5 w-3.5" /> 有副作用</span>}
+            {isStream && <span className="inline-flex items-center gap-1 rounded-md bg-primary/12 px-1.5 py-0.5 text-xs font-medium text-primary"><Zap className="h-3 w-3" /> 流式</span>}
+            <span>{doc.summary}{doc.returns ? <> · 返回 <code className="font-mono text-meta">{doc.returns}</code></> : null}</span>
           </div>
         )}
 
@@ -273,11 +273,11 @@ export function ActionTester({ accounts, docs, presetAction }: { accounts: QQInf
                     if (p.role === 'group_id' && doc) for (const mp of doc.params) if (mp.role === 'member_id') next[mp.name] = '';
                     return next;
                   })} />
-                {p.desc && <span className="text-[11px] text-muted-foreground/70">{p.desc}</span>}
+                {p.desc && <span className="text-xs text-muted-foreground/70">{p.desc}</span>}
               </Field>
             ))}
             {doc!.invariants && doc!.invariants.length > 0 && (
-              <p className="text-[11px] text-muted-foreground/70">约束:{doc!.invariants.join('；')}</p>
+              <p className="text-xs text-muted-foreground/70">约束:{doc!.invariants.join('；')}</p>
             )}
           </div>
         )}
@@ -317,7 +317,7 @@ export function ActionTester({ accounts, docs, presetAction }: { accounts: QQInf
                   className="group flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] hover:bg-muted/50">
                   <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', rec.ok ? 'bg-emerald-500' : 'bg-destructive')} />
                   <span className="min-w-0 flex-1 truncate font-mono">{rec.action}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{rec.uin}</span>
+                  <span className="shrink-0 font-mono text-meta text-muted-foreground tabular-nums">{rec.uin}</span>
                   <span className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"><RotateCcw className="h-3.5 w-3.5" /></span>
                 </button>
               ))}
