@@ -181,9 +181,20 @@ describe('parseMsgPush group member increase', () => {
       ),
       identity,
     ) as GroupMemberJoin[];
+    const [unknownHighBits] = parseMsgPush(
+      makeGroupIncreasePacket(
+        member.uid,
+        operator.uid,
+        GROUP_ID,
+        Buffer.from(operator.uid, 'utf8'),
+        0x103,
+      ),
+      identity,
+    ) as GroupMemberJoin[];
 
     expect(approved.joinType).toBe('approve');
     expect(invited.joinType).toBe('invite');
+    expect(unknownHighBits.joinType).toBe('approve');
   });
 
   it('reports malformed raw operator bytes with bounded context', () => {

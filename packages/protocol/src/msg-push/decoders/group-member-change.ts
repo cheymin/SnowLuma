@@ -5,11 +5,12 @@ import { decodeNestedOperatorUid, decodeRawOperatorUid, resolveUidToUin } from '
 import type { MsgPushDecoder } from '../registry';
 
 function joinTypeFromOperationType(raw: number): NonNullable<GroupMemberJoin['joinType']> {
-  // QQ sets the high bit on the PkgType=33 operation code. After normalizing
-  // it, code 3 means an invitation; code 2 (and unknown/absent values) means
-  // approval. Do not use the nested `join_type`: that is an invitation-source
-  // enum rather than OneBot's approve/invite distinction.
-  return (raw & 0x7f) === 3 ? 'invite' : 'approve';
+  // QQ uses bit 0x80 as a flag on the PkgType=33 operation code. Clear only
+  // that bit: other high bits remain significant in the native handler. The
+  // normalized code 3 means an invitation; all other values mean approval.
+  // Do not use the nested `join_type`: that is an invitation-source enum.
+  const normalized = raw - (raw & 0x80);
+  return normalized === 3 ? 'invite' : 'approve';
 }
 
 export const decodeGroupMemberJoin: MsgPushDecoder = (ctx) => {
