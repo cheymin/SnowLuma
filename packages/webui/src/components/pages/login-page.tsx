@@ -165,7 +165,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           type="button"
           onClick={() => setHelpOpen(true)}
           whileHover={reduce ? undefined : { scale: 1.04 }}
-          whileTap={reduce ? undefined : { scale: 0.97 }}
+          whileTap={reduce ? undefined : { scale: 0.96 }}
           transition={{ type: 'spring', stiffness: 420, damping: 26 }}
           className="mt-5 inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/45 px-4 py-2 text-[12px] font-medium text-muted-foreground shadow-lg shadow-black/5 backdrop-blur-xl transition-colors hover:text-foreground supports-[backdrop-filter]:bg-background/35 cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
         >

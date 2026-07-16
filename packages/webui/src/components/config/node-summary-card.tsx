@@ -58,7 +58,7 @@ export function NodeSummaryCard<T extends AdapterCommon>({
       animate={{ opacity: 1, y: 0 }}
       transition={off ? { duration: 0 } : { duration: 0.18 }}
       className={cn(
-        'flex flex-col gap-2 rounded-xl border bg-card/40 p-3.5 transition-all hover:bg-accent/20 sm:flex-row sm:items-center sm:gap-3',
+        'flex flex-col gap-2 rounded-xl border bg-card/40 p-3.5 transition-[background-color,opacity] duration-150 ease-out hover:bg-accent/20 sm:flex-row sm:items-center sm:gap-3',
         !enabled && 'opacity-60',
       )}
     >

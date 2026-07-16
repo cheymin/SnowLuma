@@ -117,8 +117,8 @@ export function MessageComposer({ accounts }: { accounts: QQInfo[] }) {
           <MessageBuilder segments={segs} onChange={setSegs} uin={uin} groupId={groupId} />
         </div>
 
-        <button type="button" onClick={send} disabled={sending}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.99] disabled:opacity-50">
+        <button type="button" onClick={send} disabled={sending} data-press-scale=""
+          className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-medium text-primary-foreground shadow-sm transition-[background-color,opacity,scale] duration-150 ease-out hover:bg-primary/90 active:not-disabled:scale-[0.96] motion-reduce:active:scale-100 disabled:opacity-50">
           {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} 发送{hasNodes(segs) ? '(合并转发)' : ''}
         </button>
       </motion.section>

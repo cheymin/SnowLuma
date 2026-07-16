@@ -203,7 +203,7 @@ function Segmented<T extends string | number>({
             disabled={disabled}
             onClick={() => onChange(opt.value)}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-all cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed',
+              'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-[background-color,color,box-shadow] duration-150 ease-out cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed',
               active ? 'bg-card font-semibold text-foreground shadow-sm ring-1 ring-border' : 'font-medium text-muted-foreground hover:text-foreground',
             )}
           >
@@ -393,7 +393,7 @@ function AppearancePanel() {
                   aria-label={p.label}
                   onClick={() => setAppearance({ palette: p.id })}
                   className={cn(
-                    'flex w-[5.5rem] flex-col items-center gap-1.5 rounded-xl border p-1.5 transition-all cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+                    'flex w-[5.5rem] flex-col items-center gap-1.5 rounded-xl border p-1.5 transition-[border-color,box-shadow] duration-150 ease-out cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
                     active ? 'border-primary ring-2 ring-primary/30' : 'border-border hover:border-foreground/30',
                   )}
                 >
