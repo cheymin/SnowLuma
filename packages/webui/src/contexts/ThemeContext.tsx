@@ -66,15 +66,15 @@ export const POLL_INTERVAL_OPTIONS = [
 export interface FontSpec { id: string; label: string; stack: string }
 
 export const FONT_SANS_OPTIONS: FontSpec[] = [
-  { id: 'default', label: '默认 (Inter)', stack: "'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif" },
-  { id: 'system', label: '系统界面', stack: "system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif" },
-  { id: 'rounded', label: '圆润', stack: "'Varela Round', 'Quicksand', 'Noto Sans SC', system-ui, sans-serif" },
-  { id: 'serif', label: '衬线', stack: "Georgia, 'Songti SC', 'Noto Serif SC', serif" },
+  { id: 'default', label: '默认（本地系统）', stack: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" },
+  { id: 'system', label: '平台原生', stack: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
+  { id: 'rounded', label: '圆润（平台字体）', stack: "ui-rounded, 'SF Pro Rounded', system-ui, sans-serif" },
+  { id: 'serif', label: '衬线（本地字体）', stack: "Georgia, 'Songti SC', 'STSong', serif" },
 ];
 
 export const FONT_MONO_OPTIONS: FontSpec[] = [
-  { id: 'default', label: '默认 (JetBrains)', stack: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace" },
-  { id: 'system', label: '系统等宽', stack: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace" },
+  { id: 'default', label: '默认（系统等宽）', stack: "ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace" },
+  { id: 'system', label: '平台等宽', stack: "ui-monospace, Menlo, Consolas, monospace" },
 ];
 
 export interface GradientSpec { id: string; label: string; css: string }

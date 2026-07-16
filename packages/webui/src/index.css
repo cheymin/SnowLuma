@@ -150,8 +150,15 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  /* Dense metadata is the only content allowed below Tailwind's 12px text-xs
+     floor. Named tokens make that exception explicit at each call site. */
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1rem;
+  --text-micro: 0.625rem;
+  --text-micro--line-height: 0.875rem;
 }
 
 @layer base {
@@ -166,6 +173,7 @@
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    font-synthesis: none;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     line-height: 1.5;
