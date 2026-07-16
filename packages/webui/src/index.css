@@ -280,6 +280,36 @@ html[data-reduce-motion="1"] *::after {
   scroll-behavior: auto !important;
 }
 
+/* Press feedback is useful motion, but never essential. The app-level reduce
+   switch and the OS preference both disable it without changing hit areas. */
+html[data-reduce-motion="1"] :is(.ui-button, [data-press-scale]) {
+  scale: 1 !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.ui-button, [data-press-scale]) { scale: 1 !important; }
+}
+
+/* Keep shared form controls at 16px on narrow touch screens even when a page
+   supplies a smaller desktop typography utility. This prevents iOS Safari
+   from zooming the viewport when the control receives focus. */
+@media (max-width: 767px) {
+  .ui-button {
+    min-width: max(2.75rem, 44px);
+    min-height: max(2.75rem, 44px);
+  }
+  .ui-button-icon { min-width: max(2.75rem, 44px); }
+  .topbar-control {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  [data-ui-control] {
+    min-height: max(2.75rem, 44px);
+    font-size: max(1rem, 16px);
+  }
+}
+
 /* 关闭全部动效: harder than reduce — remove CSS animations outright (e.g. the
    pulsing status dots) rather than just collapsing their duration. Framer
    entrance fades are gated in components on `disableMotion`. */
