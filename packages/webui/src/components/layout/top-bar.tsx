@@ -59,7 +59,7 @@ export function TopBar({
       )}
 
       {/* Page title */}
-      <AnimatePresence mode="wait">
+      <AnimatePresence initial={false} mode="wait">
         <motion.div
           key={pathname}
           initial={{ opacity: 0, x: -8 }}
