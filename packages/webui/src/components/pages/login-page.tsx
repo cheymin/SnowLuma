@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowRight, Eye, EyeOff, KeyRound, Sparkles } from 'lucide-react';
+import { ArrowRight, KeyRound, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ToggleSwitch } from '@/components/ui/toggle-switch';
+import { PasswordVisibilityIcon } from '@/components/ui/password-visibility-icon';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LoginWaves } from '@/components/login-waves';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -131,7 +132,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   tabIndex={-1}
                   aria-label={showPwd ? '隐藏密码' : '显示密码'}
                 >
-                  {showPwd ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  <PasswordVisibilityIcon visible={showPwd} reduceMotion={reduce} />
                 </button>
               </motion.div>
 
