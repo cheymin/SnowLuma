@@ -123,6 +123,7 @@ const HISTORY_MAX_COUNT = 200;      // hard cap on messages returned per call
 const HISTORY_CHUNK_SEQ = 30;       // sequence span per server request (small packet)
 const HISTORY_MAX_REQUESTS = 12;    // bound the walk-back loop
 const HISTORY_MIN_GAP_MS = 300;     // minimum spacing between SsoGetGroupMsg sends
+const HISTORY_MAX_SEQUENCE = 0xffff_ffff; // sequence fields are protobuf uint32
 
 // Serialized throttle gate: chains so concurrent callers queue, and enforces
 // at least HISTORY_MIN_GAP_MS between actual sends (the first send isn't
@@ -160,12 +161,7 @@ async function walkBackHistory<T extends { msgSeq: number }>(
   for (let i = 0; i < HISTORY_MAX_REQUESTS && collected.size < want && curEnd >= 1; i++) {
     const start = Math.max(1, curEnd - HISTORY_CHUNK_SEQ + 1);
     await throttleHistory();
-    let batch: T[];
-    try {
-      batch = await fetchWindow(start, curEnd);
-    } catch {
-      break; // network/decode error — return whatever we have so far
-    }
+    const batch = await fetchWindow(start, curEnd);
     if (batch.length > 0) {
       let minSeq = curEnd;
       for (const ev of batch) {
@@ -179,6 +175,74 @@ async function walkBackHistory<T extends { msgSeq: number }>(
   }
   const all = [...collected.values()].sort((a, b) => a.msgSeq - b.msgSeq);
   return all.slice(-want); // newest `want`, oldest→newest
+}
+
+/**
+ * Pull sequence windows starting at `startSeq`, retaining the oldest `want`
+ * messages at or after the anchor. The returned list is chronological, matching
+ * the existing backward-history API shape.
+ */
+async function walkForwardHistory<T extends { msgSeq: number }>(
+  startSeq: number,
+  count: number,
+  fetchWindow: (startSeq: number, endSeq: number) => Promise<T[]>,
+): Promise<T[]> {
+  if (!(startSeq > 0) || startSeq > HISTORY_MAX_SEQUENCE) return [];
+  const want = Math.min(Math.max(1, Math.trunc(count) || 0), HISTORY_MAX_COUNT);
+
+  const collected = new Map<number, T>();
+  const budget = { remaining: HISTORY_MAX_REQUESTS };
+  let curStart = startSeq;
+  while (budget.remaining > 0 && collected.size < want && curStart <= HISTORY_MAX_SEQUENCE) {
+    const end = Math.min(HISTORY_MAX_SEQUENCE, curStart + HISTORY_CHUNK_SEQ - 1);
+    const window = await fetchForwardWindow(curStart, end, budget, fetchWindow);
+    for (const event of window.messages) collected.set(event.msgSeq, event);
+    if (!window.complete || end === HISTORY_MAX_SEQUENCE) break;
+    curStart = end + 1;
+  }
+
+  const all = [...collected.values()].sort((a, b) => a.msgSeq - b.msgSeq);
+  return all.slice(0, want);
+}
+
+interface ForwardWindowResult<T> {
+  messages: T[];
+  complete: boolean;
+}
+
+/**
+ * Resolve one forward window from its lower boundary. The history service may
+ * short-cap a range to its newest suffix; recursively fetch the omitted prefix
+ * before exposing that suffix so callers never skip messages nearest the
+ * anchor. An exhausted request budget marks the window incomplete, preventing
+ * later messages from being returned ahead of an unresolved prefix.
+ */
+async function fetchForwardWindow<T extends { msgSeq: number }>(
+  startSeq: number,
+  endSeq: number,
+  budget: { remaining: number },
+  fetchWindow: (startSeq: number, endSeq: number) => Promise<T[]>,
+): Promise<ForwardWindowResult<T>> {
+  if (budget.remaining <= 0) return { messages: [], complete: false };
+
+  budget.remaining--;
+  await throttleHistory();
+  const batch = await fetchWindow(startSeq, endSeq);
+  if (batch.length === 0) return { messages: [], complete: true };
+
+  const messages = [...new Map(batch.map((event) => [event.msgSeq, event])).values()]
+    .sort((a, b) => a.msgSeq - b.msgSeq);
+  for (const message of messages) {
+    if (!Number.isInteger(message.msgSeq) || message.msgSeq < startSeq || message.msgSeq > endSeq) {
+      throw new Error(`history response sequence is outside requested range ${startSeq}-${endSeq}`);
+    }
+  }
+  const firstSequence = messages[0]!.msgSeq;
+  if (firstSequence === startSeq) return { messages, complete: true };
+
+  const prefix = await fetchForwardWindow(startSeq, firstSequence - 1, budget, fetchWindow);
+  if (!prefix.complete) return prefix;
+  return { messages: [...prefix.messages, ...messages], complete: true };
 }
 
 export class MessageApi {
@@ -726,29 +790,44 @@ export class MessageApi {
   }
 
   /**
-   * Fetch real group history from the server (`SsoGetGroupMsg`), ending at and
-   * including `endSeq`, walking backward in small windows until `count`
-   * messages are gathered or the floor is reached. Rate-limited + capped so a
-   * hammering client can't make us flood the server (and get the account
-   * kicked). Returns decoded `group_message` events oldest→newest.
+   * Fetch real group history from the server (`SsoGetGroupMsg`), including the
+   * anchor and walking backward or forward in small windows. Rate-limited and
+   * capped so a hammering client cannot flood the server. Returns decoded
+   * `group_message` events oldest→newest regardless of query direction.
    */
-  async getGroupHistory(groupUin: number, endSeq: number, count: number, selfUin = 0): Promise<GroupMessage[]> {
+  async getGroupHistory(
+    groupUin: number,
+    anchorSeq: number,
+    count: number,
+    selfUin = 0,
+    reverseOrder = true,
+  ): Promise<GroupMessage[]> {
     if (!(groupUin > 0)) return [];
-    return walkBackHistory(endSeq, count, (start, end) =>
-      fetchGroupMessageRange(this.ctx, this.ctx.identity, selfUin, groupUin, start, end));
+    const fetchWindow = (start: number, end: number) =>
+      fetchGroupMessageRange(this.ctx, this.ctx.identity, selfUin, groupUin, start, end);
+    return reverseOrder
+      ? walkBackHistory(anchorSeq, count, fetchWindow)
+      : walkForwardHistory(anchorSeq, count, fetchWindow);
   }
 
   /**
-   * Fetch real private (c2c) history from the server (`SsoGetC2cMsg`), ending
-   * at and including `endSeq`. Same rate-limit + data-volume guards as the
-   * group variant (they share the throttle gate). `friendUid` is the
-   * conversation peer's UID. Returns decoded `friend_message` events
-   * oldest→newest.
+   * Fetch real private history from the server (`SsoGetC2cMsg`), including the
+   * anchor in the requested direction. It shares the group variant's throttle
+   * and data-volume guards. Returns decoded events oldest→newest.
    */
-  async getC2cHistory(friendUid: string, endSeq: number, count: number, selfUin = 0): Promise<FriendMessage[]> {
+  async getC2cHistory(
+    friendUid: string,
+    anchorSeq: number,
+    count: number,
+    selfUin = 0,
+    reverseOrder = true,
+  ): Promise<FriendMessage[]> {
     if (!friendUid) return [];
-    return walkBackHistory(endSeq, count, (start, end) =>
-      fetchC2cMessageRange(this.ctx, this.ctx.identity, selfUin, friendUid, start, end));
+    const fetchWindow = (start: number, end: number) =>
+      fetchC2cMessageRange(this.ctx, this.ctx.identity, selfUin, friendUid, start, end);
+    return reverseOrder
+      ? walkBackHistory(anchorSeq, count, fetchWindow)
+      : walkForwardHistory(anchorSeq, count, fetchWindow);
   }
 
   /**

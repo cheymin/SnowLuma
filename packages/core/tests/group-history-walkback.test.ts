@@ -1,21 +1,20 @@
-// MessageApi.getGroupHistory walk-back loop: chunking, dedup, server-short-cap
-// handling, floor termination, slice(-want). fetchGroupMessageRange is mocked
-// so this exercises the loop/cursor logic, not the wire decode (covered in
-// packages/protocol/tests/msg-push/fetch-group-history.test.ts).
+// MessageApi history pagination: bidirectional chunking, dedup, short-cap
+// handling, floor termination, and chronological output. Range fetches are
+// mocked so this exercises cursor logic rather than wire decoding.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@snowluma/protocol/msg-push', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@snowluma/protocol/msg-push')>();
-  return { ...actual, fetchGroupMessageRange: vi.fn() };
+  return { ...actual, fetchGroupMessageRange: vi.fn(), fetchC2cMessageRange: vi.fn() };
 });
 
-import { fetchGroupMessageRange } from '@snowluma/protocol/msg-push';
+import { fetchC2cMessageRange, fetchGroupMessageRange } from '@snowluma/protocol/msg-push';
 import { MessageApi } from '../src/bridge/apis/message';
 
 const mockFetch = vi.mocked(fetchGroupMessageRange);
+const mockC2cFetch = vi.mocked(fetchC2cMessageRange);
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function gm(seq: number): any {
   return {
     kind: 'group_message', groupName: '', time: 0, selfUin: 0, senderUin: 1, msgSeq: seq,
@@ -23,16 +22,16 @@ function gm(seq: number): any {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const ctx = { identity: {}, sendRawPacket: vi.fn() } as any;
 
-describe('MessageApi.getGroupHistory walk-back', () => {
+describe('MessageApi history pagination', () => {
   // The walk-back loop enforces a real ~300ms gap between each SsoGetGroupMsg
   // send (a deliberate anti-flood throttle, unchanged in production). Fake the
   // clock so the test exercises the loop/cursor logic instantly instead of
   // waiting out 300ms × up-to-12 real sends.
   beforeEach(() => {
     mockFetch.mockReset();
+    mockC2cFetch.mockReset();
     vi.useFakeTimers();
   });
   afterEach(() => vi.useRealTimers());
@@ -62,6 +61,58 @@ describe('MessageApi.getGroupHistory walk-back', () => {
     }
   });
 
+  it('walks forward from and including the anchor when reverse order is disabled', async () => {
+    mockFetch.mockImplementation(async (_s, _id, _self, _g, start, end) => {
+      const out = [];
+      for (let s = start; s <= end; s++) out.push(gm(s));
+      return out;
+    });
+
+    const res = await runHistory(new MessageApi(ctx).getGroupHistory(9999, 100, 5, 0, false));
+
+    expect(res.map((message) => message.msgSeq)).toEqual([100, 101, 102, 103, 104]);
+  });
+
+  it('does not skip the anchor-side prefix when a forward window is short-capped', async () => {
+    mockFetch.mockImplementation(async (_s, _id, _self, _g, start, end) => {
+      const out = [];
+      for (let s = Math.max(start, end - 9); s <= end; s++) out.push(gm(s));
+      return out;
+    });
+
+    const res = await runHistory(new MessageApi(ctx).getGroupHistory(9999, 100, 20, 0, false));
+
+    expect(res.map((message) => message.msgSeq)).toEqual(
+      Array.from({ length: 20 }, (_, index) => 100 + index),
+    );
+  });
+
+  it('uses the same forward semantics for private history', async () => {
+    mockC2cFetch.mockImplementation(async (_s, _id, _self, _uid, start, end) => {
+      const out = [];
+      for (let s = start; s <= end; s++) out.push(gm(s));
+      return out;
+    });
+
+    const res = await runHistory(new MessageApi(ctx).getC2cHistory('u_friend', 300, 3, 0, false));
+
+    expect(res.map((message) => message.msgSeq)).toEqual([300, 301, 302]);
+  });
+
+  it('stops forward pagination at the unsigned sequence ceiling', async () => {
+    mockFetch.mockImplementation(async (_s, _id, _self, _g, start, end) => {
+      const out = [];
+      for (let s = start; s <= end; s++) out.push(gm(s));
+      return out;
+    });
+
+    const res = await runHistory(
+      new MessageApi(ctx).getGroupHistory(9999, 0xffff_fffe, 5, 0, false),
+    );
+
+    expect(res.map((message) => message.msgSeq)).toEqual([0xffff_fffe, 0xffff_ffff]);
+  });
+
   it('stops at the sequence floor when fewer messages exist than requested', async () => {
     mockFetch.mockImplementation(async (_s, _id, _self, _g, start, end) => {
       const out = [];
@@ -83,6 +134,18 @@ describe('MessageApi.getGroupHistory walk-back', () => {
     const res = await runHistory(new MessageApi(ctx).getGroupHistory(9999, 100_000, 9999));
     expect(calls).toBeLessThanOrEqual(12);     // HISTORY_MAX_REQUESTS
     expect(res.length).toBeLessThanOrEqual(200); // HISTORY_MAX_COUNT
+  });
+
+  it('rejects a failed later window instead of presenting partial history as complete', async () => {
+    mockFetch
+      .mockResolvedValueOnce([gm(200)])
+      .mockRejectedValueOnce(new Error('history transport failed'));
+
+    const assertion = expect(
+      new MessageApi(ctx).getGroupHistory(9999, 200, 20),
+    ).rejects.toThrow('history transport failed');
+    await vi.runAllTimersAsync();
+    await assertion;
   });
 
   it('returns [] for an invalid anchor without sending', async () => {
