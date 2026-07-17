@@ -194,6 +194,8 @@ export interface SetGroupReactionParams extends JsonObject {
 export interface GetMessageHistoryParams extends JsonObject {
   message_id?: number;
   count?: number;
+  /** With a non-zero message_id, include the anchor and query older (`true`) or newer (`false`) messages. Defaults to `true`. */
+  reverse_order?: boolean;
 }
 
 export interface GetGroupMessageHistoryParams extends GroupIdParams, GetMessageHistoryParams {}

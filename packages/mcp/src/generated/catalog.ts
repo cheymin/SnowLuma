@@ -3078,6 +3078,16 @@ export const ACTIONS: CatalogAction[] = [
           "minimum": 0
         },
         "default": 20
+      },
+      {
+        "name": "reverse_order",
+        "type": "bool",
+        "required": false,
+        "schema": {
+          "type": "boolean"
+        },
+        "default": true,
+        "desc": "仅在 message_id 非 0 时生效；true 返回锚点及更旧消息，false 返回锚点及更新消息"
       }
     ],
     "invariants": [],
@@ -3098,6 +3108,11 @@ export const ACTIONS: CatalogAction[] = [
           "type": "integer",
           "minimum": 0,
           "default": 20
+        },
+        "reverse_order": {
+          "type": "boolean",
+          "description": "仅在 message_id 非 0 时生效；true 返回锚点及更旧消息，false 返回锚点及更新消息",
+          "default": true
         }
       },
       "required": [
@@ -4439,6 +4454,16 @@ export const ACTIONS: CatalogAction[] = [
           "minimum": 0
         },
         "default": 20
+      },
+      {
+        "name": "reverse_order",
+        "type": "bool",
+        "required": false,
+        "schema": {
+          "type": "boolean"
+        },
+        "default": true,
+        "desc": "仅在 message_id 非 0 时生效；true 返回锚点及更旧消息，false 返回锚点及更新消息"
       }
     ],
     "invariants": [],
@@ -4460,6 +4485,11 @@ export const ACTIONS: CatalogAction[] = [
           "type": "integer",
           "minimum": 0,
           "default": 20
+        },
+        "reverse_order": {
+          "type": "boolean",
+          "description": "仅在 message_id 非 0 时生效；true 返回锚点及更旧消息，false 返回锚点及更新消息",
+          "default": true
         }
       },
       "required": [
