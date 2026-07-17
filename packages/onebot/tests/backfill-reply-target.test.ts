@@ -117,6 +117,29 @@ describe('backfillReplyTarget', () => {
     );
   });
 
+  it('c2c: a self-sent reply echo backfills under the conversation peer', async () => {
+    const peerUin = 448671521;
+    const store = fakeStore(false);
+    const getC2cMessageBySeq = vi.fn(async () => fetchedFriendMessage(456, peerUin));
+    const ref = {
+      selfId: SELF, converterCtx, messageStore: store,
+      bridge: { apis: { message: { getC2cMessageBySeq } }, resolveUserUid: vi.fn(async () => 'u_friend') },
+    } as any;
+    const event = {
+      kind: 'friend_message', time: 1, selfUin: SELF, senderUin: SELF, peerUin,
+      senderNick: '', msgSeq: 999, msgId: 2,
+      elements: [{ type: 'reply', replySeq: 456 }],
+    } as any;
+
+    await backfillReplyTarget(ref, event);
+
+    const targetId = hashMessageIdInt32(456, peerUin, PRIVATE_MESSAGE_EVENT);
+    expect(store.storeEvent).toHaveBeenCalledWith(
+      targetId, false, peerUin, 456, PRIVATE_MESSAGE_EVENT,
+      expect.objectContaining({ message_id: targetId, message_type: 'private' }),
+    );
+  });
+
   it('no-op when the quoted message is already stored (no fetch)', async () => {
     const store = fakeStore(true); // findEvent hits
     const getGroupMessageBySeq = vi.fn();

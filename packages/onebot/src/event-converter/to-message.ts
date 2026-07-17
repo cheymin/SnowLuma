@@ -21,7 +21,8 @@ function toSegments(ctx: ConverterContext, elements: MessageElement[], isGroup: 
 
 /**
  * friend_message and temp_message differ only in `sub_type` ('friend' vs
- * 'group') — both are private, keyed by senderUin, same sender shape.
+ * 'group'). Friend messages use their conversation peer as the session key,
+ * which differs from senderUin on a self-sent echo.
  */
 async function convertPrivateMessage(
   ctx: ConverterContext,
@@ -30,10 +31,13 @@ async function convertPrivateMessage(
 ): Promise<JsonObject> {
   const isSelf = event.senderUin === ctx.selfId;
   const postType = isSelf ? 'message_sent' : 'message';
+  const sessionId = event.kind === 'friend_message' && event.peerUin && event.peerUin > 0
+    ? event.peerUin
+    : event.senderUin;
   const messageId = applyMessageIdResolver(
-    ctx.messageIdResolver, false, event.senderUin, event.msgSeq, PRIVATE_MESSAGE_EVENT,
+    ctx.messageIdResolver, false, sessionId, event.msgSeq, PRIVATE_MESSAGE_EVENT,
   );
-  const segments = await toSegments(ctx, event.elements, false, event.senderUin);
+  const segments = await toSegments(ctx, event.elements, false, sessionId);
   const sender: JsonObject = {
     user_id: event.senderUin,
     nickname: event.senderNick,
@@ -46,7 +50,7 @@ async function convertPrivateMessage(
   if (subType === 'group' && 'groupId' in event && event.groupId > 0) {
     sender.group_id = event.groupId;
   }
-  return message(ctx, event, postType, {
+  const fields: JsonObject = {
     message_type: 'private',
     sub_type: subType,
     message_id: messageId,
@@ -56,7 +60,9 @@ async function convertPrivateMessage(
     raw_message: segmentsToRawMessage(segments),
     font: 0,
     sender,
-  });
+  };
+  if (isSelf && sessionId > 0 && sessionId !== ctx.selfId) fields.target_id = sessionId;
+  return message(ctx, event, postType, fields);
 }
 
 export function convertFriendMessage(ctx: ConverterContext, event: FriendMessage): Promise<JsonObject> {

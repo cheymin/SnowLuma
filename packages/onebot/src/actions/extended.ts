@@ -321,9 +321,10 @@ export const actions = [
       // (matches the original `asNumber(message_id) || 0`). `count` stays ≥0.
       message_id: f.int().default(0).role('message_id'),
       count: f.int({ min: 0 }).default(20),
+      reverse_order: f.bool().default(true).describe('仅在 message_id 非 0 时生效；true 返回锚点及更旧消息，false 返回锚点及更新消息'),
     },
     run: async (p, ctx) => {
-      const messages = await ctx.getGroupMsgHistory(p.group_id, p.message_id, p.count);
+      const messages = await ctx.getGroupMsgHistory(p.group_id, p.message_id, p.count, p.reverse_order);
       return okResponse({ messages });
     },
   }),
@@ -345,9 +346,10 @@ export const actions = [
       // Signed int32 hash, frequently negative — see get_group_msg_history.
       message_id: f.int().default(0).role('message_id'),
       count: f.int({ min: 0 }).default(20),
+      reverse_order: f.bool().default(true).describe('仅在 message_id 非 0 时生效；true 返回锚点及更旧消息，false 返回锚点及更新消息'),
     },
     run: async (p, ctx) => {
-      const messages = await ctx.getFriendMsgHistory(p.user_id, p.message_id, p.count);
+      const messages = await ctx.getFriendMsgHistory(p.user_id, p.message_id, p.count, p.reverse_order);
       return okResponse({ messages });
     },
   }),

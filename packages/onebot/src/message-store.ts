@@ -16,6 +16,7 @@ export class MessageStore {
   private readonly stmtResolveReplyGroup: StatementSync;
   private readonly stmtResolveReplyPrivate: StatementSync;
   private readonly stmtListEventsAnchored: StatementSync;
+  private readonly stmtListEventsAnchoredForward: StatementSync;
   private readonly stmtListEventsLatest: StatementSync;
   private readonly stmtListIncomingC2CSessions: StatementSync;
 
@@ -81,6 +82,14 @@ export class MessageStore {
        FROM messages
        WHERE is_group = ? AND session_id = ? AND data IS NOT NULL AND sequence <= ?
        ORDER BY sequence DESC
+       LIMIT ?`,
+    );
+
+    this.stmtListEventsAnchoredForward = this.db.prepare(
+      `SELECT data
+       FROM messages
+       WHERE is_group = ? AND session_id = ? AND data IS NOT NULL AND sequence >= ?
+       ORDER BY sequence ASC
        LIMIT ?`,
     );
 
@@ -200,6 +209,7 @@ export class MessageStore {
     sessionId: number,
     count = 20,
     anchorSequence?: number,
+    reverseOrder = true,
   ): JsonObject[] {
     if (!Number.isInteger(sessionId) || sessionId <= 0) return [];
 
@@ -208,7 +218,9 @@ export class MessageStore {
     const anchor = hasAnchor ? (anchorSequence as number) : 0;
 
     const rows = hasAnchor
-      ? this.stmtListEventsAnchored.all(isGroup ? 1 : 0, sessionId, anchor, limit)
+      ? reverseOrder
+        ? this.stmtListEventsAnchored.all(isGroup ? 1 : 0, sessionId, anchor, limit)
+        : this.stmtListEventsAnchoredForward.all(isGroup ? 1 : 0, sessionId, anchor, limit)
       : this.stmtListEventsLatest.all(isGroup ? 1 : 0, sessionId, limit);
 
     const result: JsonObject[] = [];
@@ -222,8 +234,9 @@ export class MessageStore {
       }
     }
 
-    // Keep chronological order (oldest -> newest) for API consumers.
-    result.reverse();
+    // Backward/latest queries are selected DESC, while forward queries already
+    // arrive ASC. Always expose chronological order to API consumers.
+    if (!hasAnchor || reverseOrder) result.reverse();
     return result;
   }
 

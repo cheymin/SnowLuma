@@ -55,8 +55,8 @@ export interface ApiActionContext {
   handleGroupRequest: (flag: string, subType: string, approve: boolean, reason: string) => Promise<void>;
   setEssenceMsg: (messageId: number) => Promise<void>;
   deleteEssenceMsg: (messageId: number) => Promise<void>;
-  getGroupMsgHistory: (groupId: number, messageId?: number, count?: number) => Promise<JsonObject[]>;
-  getFriendMsgHistory: (userId: number, messageId?: number, count?: number) => Promise<JsonObject[]>;
+  getGroupMsgHistory: (groupId: number, messageId?: number, count?: number, reverseOrder?: boolean) => Promise<JsonObject[]>;
+  getFriendMsgHistory: (userId: number, messageId?: number, count?: number, reverseOrder?: boolean) => Promise<JsonObject[]>;
   handleGetGroupSystemMsg: (query: GroupSystemMessageQuery) => Promise<JsonObject[]>;
   getDownloadRKeys: () => Promise<JsonObject[]>;
   sendGroupForwardMsg: (groupId: number, messages: JsonValue, meta?: ForwardPreviewMeta) => Promise<{ messageId: number; forwardId: string }>;

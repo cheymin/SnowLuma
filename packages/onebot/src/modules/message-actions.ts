@@ -82,18 +82,20 @@ export async function getGroupMsgHistory(
   groupId: number,
   messageId?: number,
   count?: number,
+  reverseOrder = true,
 ): Promise<JsonObject[]> {
   if (!Number.isInteger(groupId) || groupId <= 0) return [];
   const limit = normalizeHistoryCount(count);
+  const hasAnchor = Number.isInteger(messageId) && messageId !== 0;
 
   let anchorSequence: number | undefined;
-  if (Number.isInteger(messageId) && messageId !== 0) {
+  if (hasAnchor) {
     const meta = messageStore.findMeta(messageId as number);
     if (!meta || !meta.isGroup || meta.targetId !== groupId || meta.sequence <= 0) return [];
     anchorSequence = meta.sequence;
   }
 
-  const events = messageStore.listSessionEvents(true, groupId, limit, anchorSequence);
+  const events = messageStore.listSessionEvents(true, groupId, limit, anchorSequence, reverseOrder);
   return events
     .filter((event) => {
       if (event.message_type !== 'group') return false;
@@ -108,24 +110,24 @@ export async function getFriendMsgHistory(
   userId: number,
   messageId?: number,
   count?: number,
+  reverseOrder = true,
 ): Promise<JsonObject[]> {
   if (!Number.isInteger(userId) || userId <= 0) return [];
   const limit = normalizeHistoryCount(count);
+  const hasAnchor = Number.isInteger(messageId) && messageId !== 0;
 
   let anchorSequence: number | undefined;
-  if (Number.isInteger(messageId) && messageId !== 0) {
+  if (hasAnchor) {
     const meta = messageStore.findMeta(messageId as number);
     if (!meta || meta.isGroup || meta.targetId !== userId || meta.sequence <= 0) return [];
     anchorSequence = meta.sequence;
   }
 
-  const events = messageStore.listSessionEvents(false, userId, limit, anchorSequence);
+  const events = messageStore.listSessionEvents(false, userId, limit, anchorSequence, reverseOrder);
   return events
-    .filter((event) => {
-      if (event.message_type !== 'private') return false;
-      const uid = Number(event.user_id ?? 0);
-      return Number.isFinite(uid) && Math.trunc(uid) === userId;
-    })
+    // `session_id` is the conversation peer. Self-sent messages legitimately
+    // carry the bot's own `user_id`, so filtering by sender would drop them.
+    .filter((event) => event.message_type === 'private')
     .map(sanitizeMessageEventForApi);
 }
 
@@ -143,24 +145,27 @@ interface HistoryRef {
  * live, and (because each fetched message is persisted) reply / get_msg on old
  * messages start working too. Resolves the anchor sequence from the requested
  * message_id (or the latest observed message), then asks the bridge for the
- * `count` messages ending there. Falls back to the local store if the server
- * fetch is unavailable or empty.
+ * requested number of older or newer messages including that anchor. Falls
+ * back to the local store if the server fetch is unavailable or empty.
  */
 export async function getGroupHistory(
   ref: HistoryRef,
   groupId: number,
   messageId: number | undefined,
   count: number | undefined,
+  reverseOrder = true,
 ): Promise<JsonObject[]> {
   if (!Number.isInteger(groupId) || groupId <= 0) return [];
   const want = normalizeHistoryCount(count);
+  const hasAnchor = Number.isInteger(messageId) && messageId !== 0;
+  const effectiveReverseOrder = hasAnchor ? reverseOrder : true;
 
   let anchorSeq = 0;
-  if (Number.isInteger(messageId) && messageId !== 0) {
+  if (hasAnchor) {
     const meta = ref.messageStore.findMeta(messageId as number);
     if (!meta || !meta.isGroup || meta.targetId !== groupId || meta.sequence <= 0) {
       // Anchor we don't know — best effort from the local store.
-      return getGroupMsgHistory(ref.messageStore, groupId, messageId, count);
+      return getGroupMsgHistory(ref.messageStore, groupId, messageId, count, reverseOrder);
     }
     anchorSeq = meta.sequence;
   } else {
@@ -170,7 +175,13 @@ export async function getGroupHistory(
 
   if (anchorSeq > 0) {
     try {
-      const events = await ref.bridge.apis.message.getGroupHistory(groupId, anchorSeq, want, ref.selfId);
+      const events = await ref.bridge.apis.message.getGroupHistory(
+        groupId,
+        anchorSeq,
+        want,
+        ref.selfId,
+        effectiveReverseOrder,
+      );
       const out: JsonObject[] = [];
       for (const ev of events) {
         const json = await convertEvent(ref.converterCtx, ev);
@@ -180,46 +191,60 @@ export async function getGroupHistory(
       }
       if (out.length > 0) return out;
     } catch (err) {
-      log.warn('group history server fetch failed (%s); using local store', err instanceof Error ? err.message : String(err));
+      log.warn(
+        'group history server fetch failed: group=%d anchorSeq=%d count=%d reverseOrder=%s error=%s; using local store',
+        groupId,
+        anchorSeq,
+        want,
+        String(effectiveReverseOrder),
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
-  return getGroupMsgHistory(ref.messageStore, groupId, messageId, count);
+  return getGroupMsgHistory(ref.messageStore, groupId, messageId, count, reverseOrder);
 }
 
 /**
  * Private (c2c) history — the same server-fetch + persist pattern as
  * {@link getGroupHistory}, but via `SsoGetC2cMsg` (peer = the friend's UID,
  * resolved from the uin). The anchor is the message_id's sequence (any side of
- * the conversation) or the latest observed inbound message. Falls back to the
- * local store on unknown anchor / no uid / empty / error.
+ * the conversation) or the latest observed inbound message. Direction applies
+ * only to an explicit anchor; an unanchored request keeps latest-page behavior.
+ * Falls back to the local store on unknown anchor / no uid / empty / error.
  */
 export async function getFriendHistory(
   ref: HistoryRef,
   userId: number,
   messageId: number | undefined,
   count: number | undefined,
+  reverseOrder = true,
 ): Promise<JsonObject[]> {
   if (!Number.isInteger(userId) || userId <= 0) return [];
   const want = normalizeHistoryCount(count);
+  const hasAnchor = Number.isInteger(messageId) && messageId !== 0;
+  const effectiveReverseOrder = hasAnchor ? reverseOrder : true;
 
   let anchorSeq = 0;
-  if (Number.isInteger(messageId) && messageId !== 0) {
+  if (hasAnchor) {
     const meta = ref.messageStore.findMeta(messageId as number);
-    // A c2c conversation seq is shared across both directions, but self-sent
-    // messages are keyed under our own uin — so accept any private anchor by
-    // sequence rather than requiring targetId === userId.
-    if (!meta || meta.isGroup || meta.sequence <= 0) {
-      return getFriendMsgHistory(ref.messageStore, userId, messageId, count);
+    // Older self-sent rows may be keyed by selfId. Only accept one of those
+    // when its stored target_id proves that it belongs to this peer; otherwise
+    // a message_id from another private conversation could select the wrong
+    // server sequence.
+    const storedEvent = meta?.targetId === ref.selfId
+      ? ref.messageStore.findEvent(messageId as number)
+      : null;
+    const belongsToPeer = meta?.targetId === userId
+      || (meta?.targetId === ref.selfId && toHistInt(storedEvent?.target_id) === userId);
+    if (!meta || meta.isGroup || meta.sequence <= 0 || !belongsToPeer) {
+      return getFriendMsgHistory(ref.messageStore, userId, messageId, count, reverseOrder);
     }
     anchorSeq = meta.sequence;
   } else {
-    // Latest observed *inbound* message from this friend (self-sent messages
-    // are keyed under our own uin, not the recipient, so the store can't give
-    // "latest sent to this friend"). The c2c sequence is shared across both
-    // directions, so the fetch window around this anchor still includes recent
-    // self-sent messages — only ones strictly newer than the last inbound are
-    // missed on the unparameterized first page (a paged client catches up).
+    // Current rows are keyed by conversation peer, so the latest local anchor
+    // covers both incoming and self-sent messages. Legacy sender-keyed rows are
+    // repaired when they are fetched through an explicit anchor.
     const latest = ref.messageStore.listSessionEvents(false, userId, 1);
     anchorSeq = latest.length ? toHistInt(latest[latest.length - 1].message_seq) : 0;
   }
@@ -228,22 +253,45 @@ export async function getFriendHistory(
     try {
       const friendUid = await ref.bridge.resolveUserUid(userId);
       if (friendUid) {
-        const events = await ref.bridge.apis.message.getC2cHistory(friendUid, anchorSeq, want, ref.selfId);
+        const events = await ref.bridge.apis.message.getC2cHistory(
+          friendUid,
+          anchorSeq,
+          want,
+          ref.selfId,
+          effectiveReverseOrder,
+        );
         const out: JsonObject[] = [];
         for (const ev of events) {
+          // The action itself identifies the conversation even when an older
+          // QQ response omits ResponseHead.toUin on a self-sent row.
+          if (!ev.peerUin || ev.peerUin <= 0) ev.peerUin = userId;
           const json = await convertEvent(ref.converterCtx, ev);
           if (!json || json.message_type !== 'private') continue;
-          persistHistoryEvent(ref.messageStore, json);
+          // Private history is scoped by the requested peer, while user_id is
+          // the sender and therefore equals selfId for outgoing messages.
+          // Preserve the peer explicitly so later local pagination can keep
+          // both sides of the conversation together.
+          if (json.post_type === 'message_sent' && toHistInt(json.target_id) === 0) {
+            json.target_id = userId;
+          }
+          persistHistoryEvent(ref.messageStore, json, userId);
           out.push(sanitizeMessageEventForApi(json));
         }
         if (out.length > 0) return out;
       }
     } catch (err) {
-      log.warn('friend history server fetch failed (%s); using local store', err instanceof Error ? err.message : String(err));
+      log.warn(
+        'friend history server fetch failed: user=%d anchorSeq=%d count=%d reverseOrder=%s error=%s; using local store',
+        userId,
+        anchorSeq,
+        want,
+        String(effectiveReverseOrder),
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
-  return getFriendMsgHistory(ref.messageStore, userId, messageId, count);
+  return getFriendMsgHistory(ref.messageStore, userId, messageId, count, reverseOrder);
 }
 
 /**
@@ -263,7 +311,10 @@ export async function backfillReplyTarget(ref: HistoryRef, event: QQEventVariant
   let isGroup: boolean;
   let session: number;
   if (event.kind === 'group_message') { isGroup = true; session = event.groupId; }
-  else if (event.kind === 'friend_message') { isGroup = false; session = event.senderUin; }
+  else if (event.kind === 'friend_message') {
+    isGroup = false;
+    session = event.peerUin ?? event.senderUin;
+  }
   else return;
   if (!Number.isInteger(session) || session <= 0) return;
 
@@ -375,13 +426,15 @@ function buildBackfillEvent(
 }
 
 // Persist a converted history event so reply / get_msg / future listing resolve
-// it — keyed exactly like the live pipeline (group → group_id, private → the
-// sender uin carried in user_id).
-function persistHistoryEvent(store: MessageStore, event: JsonObject): void {
+// it. Private history callers provide the conversation peer because `user_id`
+// identifies the sender and equals the bot account on outgoing messages.
+function persistHistoryEvent(store: MessageStore, event: JsonObject, privatePeerId?: number): void {
   const messageId = toHistInt(event.message_id);
   if (messageId === 0) return;
   const isGroup = event.message_type === 'group';
-  const sessionId = isGroup ? toHistInt(event.group_id) : toHistInt(event.user_id);
+  const sessionId = isGroup
+    ? toHistInt(event.group_id)
+    : (privatePeerId && privatePeerId > 0 ? privatePeerId : toHistInt(event.user_id));
   const sequence = toHistInt(event.message_seq);
   const eventName = isGroup ? GROUP_MESSAGE_EVENT : PRIVATE_MESSAGE_EVENT;
   if (sessionId === 0) return;

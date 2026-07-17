@@ -48,17 +48,23 @@ describe('fetchC2cMessageRange / SsoGetC2cMsg', () => {
           contentHead: { msgType: 166, sequence: 110, timestamp: 1700000110, msgId: 7110 },
           body: { richText: { elems: [{ text: { str: 'hi' } }] } },
         },
+        {
+          responseHead: { fromUin: 10001, toUin: 333, forward: { friendName: 'Self' } },
+          contentHead: { msgType: 166, sequence: 115, timestamp: 1700000115, msgId: 7115 },
+          body: { richText: { elems: [{ text: { str: 'sent' } }] } },
+        },
       ],
     });
     const sender = { sendRawPacket: async () => okResult(resp) };
 
     const out = await fetchC2cMessageRange(sender, identity, 10001, 'u_friend', 100, 120);
 
-    expect(out.map((m) => m.msgSeq)).toEqual([110, 120]); // sorted ascending
+    expect(out.map((m) => m.msgSeq)).toEqual([110, 115, 120]); // sorted ascending
     expect(out.every((m) => m.kind === 'friend_message')).toBe(true);
     expect(out.every((m) => m.selfUin === 10001)).toBe(true);
     expect(out[0]).toMatchObject({ msgSeq: 110, senderUin: 111, senderNick: 'Alice' });
-    expect(out[1]).toMatchObject({ msgSeq: 120, senderUin: 222, senderNick: 'Bob' });
+    expect(out[1]).toMatchObject({ msgSeq: 115, senderUin: 10001, peerUin: 333, senderNick: 'Self' });
+    expect(out[2]).toMatchObject({ msgSeq: 120, senderUin: 222, senderNick: 'Bob' });
   });
 
   it('drops content-less blank messages, keeps real ones (#102 parity)', async () => {
