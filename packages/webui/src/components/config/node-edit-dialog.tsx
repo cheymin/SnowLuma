@@ -114,7 +114,7 @@ export function NodeEditDialog<K extends NetworkKind>(props: NodeEditDialogProps
           >
             <div className="min-w-0">
               <Label className="text-sm font-medium text-foreground">启用</Label>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                 关闭后保存即可保留配置但不启动该节点
               </p>
             </div>
@@ -215,7 +215,7 @@ function Section({ caption, delay, children }: { caption: string; delay: number;
       transition={{ duration: 0.3, delay }}
       className="flex flex-col gap-1.5"
     >
-      <span className="px-1 text-[11px] font-medium text-muted-foreground">{caption}</span>
+      <span className="px-1 text-xs font-medium text-muted-foreground">{caption}</span>
       <div className="overflow-hidden rounded-2xl border border-border/60 bg-card/40">{children}</div>
     </motion.section>
   );
@@ -227,7 +227,7 @@ function SettingRow({ label, desc, children }: { label: string; desc?: string; c
     <div className="flex items-center justify-between gap-4 px-4 py-3">
       <div className="min-w-0">
         <Label className="text-[13px] text-foreground">{label}</Label>
-        {desc && <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{desc}</p>}
+        {desc && <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{desc}</p>}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
@@ -366,7 +366,7 @@ function Field({ label, value, onChange, placeholder, type = 'text', error }: Fi
         placeholder={placeholder}
         className={cn(error && 'border-destructive focus-visible:ring-destructive/40')}
       />
-      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

@@ -323,32 +323,94 @@ describe('extended-actions / bot_exit', () => {
 // `message_id=-497311472 ⇒ failed (0ms)` report.
 
 describe('extended-actions / history accepts negative message_id', () => {
+  it('forwards an explicit newer-first direction for group history', async () => {
+    const getGroupMsgHistory = vi.fn(async (_groupId: number, _messageId: number, _count: number, reverseOrder: boolean) => [{
+      message_id: -1,
+      message_type: 'group',
+      direction: reverseOrder ? 'older' : 'newer',
+    }]);
+    const ctx = fakeCtx(fakeBridge(), { getGroupMsgHistory } as any);
+
+    const res = await makeHandler(ctx).handle('get_group_msg_history', {
+      group_id: 100,
+      message_id: -497311472,
+      count: 25,
+      reverse_order: false,
+    });
+
+    expect(res).toMatchObject({
+      status: 'ok',
+      retcode: 0,
+      data: { messages: [{ direction: 'newer' }] },
+    });
+  });
+
   it('get_group_msg_history forwards a negative anchor to the handler', async () => {
-    const getGroupMsgHistory = vi.fn(async () => [{ message_id: -1, message_type: 'group' }]);
+    const getGroupMsgHistory = vi.fn(async (_groupId: number, messageId: number) => [{
+      message_id: messageId,
+      message_type: 'group',
+    }]);
     const ctx = fakeCtx(fakeBridge(), { getGroupMsgHistory } as any);
     const res = await makeHandler(ctx).handle('get_group_msg_history', {
       group_id: 100, message_id: -497311472, count: 100,
     });
-    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
-    expect(getGroupMsgHistory).toHaveBeenCalledWith(100, -497311472, 100);
+    expect(res).toMatchObject({
+      status: 'ok',
+      retcode: 0,
+      data: { messages: [{ message_id: -497311472 }] },
+    });
   });
 
   it('get_friend_msg_history forwards a negative anchor to the handler', async () => {
-    const getFriendMsgHistory = vi.fn(async () => [{ message_id: -1, message_type: 'private' }]);
+    const getFriendMsgHistory = vi.fn(async (_userId: number, messageId: number) => [{
+      message_id: messageId,
+      message_type: 'private',
+    }]);
     const ctx = fakeCtx(fakeBridge(), { getFriendMsgHistory } as any);
     const res = await makeHandler(ctx).handle('get_friend_msg_history', {
       user_id: 12345, message_id: -670862300, count: 100,
     });
-    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
-    expect(getFriendMsgHistory).toHaveBeenCalledWith(12345, -670862300, 100);
+    expect(res).toMatchObject({
+      status: 'ok',
+      retcode: 0,
+      data: { messages: [{ message_id: -670862300 }] },
+    });
+  });
+
+  it('forwards an explicit newer-first direction for friend history', async () => {
+    const getFriendMsgHistory = vi.fn(async (_userId: number, _messageId: number, _count: number, reverseOrder: boolean) => [{
+      message_id: -1,
+      message_type: 'private',
+      direction: reverseOrder ? 'older' : 'newer',
+    }]);
+    const ctx = fakeCtx(fakeBridge(), { getFriendMsgHistory } as any);
+
+    const res = await makeHandler(ctx).handle('get_friend_msg_history', {
+      user_id: 12345,
+      message_id: -670862300,
+      count: 25,
+      reverse_order: false,
+    });
+
+    expect(res).toMatchObject({
+      status: 'ok',
+      retcode: 0,
+      data: { messages: [{ direction: 'newer' }] },
+    });
   });
 
   it('still defaults an absent message_id to 0 (fetch-latest semantics)', async () => {
-    const getGroupMsgHistory = vi.fn(async () => []);
+    const getGroupMsgHistory = vi.fn(async (_groupId: number, messageId: number, _count: number, reverseOrder: boolean) => [{
+      message_id: messageId,
+      direction: reverseOrder ? 'older' : 'newer',
+    }]);
     const ctx = fakeCtx(fakeBridge(), { getGroupMsgHistory } as any);
     const res = await makeHandler(ctx).handle('get_group_msg_history', { group_id: 100 });
-    expect(res).toMatchObject({ status: 'ok', retcode: 0 });
-    expect(getGroupMsgHistory).toHaveBeenCalledWith(100, 0, 20);
+    expect(res).toMatchObject({
+      status: 'ok',
+      retcode: 0,
+      data: { messages: [{ message_id: 0, direction: 'older' }] },
+    });
   });
 });
 

@@ -110,13 +110,13 @@ export function NotificationOptIn({ selectedIds, onChange }: NotificationOptInPr
           <Loader2 className="size-3.5 animate-spin" /> 加载渠道…
         </div>
       ) : total === 0 ? (
-        <p className="text-[11px] text-muted-foreground">还没有全局渠道——先到「设置 → 通知」添加。</p>
+        <p className="text-xs text-muted-foreground">还没有全局渠道——先到「设置 → 通知」添加。</p>
       ) : (
         <>
           {/* collapsed: selected channels as removable chips */}
           {!expanded &&
             (selectedCount === 0 ? (
-              <p className="text-[11px] text-muted-foreground">未选择任何渠道。展开以选择。</p>
+              <p className="text-xs text-muted-foreground">未选择任何渠道。展开以选择。</p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {selectedChips.slice(0, CHIP_CAP).map((ch) => (
@@ -136,7 +136,7 @@ export function NotificationOptIn({ selectedIds, onChange }: NotificationOptInPr
                   <button
                     type="button"
                     onClick={() => setExpanded(true)}
-                    className="rounded-full px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                    className="rounded-full px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                   >
                     +{selectedCount - CHIP_CAP} 更多
                   </button>
@@ -155,7 +155,7 @@ export function NotificationOptIn({ selectedIds, onChange }: NotificationOptInPr
                 className="overflow-hidden"
               >
                 <div className="flex flex-col gap-3 pt-1">
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  <p className="text-xs leading-relaxed text-muted-foreground">
                     该账号上线 / 下线时向选中的渠道推送通知。渠道在「设置 → 通知」中全局定义。
                   </p>
 
@@ -172,21 +172,21 @@ export function NotificationOptIn({ selectedIds, onChange }: NotificationOptInPr
                     <button
                       type="button"
                       onClick={selectAll}
-                      className="rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     >
                       全选
                     </button>
                     <button
                       type="button"
                       onClick={clearAll}
-                      className="rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     >
                       清空
                     </button>
                   </div>
 
                   {filtered.length === 0 ? (
-                    <p className="py-4 text-center text-[11px] text-muted-foreground">无匹配渠道</p>
+                    <p className="py-4 text-center text-xs text-muted-foreground">无匹配渠道</p>
                   ) : (
                     <ScrollArea className="max-h-64 rounded-lg border bg-background/40">
                       <div className="divide-y divide-border/60">
@@ -199,10 +199,10 @@ export function NotificationOptIn({ selectedIds, onChange }: NotificationOptInPr
                               <div className="flex items-center gap-1.5">
                                 <span className="truncate text-sm">{ch.name || ch.id}</span>
                                 {!ch.enabled && (
-                                  <span className="shrink-0 text-[10px] text-muted-foreground">（已全局禁用）</span>
+                                  <span className="shrink-0 text-micro text-muted-foreground">（已全局禁用）</span>
                                 )}
                               </div>
-                              <p className="truncate text-[11px] text-muted-foreground">{ch.url}</p>
+                              <p className="truncate text-meta text-muted-foreground">{ch.url}</p>
                             </div>
                             <ToggleSwitch
                               // Globally-disabled channel: lock the switch and force it off

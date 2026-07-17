@@ -50,7 +50,9 @@ export function AccountSidebar({
           aria-label={collapsed ? '展开账号列表' : '收起账号列表'}
           className="text-muted-foreground"
         >
-          {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+          {collapsed
+            ? <ChevronRight className="optical-forward size-4" />
+            : <ChevronLeft className="optical-back size-4" />}
         </Button>
       </div>
 
@@ -88,7 +90,7 @@ export function AccountSidebar({
                         >
                           {q.nickname || q.uin}
                         </div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground tabular-nums">
+                        <div className="truncate font-mono text-micro text-muted-foreground tabular-nums">
                           {q.uin}
                         </div>
                       </div>
@@ -101,7 +103,7 @@ export function AccountSidebar({
                     <TooltipContent side="right" sideOffset={8}>
                       <div className="flex flex-col leading-tight">
                         <span className="font-medium">{q.nickname || q.uin}</span>
-                        <span className="font-mono text-[10px] text-muted-foreground tabular-nums">{q.uin}</span>
+                        <span className="font-mono text-micro text-muted-foreground tabular-nums">{q.uin}</span>
                       </div>
                     </TooltipContent>
                   </Tooltip>

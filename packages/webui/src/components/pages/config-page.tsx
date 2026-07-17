@@ -288,7 +288,7 @@ function HeaderBar({ selectedUin, dirty, saveStatus, saveStatusTone, onSave, act
       </div>
       <div className="flex flex-wrap items-center gap-3">
         {(saveStatus || dirty) && (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium">
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium">
             {saveStatusTone === 'saving' ? (
               <><Loader2 className="size-3.5 animate-spin text-muted-foreground" /><span className="text-muted-foreground">保存中</span></>
             ) : saveStatusTone === 'success' ? (
@@ -379,7 +379,7 @@ function TabStrip({ activeTab, onChange, counts }: TabStripProps) {
             {count != null && (
               <Badge
                 variant={active ? 'default' : 'secondary'}
-                className="h-4 px-1.5 font-mono text-[10px] tabular-nums"
+                className="h-4 px-1.5 font-mono text-micro tabular-nums"
               >
                 {count}
               </Badge>

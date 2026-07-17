@@ -110,7 +110,7 @@ export function GlobalConfigPanel() {
     <div className="flex flex-col gap-4">
       {/* rkey fallback servers */}
       <div className="flex flex-col gap-4 rounded-xl border bg-card/40 p-4">
-        <div className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
+        <div className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
           <KeyRound className="mt-0.5 size-3.5 shrink-0" />
           <p>
             图片 / 文件下载链接需要服务器签发的 <code className="font-mono">rkey</code>。SnowLuma 默认走内核获取；
@@ -160,7 +160,7 @@ export function GlobalConfigPanel() {
                   </div>
                 );
               })}
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 端点需返回 <code className="font-mono">{'{ group_rkey, private_rkey, expired_time }'}</code>
                 （兼容 NapCat rkey 服务格式）。非 http(s) 链接会被忽略。
               </p>
@@ -171,7 +171,7 @@ export function GlobalConfigPanel() {
 
       {/* music sign URL */}
       <div className="flex flex-col gap-4 rounded-xl border bg-card/40 p-4">
-        <div className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
+        <div className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
           <Music className="mt-0.5 size-3.5 shrink-0" />
           <p>音乐分享卡片的签名服务，对所有账号统一生效。留空则使用内置默认服务。</p>
         </div>
@@ -191,7 +191,7 @@ export function GlobalConfigPanel() {
             )}
             onChange={(e) => commit({ ...config, musicSignUrl: e.target.value })}
           />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             内置默认：<code className="font-mono">{MUSIC_SIGN_DEFAULT}</code>
           </p>
         </div>

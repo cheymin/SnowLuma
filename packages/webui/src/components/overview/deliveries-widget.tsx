@@ -63,7 +63,7 @@ export function DeliveriesWidget() {
             <p className="text-sm">暂无投递记录</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-1 text-[11px]">
+          <div className="flex flex-col gap-1 text-meta">
             {records.map((r, i) => (
               <div key={i} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-accent/30">
                 {r.ok ? (
@@ -83,7 +83,7 @@ export function DeliveriesWidget() {
                 <span className="shrink-0 font-mono">{r.uin}</span>
                 <span className="ml-auto min-w-0 truncate text-muted-foreground" title={r.error ?? r.channelId}>
                   {r.channelId}
-                  {!r.ok && r.error ? ` · ${r.error}` : ''}
+                  {!r.ok && r.error && <span className="text-xs text-destructive"> · {r.error}</span>}
                 </span>
               </div>
             ))}

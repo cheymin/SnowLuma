@@ -441,7 +441,11 @@ export class OneBotInstance {
     if (messageId === 0) return;
 
     const isGroup = event.message_type === 'group';
-    const sessionId = isGroup ? toInt(event.group_id) : toInt(event.user_id);
+    const sessionId = isGroup
+      ? toInt(event.group_id)
+      : event.post_type === 'message_sent'
+        ? (toInt(event.target_id) || toInt(event.user_id))
+        : toInt(event.user_id);
     const sequence = toInt(event.message_seq);
     const eventName = isGroup ? GROUP_MESSAGE_EVENT : PRIVATE_MESSAGE_EVENT;
 

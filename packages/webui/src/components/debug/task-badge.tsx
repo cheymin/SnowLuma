@@ -35,7 +35,7 @@ function Row({ task, onDismiss }: { task: DebugTask; onDismiss: () => void }) {
         </div>
       )}
       {task.detail && task.status !== 'running' && (
-        <span className="truncate text-[10px] text-muted-foreground" title={task.detail}>{task.detail}</span>
+        <span className="truncate text-xs text-muted-foreground" title={task.detail}>{task.detail}</span>
       )}
     </div>
   );
@@ -64,7 +64,7 @@ export function TaskBadge() {
             <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
               <span className="text-xs font-semibold">调试任务</span>
               {tasks.some((t) => t.status !== 'running') && (
-                <button type="button" onClick={clearFinished} className="text-[11px] text-muted-foreground hover:text-foreground">清除已完成</button>
+                <button type="button" onClick={clearFinished} className="text-xs text-muted-foreground hover:text-foreground">清除已完成</button>
               )}
             </div>
             <div className="max-h-72 overflow-auto p-1.5">

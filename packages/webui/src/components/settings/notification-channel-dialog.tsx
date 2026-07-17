@@ -108,7 +108,7 @@ export function NotificationChannelDialog(props: NotificationChannelDialogProps)
               onChange={(e) => patch({ bodyTemplate: e.target.value })}
               className="font-mono text-xs leading-relaxed"
             />
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-xs leading-relaxed text-muted-foreground">
               变量：<code className="font-mono">{'{uin}'}</code> <code className="font-mono">{'{nickname}'}</code>{' '}
               <code className="font-mono">{'{event}'}</code>（offline/online） <code className="font-mono">{'{time}'}</code>
             </p>
@@ -117,7 +117,7 @@ export function NotificationChannelDialog(props: NotificationChannelDialogProps)
           <div className="flex items-center justify-between rounded-lg border bg-card/40 p-3">
             <div className="min-w-0">
               <Label className="text-sm">启用</Label>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 关闭后保留配置但不推送；账号侧对应开关会被锁定并关闭。
               </p>
             </div>
@@ -168,9 +168,9 @@ function Field({ label, value, onChange, placeholder, type = 'text', error, hint
         className={cn(error && 'border-destructive focus-visible:ring-destructive/40', disabled && 'opacity-60')}
       />
       {error ? (
-        <p className="text-[11px] text-destructive">{error}</p>
+        <p className="text-xs text-destructive">{error}</p>
       ) : hint ? (
-        <p className="text-[11px] text-muted-foreground">{hint}</p>
+        <p className="text-xs text-muted-foreground">{hint}</p>
       ) : null}
     </div>
   );

@@ -138,7 +138,7 @@ export function OverviewPage() {
       </div>
 
       {editing && (
-        <p className="rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+        <p className="rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
           {isWide
             ? '拖动卡片移动位置、拖右下角缩放，右上齿轮改设置；把卡片拖回右侧「部件库」即可移除，从部件库拖到画布即可添加。左侧导航也可在编辑态拖动排序。'
             : '拖动手柄调整卡片顺序，眼睛图标显隐，齿轮改设置。手机为单列布局，与桌面网格各自独立。'}
@@ -159,11 +159,11 @@ export function OverviewPage() {
               <p className="text-sm font-medium">
                 {loadableProcs > 0 ? `检测到 ${loadableProcs} 个可加载 QQ 进程` : '尚未接入任何账号'}
               </p>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 前往「进程注入」加载 QQ，登录后会自动接入 OneBot 流程。
               </p>
             </div>
-            <ArrowRight className="size-4 shrink-0 text-primary" />
+            <ArrowRight className="optical-forward size-4 shrink-0 text-primary" />
           </Link>
         </motion.div>
       )}
@@ -329,11 +329,11 @@ function WidgetGallery({ hidden }: { hidden: UiLayoutItem[] }) {
         <LayoutGrid className="size-3.5 text-primary" />
         <span className="text-xs font-semibold">部件库</span>
       </div>
-      <p className="mb-3 px-1 text-[11px] leading-snug text-muted-foreground">
+      <p className="mb-3 px-1 text-xs leading-snug text-muted-foreground">
         拖到左侧画布添加；把卡片拖回此处即可移除。
       </p>
       {hidden.length === 0 ? (
-        <div className="rounded-lg border border-dashed px-2 py-8 text-center text-[11px] text-muted-foreground">
+        <div className="rounded-lg border border-dashed px-2 py-8 text-center text-xs text-muted-foreground">
           全部部件已添加
         </div>
       ) : (
@@ -480,9 +480,9 @@ function StatTile({
 }) {
   const copy = (
     <>
-      <p className="truncate text-[11px] font-medium uppercase leading-tight tracking-wider text-muted-foreground">{label}</p>
+      <p className="truncate text-xs font-medium uppercase leading-tight tracking-wider text-muted-foreground">{label}</p>
       <div className="mt-1 truncate text-lg font-semibold leading-tight tabular-nums">{value}</div>
-      {subtext && <p className="mt-1 truncate text-[11px] leading-tight text-muted-foreground">{subtext}</p>}
+      {subtext && <p className="mt-1 truncate text-xs leading-tight text-muted-foreground">{subtext}</p>}
     </>
   );
   const body = (
@@ -500,7 +500,7 @@ function StatTile({
       ) : (
         <div className="min-w-0 flex-1">{copy}</div>
       )}
-      {to && <ArrowRight className="size-4 shrink-0 text-muted-foreground/60" />}
+      {to && <ArrowRight className="optical-forward size-4 shrink-0 text-muted-foreground/60" />}
     </CardContent>
   );
   if (to) {
@@ -617,7 +617,7 @@ function HostBlock({ config }: { config: HostConfig }) {
                 <Cpu className="size-4 text-primary" />
                 <span className="text-sm font-semibold">CPU 使用率</span>
                 {systemInfo && (
-                  <span className="text-[11px] text-muted-foreground tabular-nums">{systemInfo.cpu.perCore.length} 核</span>
+                  <span className="text-meta text-muted-foreground tabular-nums">{systemInfo.cpu.perCore.length} 核</span>
                 )}
               </div>
               <span className="text-sm font-semibold tabular-nums text-primary">
@@ -625,7 +625,7 @@ function HostBlock({ config }: { config: HostConfig }) {
               </span>
             </div>
             <Progress value={systemInfo?.cpu.average ?? 0} />
-            <p className="mt-2 text-[11px] text-muted-foreground tabular-nums">
+            <p className="mt-2 text-meta text-muted-foreground tabular-nums">
               负载: {systemInfo ? systemInfo.cpu.loadAvg.map((v) => v.toFixed(2)).join(' / ') : '—'}
             </p>
             {systemInfo && systemInfo.cpu.perCore.length > 0 && (
@@ -643,7 +643,7 @@ function HostBlock({ config }: { config: HostConfig }) {
                     }}
                   >
                     <span
-                      className="text-[10px] leading-none tabular-nums"
+                      className="text-micro leading-none tabular-nums"
                       style={{ color: 'color-mix(in oklab, var(--foreground) 55%, transparent)' }}
                     >
                       {i}
@@ -687,7 +687,7 @@ function HostBlock({ config }: { config: HostConfig }) {
                       />
                     ))}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-x-3.5 gap-y-1 text-[11px] text-muted-foreground">
+                  <div className="mt-3 flex flex-wrap gap-x-3.5 gap-y-1 text-meta text-muted-foreground">
                     {segs.map((seg) => (
                       <span key={seg.key} className="inline-flex items-center gap-1.5">
                         <i className="size-2 rounded-[2px]" style={{ background: seg.color }} />
@@ -791,7 +791,7 @@ function SessionsBlock({ config }: { config: SessionsConfig }) {
                   </Avatar>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold">{q.nickname}</div>
-                    <div className="truncate font-mono text-[11px] text-muted-foreground tabular-nums">{q.uin}</div>
+                    <div className="truncate font-mono text-meta text-muted-foreground tabular-nums">{q.uin}</div>
                   </div>
                   <span className="size-2 shrink-0 animate-pulse rounded-full bg-success shadow-[0_0_8px_color-mix(in_oklab,var(--success)_60%,transparent)]" />
                 </motion.div>
@@ -873,25 +873,25 @@ function ConnectionsBlock({ config }: { config: ConnectionsConfig }) {
               <div key={acc.uin} className="flex flex-col gap-2">
                 <div className="flex items-baseline gap-2">
                   <span className="text-sm font-semibold">{acc.nickname || acc.uin}</span>
-                  <span className="font-mono text-[11px] text-muted-foreground tabular-nums">{acc.uin}</span>
+                  <span className="font-mono text-meta text-muted-foreground tabular-nums">{acc.uin}</span>
                 </div>
                 {acc.adapters.length === 0 ? (
-                  <p className="rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground">未配置任何协议端点</p>
+                  <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">未配置任何协议端点</p>
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {acc.adapters.map((adp) => (
                       <div key={adp.name} className="flex items-center gap-2 rounded-xl border bg-card/40 px-3 py-2">
-                        <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', CONN_STATUS_STYLE[adp.status])}>
+                        <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-micro font-medium', CONN_STATUS_STYLE[adp.status])}>
                           {CONN_STATUS_LABEL[adp.status]}
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate text-sm font-medium">{adp.name}</span>
-                            <span className="shrink-0 text-[10px] text-muted-foreground">{ADAPTER_KIND_LABEL[adp.kind]}</span>
+                            <span className="shrink-0 text-micro text-muted-foreground">{ADAPTER_KIND_LABEL[adp.kind]}</span>
                           </div>
-                          <div className="truncate text-[11px] text-muted-foreground">{adp.detail}</div>
+                          <div className="truncate text-meta text-muted-foreground">{adp.detail}</div>
                           {adp.lastError && adp.lastErrorAt && (
-                            <div className="truncate text-[10px] text-destructive/80">
+                            <div className="truncate text-xs text-destructive/80">
                               {new Date(adp.lastErrorAt).toLocaleString()} · {adp.lastError}
                             </div>
                           )}
@@ -946,7 +946,7 @@ function LinkWidget({ config }: { config: LinkConfig }) {
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold">{config.label || config.url}</p>
-            <p className="truncate text-[11px] text-muted-foreground">{config.url}</p>
+            <p className="truncate text-meta text-muted-foreground">{config.url}</p>
           </div>
           <ExternalLink className="size-4 shrink-0 text-muted-foreground/60" />
         </CardContent>
@@ -977,7 +977,7 @@ function AccountWidget({ config }: { config: AccountConfig }) {
         </Avatar>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{acct?.nickname || '未接入账号'}</p>
-          <p className="truncate font-mono text-[11px] text-muted-foreground tabular-nums">{config.uin}</p>
+          <p className="truncate font-mono text-meta text-muted-foreground tabular-nums">{config.uin}</p>
         </div>
         <span
           title={acct ? '在线' : '未接入'}
@@ -1037,8 +1037,8 @@ function RecentAlertsCard({ config }: { config: AlertsConfig }) {
           </CardTitle>
           <CardDescription>最近 {count} 条 · {config.levels.map((l) => l.toUpperCase()).join(' / ')}</CardDescription>
         </div>
-        <Link to="/logs" className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-          查看日志 <ArrowRight className="size-3" />
+        <Link to="/logs" className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          查看日志 <ArrowRight className="optical-forward size-3" />
         </Link>
       </CardHeader>
       <CardContent className="min-h-0 flex-1 overflow-auto">
@@ -1048,7 +1048,7 @@ function RecentAlertsCard({ config }: { config: AlertsConfig }) {
             <p className="text-sm">暂无告警</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-1 font-mono text-[11px]">
+          <div className="flex flex-col gap-1 font-mono text-meta">
             {alerts.map((a) => (
               <div key={a.id} className="flex gap-2 rounded px-2 py-1 hover:bg-accent/30">
                 <span className="shrink-0 text-muted-foreground tabular-nums">{formatClock(a.time)}</span>

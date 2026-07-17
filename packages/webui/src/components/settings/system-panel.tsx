@@ -163,7 +163,7 @@ export function SystemPanel() {
 
   const EnvBadge = ({ field }: { field: string }) =>
     overridden(field)
-      ? <Badge variant="secondary" className="ml-2 gap-1 text-[10px]"><Lock className="h-3 w-3" /> 被环境变量覆盖</Badge>
+      ? <Badge variant="secondary" className="ml-2 gap-1 text-micro"><Lock className="h-3 w-3" /> 被环境变量覆盖</Badge>
       : null;
 
   return (
@@ -200,7 +200,7 @@ export function SystemPanel() {
           <div className="flex flex-col gap-1.5">
             <Label className="flex items-center">信任代理 (trust-proxy)<EnvBadge field="trustProxy" /></Label>
             <Input value={trustProxy} onChange={(e) => setTrustProxy(e.target.value)} placeholder="留空=只信任 socket 对端；1=信任反代头" />
-            <p className="text-[11px] text-muted-foreground">仅在 WebUI 位于受信任反向代理之后时才设为 1 / loopback / IP 列表。</p>
+            <p className="text-xs text-muted-foreground">仅在 WebUI 位于受信任反向代理之后时才设为 1 / loopback / IP 列表。</p>
           </div>
           <div>
             <Button onClick={saveSettings} disabled={saving} className="gap-1.5">
@@ -262,7 +262,7 @@ export function SystemPanel() {
                   </Button>
                 )}
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 私钥仅写入服务器 config/key.pem（0600 权限），不会回显。证书无效时保存会被拒绝；若启用了 TLS 但证书加载失败，启动时会自动回退到 HTTP。
               </p>
             </>
@@ -282,7 +282,7 @@ export function SystemPanel() {
               <ToggleSwitch value={exportCreds} onChange={setExportCreds} ariaLabel="导出包含敏感配置" />
             </div>
             {exportCreds && (
-              <p className="text-[11px] text-red-600 dark:text-red-400">⚠ 将额外包含 WebUI 登录状态、TLS 私钥，以及带访问令牌的 OneBot 配置，请妥善保管。</p>
+              <p className="text-sm leading-relaxed text-red-600 dark:text-red-400">⚠ 将额外包含 WebUI 登录状态、TLS 私钥，以及带访问令牌的 OneBot 配置，请妥善保管。</p>
             )}
             <div>
               <Button onClick={exportBackup} disabled={saving} className="gap-1.5">
@@ -299,7 +299,7 @@ export function SystemPanel() {
               <ToggleSwitch value={restoreCreds} onChange={setRestoreCreds} ariaLabel="恢复包含敏感配置" />
             </div>
             {restoreCreds && (
-              <p className="text-[11px] text-red-600 dark:text-red-400">⚠ 将覆盖当前 WebUI 登录状态、TLS 私钥与 OneBot 配置（含访问令牌）；若备份口令未知可能登不进。</p>
+              <p className="text-sm leading-relaxed text-red-600 dark:text-red-400">⚠ 将覆盖当前 WebUI 登录状态、TLS 私钥与 OneBot 配置（含访问令牌）；若备份口令未知可能登不进。</p>
             )}
             <input
               ref={fileRef}
@@ -313,7 +313,7 @@ export function SystemPanel() {
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} 选择备份文件并恢复
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">恢复前会校验本次要恢复的配置；写入过程中出错会自动回滚，成功后临时快照会删除。恢复后需重启生效。</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">恢复前会校验本次要恢复的配置；写入过程中出错会自动回滚，成功后临时快照会删除。恢复后需重启生效。</p>
           </div>
         </CardContent>
       </Card>

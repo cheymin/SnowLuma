@@ -74,9 +74,9 @@ export function Sidebar({ collapsed = false, onItemClick }: SidebarProps) {
         <div className={cn('min-w-0 flex-1 overflow-hidden pr-2 transition-opacity duration-200', collapsed ? 'opacity-0' : 'opacity-100')}>
           <div className="flex items-baseline gap-1.5 whitespace-nowrap">
             <span className="text-sm font-bold tracking-tight">{APP_NAME}</span>
-            <span className="text-[10px] font-medium text-muted-foreground tabular-nums">v{APP_VERSION}</span>
+            <span className="text-micro font-medium text-muted-foreground tabular-nums">v{APP_VERSION}</span>
           </div>
-          <span className="block whitespace-nowrap text-[10px] text-muted-foreground">OneBot v11 控制台</span>
+          <span className="block whitespace-nowrap text-xs text-muted-foreground">OneBot v11 控制台</span>
         </div>
       </div>
 
@@ -85,11 +85,11 @@ export function Sidebar({ collapsed = false, onItemClick }: SidebarProps) {
         {editing ? (
           <div className="flex flex-col gap-2 p-2">
             <div className="flex items-center justify-between px-1">
-              <span className="text-[11px] font-medium text-muted-foreground">编辑导航</span>
+              <span className="text-xs font-medium text-muted-foreground">编辑导航</span>
               <button
                 type="button"
                 onClick={() => setEditing(false)}
-                className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/20 cursor-pointer"
+                className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-0.5 text-xs text-primary transition-colors hover:bg-primary/20 cursor-pointer"
               >
                 <Check className="size-3" /> 完成
               </button>
@@ -178,7 +178,7 @@ export function Sidebar({ collapsed = false, onItemClick }: SidebarProps) {
                   </span>
                   <span className={cn('relative z-10 flex min-w-0 flex-1 flex-col items-start overflow-hidden pr-3 transition-opacity duration-200', collapsed ? 'opacity-0' : 'opacity-100')}>
                     <span className="w-full truncate whitespace-nowrap leading-tight">{label}</span>
-                    <span className="w-full truncate whitespace-nowrap text-[10px] font-normal text-muted-foreground">{description}</span>
+                    <span className="w-full truncate whitespace-nowrap text-xs font-normal text-muted-foreground">{description}</span>
                   </span>
                 </Link>
               );
@@ -208,7 +208,7 @@ export function Sidebar({ collapsed = false, onItemClick }: SidebarProps) {
             <span className="relative z-10 grid w-12 shrink-0 place-items-center"><Sparkles className="size-4 text-primary" /></span>
             <span className={cn('relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden pr-3 transition-opacity duration-200', collapsed ? 'opacity-0' : 'opacity-100')}>
               <span className="truncate whitespace-nowrap text-xs font-medium leading-tight text-foreground">有新版本可用</span>
-              <span className="truncate whitespace-nowrap text-[10px] text-muted-foreground">v{updateInfo.latest} · 点击查看</span>
+              <span className="truncate whitespace-nowrap text-xs text-muted-foreground">v{updateInfo.latest} · 点击查看</span>
             </span>
           </Link>
         </div>
@@ -218,7 +218,7 @@ export function Sidebar({ collapsed = false, onItemClick }: SidebarProps) {
           expanded; unpinning returns it to the hover-to-peek rail. Mirrors the
           「钉住侧栏展开」 appearance setting. */}
       <div className={cn('flex shrink-0 items-center gap-2 py-3 pl-4 pr-2.5 transition-opacity duration-200', collapsed ? 'opacity-0' : 'opacity-100')}>
-        <span className="min-w-0 flex-1 truncate whitespace-nowrap text-[10px] text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate whitespace-nowrap text-micro text-muted-foreground">
           © {new Date().getFullYear()} SnowLuma
         </span>
         {isDesktop && (

@@ -181,7 +181,7 @@ export function NoteConfigForm({ config, onChange }: FormProps) {
         placeholder="写点备注、待办或快捷信息…"
         className="h-40 resize-y rounded-lg bg-card/40 p-3 text-sm leading-relaxed"
       />
-      <span className="text-right text-[11px] text-muted-foreground">{c.text.length} / {NOTE_MAX}</span>
+      <span className="text-right text-meta text-muted-foreground">{c.text.length} / {NOTE_MAX}</span>
     </div>
   );
 }
@@ -204,7 +204,7 @@ export function LinkConfigForm({ config, onChange }: FormProps) {
           onChange={(e) => onChange({ url: e.target.value })}
           className={cn('h-8', urlInvalid && 'border-destructive')}
         />
-        {urlInvalid && <span className="text-[11px] text-destructive">仅支持 http:// 或 https:// 链接</span>}
+        {urlInvalid && <span className="text-xs text-destructive">仅支持 http:// 或 https:// 链接</span>}
       </label>
       <div className="flex flex-col gap-1.5">
         <span className="text-sm text-muted-foreground">图标</span>
@@ -259,7 +259,7 @@ export function AccountConfigForm({ config, onChange }: FormProps) {
       <datalist id={listId}>
         {qqList.map((q) => <option key={q.uin} value={q.uin}>{q.nickname || q.uin}</option>)}
       </datalist>
-      <span className="text-[11px] text-muted-foreground">可从已接入账号中选择，或手动输入。</span>
+      <span className="text-xs text-muted-foreground">可从已接入账号中选择，或手动输入。</span>
     </div>
   );
 }

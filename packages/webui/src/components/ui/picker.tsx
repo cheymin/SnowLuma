@@ -138,7 +138,7 @@ export function Picker({
           !selected && !value && 'text-muted-foreground',
         )}
       >
-        {selected?.avatar && <img src={selected.avatar} alt="" className="h-5 w-5 shrink-0 rounded-full" />}
+        {selected?.avatar && <img src={selected.avatar} alt="" className="media-outline h-5 w-5 shrink-0 rounded-full" />}
         <span className="min-w-0 flex-1 truncate text-left">
           {selected ? selected.label : value || placeholder}
           {selected?.sub && <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{selected.sub}</span>}
@@ -217,10 +217,10 @@ export function Picker({
                       {opt ? (
                         <>
                           {opt.avatar
-                            ? <img src={opt.avatar} alt="" className="h-7 w-7 shrink-0 rounded-full" />
-                            : <span className="h-7 w-7 shrink-0 rounded-full bg-muted" />}
+                            ? <img src={opt.avatar} alt="" className="media-outline h-7 w-7 shrink-0 rounded-full" />
+                            : <span className="media-outline h-7 w-7 shrink-0 rounded-full bg-muted" />}
                           <span className="min-w-0 flex-1 truncate text-sm">{opt.label}</span>
-                          {opt.sub && <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{opt.sub}</span>}
+                          {opt.sub && <span className="shrink-0 font-mono text-meta text-muted-foreground tabular-nums">{opt.sub}</span>}
                         </>
                       ) : (
                         <span className="text-sm">使用 <span className="font-mono text-primary">{rawRow}</span></span>

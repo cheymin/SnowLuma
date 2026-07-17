@@ -59,6 +59,14 @@
   --sidebar-accent-foreground: oklch(35% 0.08 230);
   --sidebar-border: oklch(92% 0.01 240);
   --sidebar-ring: oklch(68.5% 0.155 230);
+  --media-outline: oklch(0% 0 0 / 0.1);
+
+  /* Cards need depth without turning every surface into a hard outlined box.
+     The short shadow separates the edge; the long, faint shadow establishes
+     elevation without looking like a floating modal. */
+  --shadow-card:
+    0 1px 2px oklch(20% 0.03 250 / 0.05),
+    0 12px 32px -22px oklch(20% 0.03 250 / 0.28);
 }
 
 .dark {
@@ -108,6 +116,12 @@
   --sidebar-accent-foreground: oklch(85% 0.1 230);
   --sidebar-border: oklch(26% 0.02 250);
   --sidebar-ring: oklch(75% 0.14 230);
+  --media-outline: oklch(100% 0 0 / 0.12);
+
+  --shadow-card:
+    0 1px 2px oklch(0% 0 0 / 0.36),
+    0 16px 38px -24px oklch(0% 0 0 / 0.72),
+    inset 0 1px oklch(100% 0 0 / 0.025);
 }
 
 @theme inline {
@@ -150,8 +164,15 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  /* Dense metadata is the only content allowed below Tailwind's 12px text-xs
+     floor. Named tokens make that exception explicit at each call site. */
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1rem;
+  --text-micro: 0.625rem;
+  --text-micro--line-height: 0.875rem;
 }
 
 @layer base {
@@ -166,6 +187,7 @@
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    font-synthesis: none;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     line-height: 1.5;
@@ -182,6 +204,31 @@
   }
   html[data-density="compact"] {
     --tw-leading: 1.4;
+  }
+}
+
+@layer components {
+  /* Shared media keyline: an inset outline remains visible on both pale and
+     dark images without changing layout or shrinking the image content. */
+  .media-outline {
+    outline: 1px solid var(--media-outline);
+    outline-offset: -1px;
+  }
+
+  .ui-card {
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Triangles and forward-pointing glyphs carry more visual mass on the left.
+     A one-pixel optical correction centers them without changing hit areas. */
+  .optical-forward {
+    position: relative;
+    left: 1px;
+  }
+
+  .optical-back {
+    position: relative;
+    right: 1px;
   }
 }
 

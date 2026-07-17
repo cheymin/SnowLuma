@@ -75,7 +75,7 @@ export function NodeSummaryCard<T extends AdapterCommon>({
           )}
           {liveStatus && (
             <span
-              className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', LIVE_STYLE[liveStatus.status])}
+              className={cn('rounded px-1.5 py-0.5 text-micro font-medium', LIVE_STYLE[liveStatus.status])}
               title={liveStatus.lastError
                 ? `${liveStatus.detail}\n${liveStatus.lastErrorAt ? new Date(liveStatus.lastErrorAt).toLocaleString() : '时间未知'} · ${liveStatus.lastError}`
                 : liveStatus.detail}
@@ -85,7 +85,7 @@ export function NodeSummaryCard<T extends AdapterCommon>({
           )}
         </div>
         <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground tabular-nums">{summary}</div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-meta text-muted-foreground">
           <span>{item.messageFormat === 'string' ? 'CQ 码' : '数组'}</span>
           <span aria-hidden className="text-border">·</span>
           <span>{item.reportSelfMessage ? '上报自身' : '不上报自身'}</span>

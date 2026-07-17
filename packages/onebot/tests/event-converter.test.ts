@@ -91,8 +91,12 @@ describe('convertEvent — message kinds', () => {
   });
 
   it('friend_message self → post_type "message_sent"', async () => {
-    const out = await convertEvent(bareCtx(), makeFriendMessage(SELF_ID));
+    const event = { ...makeFriendMessage(SELF_ID), peerUin: PEER_UIN } as FriendMessage;
+    const resolver = (_isGroup: boolean, sessionId: number, seq: number) => sessionId + seq;
+    const out = await convertEvent(bareCtx({ messageIdResolver: resolver }), event);
     expect(out!.post_type).toBe('message_sent');
+    expect(out!.target_id).toBe(PEER_UIN);
+    expect(out!.message_id).toBe(PEER_UIN + 1);
   });
 
   it('group_message peer → post_type "message", sub_type "normal", group_id set', async () => {

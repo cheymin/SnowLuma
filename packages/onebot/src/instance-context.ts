@@ -82,8 +82,10 @@ export function buildApiContext(ref: OneBotInstanceContext): ApiActionContext {
     getStrangerInfo: (userId) => getStrangerInfo(bridge, userId),
     getGroupFiles: (groupId, folderId) => getGroupFiles(bridge, groupId, folderId),
     handleGroupRequest: (flag, _subType, approve, reason) => handleGroupAddRequest(bridge, flag, approve, reason),
-    getGroupMsgHistory: (groupId, messageId, count) => getGroupHistory(ref, groupId, messageId, count),
-    getFriendMsgHistory: (userId, messageId, count) => getFriendHistory(ref, userId, messageId, count),
+    getGroupMsgHistory: (groupId, messageId, count, reverseOrder) =>
+      getGroupHistory(ref, groupId, messageId, count, reverseOrder),
+    getFriendMsgHistory: (userId, messageId, count, reverseOrder) =>
+      getFriendHistory(ref, userId, messageId, count, reverseOrder),
     handleGetGroupSystemMsg: (query) => getGroupSystemMessages(bridge, query),
     getDownloadRKeys: () => getDownloadRKeys(bridge),
     sendGroupForwardMsg: (groupId, messages, meta) => sendGroupForwardMessage(ref, groupId, messages, meta),

@@ -1,7 +1,6 @@
-// Tabs — a horizontal tab bar with an Apple-HIG sliding indicator. Shares the
-// spring-pill idiom of the debug page's segmented control but scaled up for
-// top-level section switching, with full roving-tabindex keyboard support
-// (←/→/Home/End). Generic over a string union of tab ids.
+// Tabs — a horizontal section-navigation bar with a sliding underline and full
+// roving-tabindex keyboard support (←/→/Home/End). Generic over a string union
+// of tab ids.
 import {
   useCallback,
   useEffect,
@@ -104,14 +103,14 @@ export function ScrollableTabList({
   }, [activeValue, revealActive, updateEdges]);
 
   return (
-    <div className="relative min-w-0">
+    <div className="relative w-full min-w-0 max-w-full">
       <div
         ref={viewportRef}
         onScroll={updateEdges}
         data-scroll-start={edges.start ? '' : undefined}
         data-scroll-end={edges.end ? '' : undefined}
         className={cn(
-          'flex min-w-0 overflow-x-auto scroll-px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+          'flex min-w-0 max-w-full overflow-x-auto overscroll-x-contain scroll-px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
           className,
         )}
         {...props}
@@ -172,7 +171,7 @@ export function Tabs<T extends string>({ value, onChange, items, className, ...r
       activeValue={value}
       role="tablist"
       aria-label={rest['aria-label']}
-      className={cn('items-center gap-1', className)}
+      className={cn('w-full items-stretch gap-1 border-b border-border/70', className)}
     >
       {items.map((it, i) => {
         const active = it.value === value;
@@ -193,22 +192,24 @@ export function Tabs<T extends string>({ value, onChange, items, className, ...r
               else if (e.key === 'End') { e.preventDefault(); move(i, 'end'); }
             }}
             className={cn(
-              'relative z-10 inline-flex shrink-0 items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium outline-none transition-colors',
+              'relative z-10 inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-t-lg px-3 py-2 text-sm font-medium outline-none transition-colors',
               'focus-visible:ring-[3px] focus-visible:ring-ring/40',
-              active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              active
+                ? 'bg-primary/[0.055] text-primary'
+                : 'text-muted-foreground hover:bg-muted/55 hover:text-foreground',
             )}
           >
             {active && (
               <motion.span
                 layoutId={`tabs-${layoutId}`}
                 transition={{ type: 'spring', stiffness: 500, damping: 40 }}
-                className="absolute inset-0 -z-10 rounded-xl bg-card shadow-sm ring-1 ring-border/60"
+                className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-primary"
               />
             )}
             {it.icon}
             <span>{it.label}</span>
             {it.badge != null && (
-              <span className={cn('rounded-full px-1.5 text-[11px] tabular-nums',
+              <span className={cn('rounded-full px-1.5 text-meta tabular-nums',
                 active ? 'bg-primary/12 text-primary' : 'bg-muted text-muted-foreground')}>
                 {it.badge}
               </span>

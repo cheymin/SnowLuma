@@ -188,6 +188,38 @@ describe('MessageStore', () => {
     });
   });
 
+  describe('listSessionEvents', () => {
+    function storeGroupSequence(groupId: number): void {
+      for (let sequence = 1; sequence <= 5; sequence++) {
+        store.storeEvent(sequence, true, groupId, sequence, GROUP_MESSAGE_EVENT, {
+          post_type: 'message',
+          message_type: 'group',
+          group_id: groupId,
+          message_id: sequence,
+          message_seq: sequence,
+        });
+      }
+    }
+
+    it('returns the anchor and newer messages in chronological order', () => {
+      const groupId = 123456;
+      storeGroupSequence(groupId);
+
+      const messages = store.listSessionEvents(true, groupId, 3, 3, false);
+
+      expect(messages.map((message) => message.message_seq)).toEqual([3, 4, 5]);
+    });
+
+    it('keeps the anchor and older messages as the default', () => {
+      const groupId = 123456;
+      storeGroupSequence(groupId);
+
+      const messages = store.listSessionEvents(true, groupId, 3, 3);
+
+      expect(messages.map((message) => message.message_seq)).toEqual([1, 2, 3]);
+    });
+  });
+
   describe('listReadSessions', () => {
     it('uses current groups and only genuine incoming friend sessions', () => {
       const event = (postType: string, subType: string) => ({

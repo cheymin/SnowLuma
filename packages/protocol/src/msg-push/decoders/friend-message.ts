@@ -25,6 +25,8 @@ function parseGroupInviteCard(jsonText: string): { groupUin: number; sequence: n
 
 export const decodeFriendMessage: MsgPushDecoder = (ctx) => {
   const elements = decodeRichBody(ctx.body, false);
+  const sentBySelf = ctx.fromUin > 0 && ctx.fromUin === ctx.selfUin;
+  const peerUin = sentBySelf ? (ctx.responseHead?.toUin ?? 0) : ctx.fromUin;
   // Stash the approval msgseq from a private group-invite card so a later
   // `set_group_add_request` can approve a bot self-invite (issue #125).
   for (const el of elements) {
@@ -39,6 +41,7 @@ export const decodeFriendMessage: MsgPushDecoder = (ctx) => {
     selfUin: ctx.selfUin,
     senderUin: ctx.fromUin,
     senderUid: ctx.fromUid,
+    ...(peerUin > 0 ? { peerUin } : {}),
     msgSeq: ctx.head.sequence,
     msgId: ctx.head.msgId & 0x7FFFFFFF,
     elements,

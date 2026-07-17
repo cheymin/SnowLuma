@@ -152,6 +152,27 @@ describe('registerEventPipeline', () => {
     expect(dispatchCalls[0].message_type).toBe('private');
   });
 
+  it('keys a self-sent friend echo under the conversation peer', async () => {
+    const { ctx, bus, metaCalls, dispatchCalls } = makeContext();
+    registerEventPipeline(ctx);
+    const event = {
+      ...makeFriendMessage(),
+      senderUin: SELF_ID,
+      senderNick: 'self',
+      peerUin: PEER_UIN,
+    } as FriendMessage;
+
+    await bus.emit(event);
+
+    expect(metaCalls).toHaveLength(1);
+    expect(metaCalls[0].meta.targetId).toBe(PEER_UIN);
+    expect(dispatchCalls[0]).toMatchObject({
+      post_type: 'message_sent',
+      user_id: SELF_ID,
+      target_id: PEER_UIN,
+    });
+  });
+
   it('caches meta and dispatches for group_message', async () => {
     const { ctx, bus, metaCalls, dispatchCalls } = makeContext();
     registerEventPipeline(ctx);

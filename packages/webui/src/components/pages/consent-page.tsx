@@ -111,7 +111,7 @@ export function ConsentPage({ documents, version, onAccept, onDecline }: Consent
             </div>
 
             {active && (active.declaredVersion || active.effectiveDate) && (
-              <p className="mt-2 text-[11px] text-muted-foreground">
+              <p className="mt-2 text-meta text-muted-foreground">
                 {active.declaredVersion && `版本 / Version ${active.declaredVersion}`}
                 {active.declaredVersion && active.effectiveDate && ' · '}
                 {active.effectiveDate && `生效 / Effective ${active.effectiveDate}`}
@@ -172,7 +172,7 @@ export function ConsentPage({ documents, version, onAccept, onDecline }: Consent
             </div>
           </CardContent>
         </Card>
-        <p className="mt-3 text-center text-[10px] text-muted-foreground/70">agreements {version.slice(0, 8)}</p>
+        <p className="mt-3 text-center text-micro text-muted-foreground/70">agreements {version.slice(0, 8)}</p>
       </motion.div>
     </div>
   );

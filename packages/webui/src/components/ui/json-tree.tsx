@@ -33,13 +33,13 @@ function Leaf({ value }: { value: string | number | boolean | null }) {
           <button
             type="button"
             onClick={() => setShowImg((v) => !v)}
-            className="ml-1.5 inline-flex items-center gap-0.5 rounded-md bg-muted/70 px-1 py-0.5 align-middle text-[10px] text-muted-foreground hover:text-foreground"
+            className="ml-1.5 inline-flex items-center gap-0.5 rounded-md bg-muted/70 px-1 py-0.5 align-middle text-xs text-muted-foreground hover:text-foreground"
           >
             <ImageIcon className="h-3 w-3" /> {showImg ? '隐藏' : '预览'}
           </button>
           {showImg && (
             <span className="mt-1.5 block">
-              <img src={value} alt="预览" className="max-h-48 rounded-lg border border-border/60" loading="lazy" />
+              <img src={value} alt="预览" className="media-outline max-h-48 rounded-lg" loading="lazy" />
             </span>
           )}
         </>
@@ -101,7 +101,7 @@ function Node({ k, value, depth, defaultOpen }: { k?: string; value: unknown; de
             <button
               type="button"
               onClick={() => setLimit((l) => l + 500)}
-              className="py-0.5 text-[11px] text-primary hover:underline"
+              className="py-0.5 text-xs text-primary hover:underline"
               style={{ paddingLeft: `${depth * 0.9 + 1.1}rem` }}
             >
               还有 {count - shown} 项,点击展开…
@@ -147,7 +147,7 @@ export function JsonTree({ data, className, maxHeight = '20rem' }: { data: unkno
         type="button"
         onClick={copy}
         title="复制 JSON"
-        className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md bg-card/80 px-1.5 py-1 text-[11px] text-muted-foreground shadow-sm ring-1 ring-border/50 backdrop-blur hover:text-foreground"
+        className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md bg-card/80 px-1.5 py-1 text-xs text-muted-foreground shadow-sm ring-1 ring-border/50 backdrop-blur hover:text-foreground"
       >
         {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
         {copied ? '已复制' : '复制'}

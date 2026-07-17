@@ -61,7 +61,7 @@ export function registerEventPipeline(ctx: OneBotInstanceContext): EventPipeline
   );
   disposers.push(
     ctx.bridge.events.on('friend_message', (event) => track(event.kind, async () => {
-      cachePrivateMessageMeta(ctx, event.senderUin, event.msgSeq, event.time, event.msgId);
+      cachePrivateMessageMeta(ctx, event.peerUin ?? event.senderUin, event.msgSeq, event.time, event.msgId);
       await convertAndDispatch(ctx, log, event);
     })),
   );
@@ -199,15 +199,15 @@ function cacheGroupMessageMeta(ctx: OneBotInstanceContext, event: Extract<QQEven
 
 function cachePrivateMessageMeta(
   ctx: OneBotInstanceContext,
-  senderUin: number,
+  sessionId: number,
   msgSeq: number,
   timestamp: number,
   random: number,
 ): void {
-  const messageId = hashMessageIdInt32(msgSeq, senderUin, PRIVATE_MESSAGE_EVENT);
+  const messageId = hashMessageIdInt32(msgSeq, sessionId, PRIVATE_MESSAGE_EVENT);
   ctx.cacheMessageMeta(messageId, {
     isGroup: false,
-    targetId: senderUin,
+    targetId: sessionId,
     sequence: msgSeq,
     eventName: PRIVATE_MESSAGE_EVENT,
     clientSequence: 0,
