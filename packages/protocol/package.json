@@ -91,6 +91,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:native-audio": "vitest run tests/highway/audio-transcode-native.test.ts",
     "bench": "vitest bench --run",
     "typecheck": "tsc --noEmit"
   },

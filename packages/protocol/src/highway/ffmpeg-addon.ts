@@ -21,11 +21,19 @@ interface FFmpegNativeAddon {
   getDuration(filePath: string): Promise<number>;
   convertToNTSilkTct(inputPath: string, outputPath: string): Promise<void>;
   decodeAudioToPCM(filePath: string, pcmPath: string, sampleRate?: number): Promise<{ result: boolean; sampleRate: number }>;
-  decodeAudioToFmt(filePath: string, pcmPath: string, format: string): Promise<{ channels: number; sampleRate: number; format: string }>;
+  decodeAudioToFmt(
+    filePath: string,
+    outputPath: string,
+    format: string,
+  ): Promise<{ result: boolean; channels: number; sampleRate: number; format: string }>;
 }
 
 let cachedAddon: FFmpegNativeAddon | null = null;
 let cachedLoadError: string | null = null;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function addonFileName(): string {
   return `ffmpegAddon.${process.platform}.${process.arch}.node`;
@@ -79,7 +87,7 @@ export function getFFmpegAddon(): FFmpegNativeAddon {
     cachedAddon = mod.exports as unknown as FFmpegNativeAddon;
     return cachedAddon;
   } catch (error) {
-    cachedLoadError = `failed to load ffmpegAddon (${addonPath}): ${error instanceof Error ? error.message : String(error)}`;
+    cachedLoadError = `failed to load ffmpegAddon (${addonPath}): ${errorMessage(error)}`;
     throw new Error(cachedLoadError);
   }
 }
@@ -155,8 +163,8 @@ export function defaultPttTempDir(): string {
 
 // ── audio transcode (get_record out_format, #165) ──
 // The addon is a custom ffmpeg build that bundles a SILK decoder, so it can
-// transcode a QQ voice (SILK/AMR) into a normal container in one convertFile
-// call — mirroring NapCat's FFmpegService.convertAudioFmt.
+// transcode a QQ voice (SILK/AMR) into a normal container in one
+// decodeAudioToFmt call — mirroring NapCat's FFmpegService.convertAudioFmt.
 
 /** Output formats accepted by `out_format` (mirrors NapCat's allowlist). */
 export const AUDIO_OUT_FORMATS = ['mp3', 'amr', 'wma', 'm4a', 'spx', 'ogg', 'wav', 'flac'] as const;
@@ -166,7 +174,7 @@ export function isAudioOutFormat(s: string): s is AudioOutFormat {
 }
 
 /** Minimal addon surface the transcode needs — lets tests inject a fake. */
-type AudioConvertAddon = Pick<FFmpegNativeAddon, 'convertFile'>;
+type AudioConvertAddon = Pick<FFmpegNativeAddon, 'decodeAudioToFmt'>;
 
 /** Default ceiling on the transcoded output read into memory for base64. SILK→
  *  WAV/FLAC is a decompressing direction, so cap it even though real voices are
@@ -195,21 +203,40 @@ export async function convertAudioBytes(
   const id = crypto.randomBytes(8).toString('hex');
   const inPath = path.join(dir, `${id}.in`);
   const outPath = path.join(dir, `${id}.${format}`);
+  let outcome: PromiseSettledResult<{ base64: string; size: number }>;
   try {
     await fs.promises.writeFile(inPath, bytes);
-    const res = await addon.convertFile(inPath, outPath, format);
-    if (!res?.success || !fs.existsSync(outPath)) throw new Error('audio conversion failed');
+    await addon.decodeAudioToFmt(inPath, outPath, format);
+    if (!fs.existsSync(outPath)) throw new Error('audio conversion failed: no output file');
     // Bound the output before reading it into memory (decompressing direction).
     const stat = await fs.promises.stat(outPath);
     if (stat.size > maxOut) throw new Error(`converted audio too large: ${stat.size} > ${maxOut}`);
     const out = await fs.promises.readFile(outPath);
-    return { base64: out.toString('base64'), size: out.length };
-  } finally {
-    // Await cleanup so no temp file lingers past the call (the bytes are
-    // already in memory by now). allSettled → a missing file never throws.
-    await Promise.allSettled([
-      fs.promises.rm(inPath, { force: true }),
-      fs.promises.rm(outPath, { force: true }),
-    ]);
+    outcome = { status: 'fulfilled', value: { base64: out.toString('base64'), size: out.length } };
+  } catch (reason) {
+    outcome = { status: 'rejected', reason };
   }
+
+  // `force` makes missing files harmless. Any remaining rejection is a real
+  // permission/I/O failure and must stay observable instead of leaking voice
+  // data silently. Preserve the conversion error too when both phases fail.
+  const cleanupResults = await Promise.allSettled([
+    fs.promises.rm(inPath, { force: true }),
+    fs.promises.rm(outPath, { force: true }),
+  ]);
+  const cleanupErrors = cleanupResults
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => result.reason);
+  if (cleanupErrors.length > 0) {
+    const cleanupMessage = cleanupErrors.map(errorMessage).join('; ');
+    if (outcome.status === 'rejected') {
+      throw new AggregateError(
+        [outcome.reason, ...cleanupErrors],
+        `audio conversion failed: ${errorMessage(outcome.reason)}; temporary audio file cleanup failed: ${cleanupMessage}`,
+      );
+    }
+    throw new AggregateError(cleanupErrors, `temporary audio file cleanup failed: ${cleanupMessage}`);
+  }
+  if (outcome.status === 'rejected') throw outcome.reason;
+  return outcome.value;
 }
