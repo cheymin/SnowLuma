@@ -100,6 +100,8 @@ export interface UiAppearance {
   reduceMotion: boolean;
   /** Hard-disable all UI animations (stronger than reduceMotion). */
   disableMotion: boolean;
+  /** Use SnowLuma's adaptive cursor and custom context menu. */
+  customPointerSystem: boolean;
   highContrast: boolean;
   sidebarPinned: boolean;
   timeFormat: TimeFormat;
@@ -226,6 +228,7 @@ const DEFAULT_APPEARANCE: UiAppearance = {
   density: 'cozy',
   reduceMotion: false,
   disableMotion: false,
+  customPointerSystem: true,
   highContrast: false,
   sidebarPinned: false,
   timeFormat: '24h',
@@ -520,6 +523,7 @@ export function normalizeAppearance(value: unknown, imageState: ServerImageState
     density: oneOf<Density>(v.density, ['cozy', 'compact'], DEFAULT_APPEARANCE.density),
     reduceMotion: boolOr(v.reduceMotion, DEFAULT_APPEARANCE.reduceMotion),
     disableMotion: boolOr(v.disableMotion, DEFAULT_APPEARANCE.disableMotion),
+    customPointerSystem: boolOr(v.customPointerSystem, DEFAULT_APPEARANCE.customPointerSystem),
     highContrast: boolOr(v.highContrast, DEFAULT_APPEARANCE.highContrast),
     sidebarPinned: boolOr(v.sidebarPinned, DEFAULT_APPEARANCE.sidebarPinned),
     timeFormat: oneOf<TimeFormat>(v.timeFormat, ['12h', '24h'], DEFAULT_APPEARANCE.timeFormat),

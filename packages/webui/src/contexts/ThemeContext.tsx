@@ -110,6 +110,7 @@ export const DEFAULT_APPEARANCE: UiAppearance = {
   density: 'cozy',
   reduceMotion: false,
   disableMotion: false,
+  customPointerSystem: true,
   highContrast: false,
   sidebarPinned: false,
   timeFormat: '24h',

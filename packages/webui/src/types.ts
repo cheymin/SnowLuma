@@ -363,6 +363,8 @@ export interface UiAppearance {
   density: Density;
   reduceMotion: boolean;
   disableMotion: boolean;
+  /** Master switch for the adaptive cursor and custom context menu. */
+  customPointerSystem: boolean;
   highContrast: boolean;
   /** Pin the sidebar permanently expanded, opting out of the hover-expand rail. */
   sidebarPinned: boolean;
