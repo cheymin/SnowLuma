@@ -538,7 +538,14 @@ function AppearancePanel() {
 
       <TopbarPanel />
 
-      <Group title="无障碍与侧栏" icon={Accessibility} description="动效、对比度与侧栏默认状态。">
+      <Group title="交互与无障碍" icon={Accessibility} description="光标、右键菜单、动效、对比度与侧栏行为。">
+        <SettingRow label="自定义光标与右键菜单" hint="使用主题化光标与 SnowLuma 右键菜单；关闭后立即恢复浏览器原生行为。" layout="inline">
+          <ToggleSwitch
+            value={a.customPointerSystem}
+            onChange={(customPointerSystem) => setAppearance({ customPointerSystem })}
+            ariaLabel="自定义光标与右键菜单"
+          />
+        </SettingRow>
         <SettingRow label="减弱动效" hint="弱化页面切换、弹簧等装饰性动画（保留轻微淡入），对低端设备与晕动敏感者更友好。" layout="inline">
           <ToggleSwitch value={a.reduceMotion} onChange={(reduceMotion) => setAppearance({ reduceMotion })} ariaLabel="减弱动效" />
         </SettingRow>
