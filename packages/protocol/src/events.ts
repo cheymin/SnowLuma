@@ -486,6 +486,28 @@ export interface FriendInputStatusEvent extends QQEvent {
   statusText: string;
 }
 
+export type OnlineDeviceKind = 'computer' | 'pad' | 'phone' | 'unknown';
+
+/** One entry from QQ NT's online-device cache notification. */
+export interface OnlineDeviceInfo {
+  appId: number;
+  instanceId: number;
+  clientType: number;
+  platform: number;
+  deviceName: string;
+  deviceKind: OnlineDeviceKind;
+}
+
+/**
+ * Full online-device snapshot pushed through Event 0x210 / subType 349.
+ * Internal-only: Bridge consumes this to maintain the query snapshot; it is
+ * not forwarded as an OneBot event.
+ */
+export interface OnlineDevicesChangedEvent extends QQEvent {
+  kind: 'online_devices_changed';
+  devices: OnlineDeviceInfo[];
+}
+
 export type QQEventVariant =
   | FriendMessage
   | GroupMessage
@@ -510,4 +532,5 @@ export type QQEventVariant =
   | GroupCardChangeEvent
   | GroupTitleChangeEvent
   | FriendProfileLikeEvent
+  | OnlineDevicesChangedEvent
   | BotOfflineEvent;

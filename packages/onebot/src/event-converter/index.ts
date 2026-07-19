@@ -97,6 +97,8 @@ const CONVERTERS: ConverterRegistry = {
   // Internal-only: async voice-to-text result, correlated by a pending
   // fetch_ptt_text; never emitted as an OneBot event.
   ptt_trans_result: null,
+  // Internal-only cache snapshot consumed by Bridge.getOnlineClients().
+  online_devices_changed: null,
 };
 
 export async function convertEvent(
