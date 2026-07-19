@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { GetMediaListResponse } from '@snowluma/proto-defs/oidb-actions/group-album';
-import { protobuf_encode } from '@snowluma/proton';
+import { protobuf_decode, protobuf_encode } from '@snowluma/proton';
 import { GroupAlbumApi } from '../../src/bridge/apis/group-album';
 import { mockBridge } from './_helpers';
+import type { GroupAlbumMediaListRequestWireOracle } from './group-album-wire-fixture';
 
 describe('apis/group-album', () => {
+  it('encodes the next-page cursor in the page-info field', async () => {
+    const bridge = mockBridge();
+    const cursor = '{"IndexType":"next","Loc":{"batch_id":2147483650}}';
+
+    await new GroupAlbumApi(bridge as never).getMediaList(12345, 'album-id', cursor);
+
+    const [, requestBytes] = bridge.sendRawPacket.mock.calls[0]!;
+    const request = protobuf_decode<GroupAlbumMediaListRequestWireOracle>(requestBytes);
+    expect(request.reqInfo?.pageInfo).toBe(cursor);
+    expect(request.reqInfo?.reserved).toBeNull();
+  });
+
   it('accepts a successful media-list response with an omitted zero retCode', async () => {
     const bridge = mockBridge();
     bridge.sendRawPacket.mockResolvedValueOnce({
