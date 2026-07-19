@@ -2050,7 +2050,7 @@ export const actions = [
     summary: '设置个性签名（longNick/long_nick，严格 string）',
     params: { longNick: f.raw(), long_nick: f.raw() },
     run: async (p, ctx) => {
-      const longNick = p.longNick || p.long_nick;
+      const longNick = p.longNick !== undefined ? p.longNick : p.long_nick;
       if (typeof longNick !== 'string') return failedResponse(RETCODE.BAD_REQUEST, 'invalid longNick');
       await ctx.bridge.apis.profile.setSelfLongNick(longNick);
       return okResponse({});

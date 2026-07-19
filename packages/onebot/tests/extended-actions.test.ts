@@ -121,6 +121,45 @@ function makeHandler(ctx: ApiActionContext): ApiHandler {
   return new ApiHandler(ctx);
 }
 
+describe('extended-actions / set_self_longnick', () => {
+  it('accepts an empty longNick to clear the signature', async () => {
+    const setSelfLongNick = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ setSelfLongNick });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('set_self_longnick', {
+      longNick: '',
+    });
+
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(setSelfLongNick).toHaveBeenCalledWith('');
+  });
+
+  it('accepts an empty long_nick compatibility alias', async () => {
+    const setSelfLongNick = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ setSelfLongNick });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('set_self_longnick', {
+      long_nick: '',
+    });
+
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(setSelfLongNick).toHaveBeenCalledWith('');
+  });
+
+  it.each([
+    ['missing value', {}],
+    ['non-string value', { longNick: 0 }],
+  ])('rejects %s without calling the bridge', async (_case, params) => {
+    const setSelfLongNick = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ setSelfLongNick });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('set_self_longnick', params);
+
+    expect(response).toMatchObject({ status: 'failed', retcode: 1400 });
+    expect(setSelfLongNick).not.toHaveBeenCalled();
+  });
+});
+
 describe('extended-actions / group notice options', () => {
   it('coerces and forwards every supported announcement option', async () => {
     const sendNotice = vi.fn(async () => ({ ec: 0 }));
