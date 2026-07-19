@@ -5754,7 +5754,7 @@ export const ACTIONS: CatalogAction[] = [
     "name": "get_stranger_info",
     "aliases": [],
     "summary": "获取陌生人信息",
-    "returns": "陌生人资料：QQ 号、昵称、性别、年龄，命中资料时另含等级。",
+    "returns": "陌生人资料：QQ 号、昵称、性别、年龄与个性签名，命中资料时另含等级。",
     "returnsSchema": {
       "type": "object",
       "properties": {
@@ -5774,6 +5774,10 @@ export const ACTIONS: CatalogAction[] = [
           "type": "integer",
           "description": "年龄"
         },
+        "long_nick": {
+          "type": "string",
+          "description": "个性签名"
+        },
         "qq_level": {
           "type": "integer",
           "description": "QQ 等级（仅查到资料时返回）"
@@ -5787,7 +5791,8 @@ export const ACTIONS: CatalogAction[] = [
         "user_id",
         "nickname",
         "sex",
-        "age"
+        "age",
+        "long_nick"
       ]
     },
     "readOnly": true,

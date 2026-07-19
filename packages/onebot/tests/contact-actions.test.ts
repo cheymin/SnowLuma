@@ -89,9 +89,15 @@ function makeMember(uin: number, nickname: string, card = ''): GroupMemberInfo {
   };
 }
 
-function makeProfile(uin: number, nickname: string, sex: 'male' | 'female' | 'unknown' = 'unknown', age = 0): UserProfileInfo {
+function makeProfile(
+  uin: number,
+  nickname: string,
+  sex: 'male' | 'female' | 'unknown' = 'unknown',
+  age = 0,
+  sign = '',
+): UserProfileInfo {
   return {
-    uin, uid: `u_${uin}`, nickname, remark: '', qid: '', sex, age, sign: '', avatar: '',
+    uin, uid: `u_${uin}`, nickname, remark: '', qid: '', sex, age, sign, avatar: '',
   };
 }
 
@@ -353,10 +359,16 @@ describe('onebot/contact-actions / getGroupMemberInfo', () => {
 describe('onebot/contact-actions / getStrangerInfo', () => {
   it('returns a fetched profile', async () => {
     const bridge = fakeBridge({
-      fetchUserProfile: vi.fn(async () => makeProfile(55555, 'Eve', 'female', 25)),
+      fetchUserProfile: vi.fn(async () => makeProfile(55555, 'Eve', 'female', 25, 'Stay curious')),
     });
     const out = await getStrangerInfo(bridge, 55555);
-    expect(out).toMatchObject({ user_id: 55555, nickname: 'Eve', sex: 'female', age: 25 });
+    expect(out).toMatchObject({
+      user_id: 55555,
+      nickname: 'Eve',
+      sex: 'female',
+      age: 25,
+      long_nick: 'Stay curious',
+    });
   });
 
   it('falls back to identity.findUserProfile when fetch fails but the profile is cached', async () => {
@@ -364,11 +376,15 @@ describe('onebot/contact-actions / getStrangerInfo', () => {
       fetchUserProfile: vi.fn(async () => { throw new Error('net'); }),
       identity: fakeIdentity({
         findUserProfile: (uin: number) =>
-          uin === 66666 ? makeProfile(66666, 'Frank', 'male', 30) : null,
+          uin === 66666 ? makeProfile(66666, 'Frank', 'male', 30, 'Cached signature') : null,
       }),
     });
     const out = await getStrangerInfo(bridge, 66666);
-    expect(out).toMatchObject({ user_id: 66666, nickname: 'Frank' });
+    expect(out).toMatchObject({
+      user_id: 66666,
+      nickname: 'Frank',
+      long_nick: 'Cached signature',
+    });
   });
 
   it('returns null when neither fetch nor cache produces a profile', async () => {

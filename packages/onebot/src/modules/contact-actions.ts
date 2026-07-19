@@ -225,6 +225,7 @@ export async function getStrangerInfo(
       nickname: p.nickname,
       sex: p.sex,
       age: p.age,
+      long_nick: p.sign,
       qq_level: p.level,
       level: p.level,
     };
@@ -236,6 +237,7 @@ export async function getStrangerInfo(
       nickname: p.nickname,
       sex: p.sex,
       age: p.age,
+      long_nick: p.sign,
       qq_level: p.level,
       level: p.level,
     };
