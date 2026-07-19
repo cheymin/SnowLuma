@@ -90,7 +90,7 @@ export function defaultOverviewMobile(): UiLayoutItem[] {
  * Bring any stored overview layout up to the current grid catalogue:
  *  - expand the legacy single `stats` block into the 5 individual tiles
  *    (inheriting its visibility),
- *  - keep stored coords/visibility for known widgets, assign the default
+ *  - keep stored coords/visibility/config for known widgets, assign the default
  *    placement to any widget missing coords,
  *  - append catalogue widgets the stored layout predates (visible),
  *  - drop unknown ids.
@@ -117,7 +117,8 @@ export function migrateOverviewBlocks(stored: UiLayoutItem[] | undefined): UiLay
     const coords = validCoords(item)
       ? { x: item!.x!, y: item!.y!, w: item!.w!, h: item!.h! }
       : { ...spec.def };
-    return { id: spec.id, visible, ...coords };
+    const config = isObj(item?.config) ? { config: { ...item.config } } : {};
+    return { id: spec.id, visible, ...coords, ...config };
   });
 }
 
