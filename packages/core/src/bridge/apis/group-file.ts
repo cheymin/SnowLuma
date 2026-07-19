@@ -58,6 +58,9 @@ export interface GroupFolderInfo {
   creator: number;
   creatorName: string;
   totalFileCount: number;
+  lastUploadTime: number;
+  lastUploader: number;
+  lastUploaderName: string;
 }
 
 export interface GroupFilesResult {
@@ -592,6 +595,8 @@ export class GroupFileApi {
           const folder = item.folderInfo;
           const creator = toInt(folder.creatorUin);
           const cached = this.ctx.identity.findGroupMember(groupId, creator);
+          const lastUploader = toInt(folder.modifierUin);
+          const lastUploaderCached = this.ctx.identity.findGroupMember(groupId, lastUploader);
           folders.push({
             folderId: typeof folder.folderId === 'string' ? folder.folderId : '',
             folderName: typeof folder.folderName === 'string' ? folder.folderName : '',
@@ -602,6 +607,12 @@ export class GroupFileApi {
               || cached?.nickname
               || '',
             totalFileCount: toInt(folder.totalFileCount),
+            lastUploadTime: toInt(folder.modifiedTime),
+            lastUploader,
+            lastUploaderName: (typeof folder.modifierName === 'string' && folder.modifierName)
+              || lastUploaderCached?.card
+              || lastUploaderCached?.nickname
+              || '',
           });
         }
       }

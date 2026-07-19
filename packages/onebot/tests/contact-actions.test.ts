@@ -11,6 +11,7 @@ import type {
 import {
   getFriendList,
   getGroupInfo,
+  getGroupFiles,
   getGroupList,
   getGroupMemberInfo,
   getGroupMemberList,
@@ -161,6 +162,35 @@ describe('onebot/contact-actions / getFriendList', () => {
     });
     const out = await getFriendList(bridge);
     expect(out).toEqual([{ user_id: 33333, nickname: 'bob', remark: '' }]);
+  });
+});
+
+describe('onebot/contact-actions / getGroupFiles', () => {
+  it('returns folder last-upload metadata in OneBot field names', async () => {
+    const list = vi.fn(async () => ({
+      files: [],
+      folders: [{
+        folderId: 'd1',
+        folderName: 'dir',
+        createTime: 100,
+        creator: 123,
+        creatorName: 'creator',
+        totalFileCount: 2,
+        lastUploadTime: 200,
+        lastUploader: 5_000_000_001,
+        lastUploaderName: 'uploader',
+      }],
+    }));
+    const bridge = fakeBridge({ apis: { groupFile: { list } } });
+
+    const out = await getGroupFiles(bridge, 12345, '/');
+
+    expect(out.folders).toEqual([expect.objectContaining({
+      last_upload_time: 200,
+      last_uploader: 5_000_000_001,
+      last_uploader_name: 'uploader',
+    })]);
+    expect(list).toHaveBeenCalledWith(12345, '/');
   });
 });
 

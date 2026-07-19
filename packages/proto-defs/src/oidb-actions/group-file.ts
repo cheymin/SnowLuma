@@ -22,6 +22,8 @@ export interface OidbGroupFileListFolderResp {
   creatorUin?:        pb<6, uint_32>;
   creatorName?:       pb<7, string>;
   totalFileCount?:    pb<8, uint_32>;
+  modifierUin?:       pb<9, uint_64>;
+  modifierName?:      pb<10, string>;
 }
 export interface OidbGroupFileListFileResp {
   fileId?:          pb<1, string>;
