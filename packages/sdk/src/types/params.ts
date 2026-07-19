@@ -36,6 +36,8 @@ export interface NoCacheParams extends JsonObject {
   no_cache?: boolean;
 }
 
+export interface GetOnlineClientsParams extends NoCacheParams {}
+
 export interface GetGroupListParams extends NoCacheParams {}
 
 export interface GetGroupInfoParams extends GroupIdParams {
