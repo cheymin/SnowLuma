@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { PacketInfo } from '@snowluma/common/protocol-types';
 import { protobuf_encode } from '@snowluma/proton';
 import type { PushMsg, PushMsgBody } from '@snowluma/proto-defs/message';
-import type { GroupChange } from '@snowluma/proto-defs/notify';
+import type { GroupChange, OnlineDeviceNotify } from '@snowluma/proto-defs/notify';
 import type { IdentityService } from '../../src/identity-service';
 import { parseMsgPush, SysMsgDedup } from '../../src/msg-push';
 
@@ -37,6 +37,18 @@ function memberIncreasePush(opts: { groupId: number; memberUin: number; sequence
     responseHead: { fromUin: opts.groupId, fromUid: '' },
     contentHead: { msgType: 33, subType: 0, sequence: opts.sequence, timestamp: 1781540572, msgId: opts.msgId },
     body: { msgContent: protobuf_encode<GroupChange>({ groupUin: opts.groupId, memberUid: String(opts.memberUin) }) },
+  });
+}
+
+function onlineDevicesPush(deviceName: string): PacketInfo {
+  return pushPacket({
+    responseHead: { fromUin: 2000000001, fromUid: '' },
+    contentHead: { msgType: 528, subType: 349, sequence: 800, timestamp: 1781540572, msgId: 555 },
+    body: {
+      msgContent: protobuf_encode<OnlineDeviceNotify>({
+        devices: [{ appId: 537242075, instanceId: 202, clientType: 1, platform: 3, deviceName }],
+      }),
+    },
   });
 }
 
@@ -114,5 +126,16 @@ describe('parseMsgPush — system-push dedup (#137)', () => {
     });
     expect(parseMsgPush(chat(), identity, dedup)).toHaveLength(1);
     expect(parseMsgPush(chat(), identity, dedup)).toHaveLength(1);
+  });
+
+  it('does not dedup replacement state snapshots with the same server identity', () => {
+    const dedup = new SysMsgDedup();
+
+    expect(parseMsgPush(onlineDevicesPush('DESKTOP-A'), identity, dedup)).toMatchObject([
+      { kind: 'online_devices_changed', devices: [{ deviceName: 'DESKTOP-A' }] },
+    ]);
+    expect(parseMsgPush(onlineDevicesPush('DESKTOP-B'), identity, dedup)).toMatchObject([
+      { kind: 'online_devices_changed', devices: [{ deviceName: 'DESKTOP-B' }] },
+    ]);
   });
 });

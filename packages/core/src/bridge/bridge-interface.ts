@@ -1,3 +1,4 @@
+import type { OnlineDeviceInfo } from '@snowluma/protocol/events';
 import type { BridgeContext } from './bridge-context';
 
 export interface BridgeInterface extends BridgeContext {
@@ -5,4 +6,7 @@ export interface BridgeInterface extends BridgeContext {
   /** False only when every attached QQ process is confirmed stale.
    *  An unarmed watchdog remains true for compatibility. */
   readonly receiveHealthy: boolean;
+  /** Latest device snapshot observed on this Bridge lifecycle. `null` means
+   *  QQ has not emitted its cache notification since SnowLuma attached. */
+  getOnlineClients(): readonly Readonly<OnlineDeviceInfo>[] | null;
 }

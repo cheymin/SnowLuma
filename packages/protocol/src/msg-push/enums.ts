@@ -85,6 +85,12 @@ export enum Event0x210SubType {
    */
   InputStatusNotice = 277,
   /**
+   * QQ NT online-device cache update. The payload is a snapshot with repeated
+   * device entries; the kernel's getOnLineDev call only replays this cache and
+   * does not issue a separate network request.
+   */
+  OnlineDevicesNotice = 349,
+  /**
    * Group-app state push (troop shortcut bar / discussion app).
    *
    * Sourced from the decompiled stock QQ Android client decoder at

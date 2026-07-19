@@ -57,6 +57,13 @@ const MESSAGE_KINDS = new Set<QQEventVariant['kind']>([
   'friend_message', 'group_message', 'temp_message',
 ]);
 
+// Replacement snapshots describe the complete current state. They are
+// idempotent, but not duplicate events: a later snapshot may legitimately
+// reuse the enclosing system-message identity while carrying new state.
+const STATE_SNAPSHOT_KINDS = new Set<QQEventVariant['kind']>([
+  'online_devices_changed',
+]);
+
 /**
  * Summarise a body that decoded to zero elements despite carrying content —
  * each element's field names, every `commonElem`'s serviceType/businessType +
@@ -127,7 +134,12 @@ export function parseMsgPush(
   // messages have their own NT dedup path and the forward re-parse re-runs
   // this without a tracker. A push that decodes to a message kind, or to
   // nothing, is never deduped here.
-  if (dedup && out.length > 0 && out.every((ev) => !MESSAGE_KINDS.has(ev.kind))) {
+  if (
+    dedup
+    && out.length > 0
+    && out.every((ev) => !MESSAGE_KINDS.has(ev.kind))
+    && out.every((ev) => !STATE_SNAPSHOT_KINDS.has(ev.kind))
+  ) {
     if (dedup.seenDuplicate(ctx.head, ctx.fromUin)) {
       log.debug('dropped duplicate system push (kinds=%s seq=%d from=%d msgType=%d msgId=%d)',
         out.map((ev) => ev.kind).join(','), ctx.head.sequence, ctx.fromUin, ctx.head.msgType, ctx.head.msgId);

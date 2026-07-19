@@ -22,6 +22,7 @@ import type {
   GetGroupMemberListParams,
   GetGroupMessageHistoryParams,
   GetMediaParams,
+  GetOnlineClientsParams,
   GetPrivateFileUrlParams,
   GroupForwardMessageParams,
   GroupIdParams,
@@ -199,7 +200,7 @@ export interface SnowLumaActionMap {
   get_emoji_likes: { params: GetEmojiLikesParams; data: JsonObject };
   fetch_emoji_like: { params: FetchEmojiLikeParams; data: JsonObject };
   get_friends_with_category: { params: JsonObject; data: FriendCategoryResult[] };
-  get_online_clients: { params: JsonObject; data: OnlineClientsInfo };
+  get_online_clients: { params: GetOnlineClientsParams; data: OnlineClientsInfo };
   _get_model_show: { params: JsonObject; data: { variants: JsonArray } };
   _set_model_show: { params: JsonObject; data: EmptyData };
   '.get_word_slices': { params: JsonObject; data: JsonValue };

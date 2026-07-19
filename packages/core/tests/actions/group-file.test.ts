@@ -503,7 +503,18 @@ describe('apis/group-file', () => {
             isEnd: true,
             items: [
               { type: 1, fileInfo: { fileId: 'f1', fileName: 'a.txt', uploaderUin: 1, uploaderName: 'alice' } },
-              { type: 2, folderInfo: { folderId: 'd1', folderName: 'dir', creatorUin: 2, creatorName: 'bob' } },
+              {
+                type: 2,
+                folderInfo: {
+                  folderId: 'd1',
+                  folderName: 'dir',
+                  creatorUin: 2,
+                  creatorName: 'bob',
+                  modifiedTime: 200,
+                  modifierUin: 5_000_000_001n,
+                  modifierName: 'alice',
+                },
+              },
             ],
           } as any,
         },
@@ -513,7 +524,15 @@ describe('apis/group-file', () => {
     expect(out.files).toHaveLength(1);
     expect(out.files[0]).toMatchObject({ fileId: 'f1', fileName: 'a.txt', uploader: 1, uploaderName: 'alice' });
     expect(out.folders).toHaveLength(1);
-    expect(out.folders[0]).toMatchObject({ folderId: 'd1', folderName: 'dir', creator: 2, creatorName: 'bob' });
+    expect(out.folders[0]).toMatchObject({
+      folderId: 'd1',
+      folderName: 'dir',
+      creator: 2,
+      creatorName: 'bob',
+      lastUploadTime: 200,
+      lastUploader: 5_000_000_001,
+      lastUploaderName: 'alice',
+    });
   });
 
   it('getUrl builds the https URL from downloadDns + hex-encoded path', async () => {

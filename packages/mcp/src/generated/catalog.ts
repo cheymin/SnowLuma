@@ -3663,6 +3663,18 @@ export const ACTIONS: CatalogAction[] = [
               "total_file_count": {
                 "type": "integer",
                 "description": "文件夹内文件总数"
+              },
+              "last_upload_time": {
+                "type": "integer",
+                "description": "最后上传时间戳"
+              },
+              "last_uploader": {
+                "type": "integer",
+                "description": "最后上传者 QQ 号"
+              },
+              "last_uploader_name": {
+                "type": "string",
+                "description": "最后上传者昵称"
               }
             }
           }
@@ -4593,6 +4605,18 @@ export const ACTIONS: CatalogAction[] = [
               "total_file_count": {
                 "type": "integer",
                 "description": "文件夹内文件总数"
+              },
+              "last_upload_time": {
+                "type": "integer",
+                "description": "最后上传时间戳"
+              },
+              "last_uploader": {
+                "type": "integer",
+                "description": "最后上传者 QQ 号"
+              },
+              "last_uploader_name": {
+                "type": "string",
+                "description": "最后上传者昵称"
               }
             }
           }
@@ -4961,14 +4985,42 @@ export const ACTIONS: CatalogAction[] = [
   {
     "name": "get_online_clients",
     "aliases": [],
-    "summary": "获取在线客户端（占位，OneBot v11 形状）",
-    "returns": "{ clients }：在线设备列表（占位，clients 恒为空数组）。",
+    "summary": "获取在线客户端",
+    "returns": "{ clients }：QQ 本次会话最近推送的在线设备快照。",
     "returnsSchema": {
       "type": "object",
       "properties": {
         "clients": {
           "type": "array",
-          "description": "在线设备列表（占位，恒空）"
+          "description": "在线设备列表",
+          "items": {
+            "type": "object",
+            "properties": {
+              "app_id": {
+                "type": "integer",
+                "description": "客户端 ID"
+              },
+              "device_name": {
+                "type": "string",
+                "description": "设备名称"
+              },
+              "device_kind": {
+                "type": "string",
+                "enum": [
+                  "电脑",
+                  "Pad",
+                  "手机",
+                  "未知设备"
+                ],
+                "description": "设备类别"
+              }
+            },
+            "required": [
+              "app_id",
+              "device_name",
+              "device_kind"
+            ]
+          }
         }
       },
       "required": [
@@ -4976,11 +5028,28 @@ export const ACTIONS: CatalogAction[] = [
       ]
     },
     "readOnly": true,
-    "params": [],
+    "params": [
+      {
+        "name": "no_cache",
+        "type": "bool",
+        "required": false,
+        "schema": {
+          "type": "boolean"
+        },
+        "default": false,
+        "desc": "是否强制刷新；QQ 当前仅暴露本地快照，true 会明确失败"
+      }
+    ],
     "invariants": [],
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "no_cache": {
+          "type": "boolean",
+          "description": "是否强制刷新；QQ 当前仅暴露本地快照，true 会明确失败",
+          "default": false
+        }
+      },
       "additionalProperties": true
     },
     "category": "扩展"
@@ -5754,7 +5823,7 @@ export const ACTIONS: CatalogAction[] = [
     "name": "get_stranger_info",
     "aliases": [],
     "summary": "获取陌生人信息",
-    "returns": "陌生人资料：QQ 号、昵称、性别、年龄，命中资料时另含等级。",
+    "returns": "陌生人资料：QQ 号、昵称、性别、年龄与个性签名，命中资料时另含等级。",
     "returnsSchema": {
       "type": "object",
       "properties": {
@@ -5774,6 +5843,10 @@ export const ACTIONS: CatalogAction[] = [
           "type": "integer",
           "description": "年龄"
         },
+        "long_nick": {
+          "type": "string",
+          "description": "个性签名"
+        },
         "qq_level": {
           "type": "integer",
           "description": "QQ 等级（仅查到资料时返回）"
@@ -5787,7 +5860,8 @@ export const ACTIONS: CatalogAction[] = [
         "user_id",
         "nickname",
         "sex",
-        "age"
+        "age",
+        "long_nick"
       ]
     },
     "readOnly": true,

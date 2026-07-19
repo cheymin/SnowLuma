@@ -210,6 +210,9 @@ export async function getGroupFiles(
       creator: folder.creator,
       create_name: folder.creatorName,
       total_file_count: folder.totalFileCount,
+      last_upload_time: folder.lastUploadTime,
+      last_uploader: folder.lastUploader,
+      last_uploader_name: folder.lastUploaderName,
     } as JsonObject)),
   };
 }
@@ -225,6 +228,7 @@ export async function getStrangerInfo(
       nickname: p.nickname,
       sex: p.sex,
       age: p.age,
+      long_nick: p.sign,
       qq_level: p.level,
       level: p.level,
     };
@@ -236,6 +240,7 @@ export async function getStrangerInfo(
       nickname: p.nickname,
       sex: p.sex,
       age: p.age,
+      long_nick: p.sign,
       qq_level: p.level,
       level: p.level,
     };

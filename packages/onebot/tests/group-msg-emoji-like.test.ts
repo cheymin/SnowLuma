@@ -138,6 +138,36 @@ describe('decodeEvent0x2DC subType=16 — GroupMsgEmojiLike', () => {
     });
   });
 
+  it('decodes a full PushMsg whose envelope sequence carries high uint32 bits', () => {
+    const content = buildReactContent({
+      groupUin: BigInt(GROUP_ID),
+      field13: 35,
+      groupReactionData: {
+        data: {
+          data: {
+            groupReactionTarget: { seq: 4242n },
+            groupReactionDataContent: {
+              code: '76', count: 1, operatorUid: 'u_operator_xxx', type: 1,
+            },
+          },
+        },
+      },
+    });
+    const packet = buildPushPacket(content, {
+      msgId: 123n,
+      sequence: 0x1_0000_0007n,
+    });
+
+    const [event] = parseMsgPush(packet, makeIdentity()) as GroupMsgEmojiLikeEvent[];
+    expect(event).toMatchObject({
+      kind: 'group_msg_emoji_like',
+      groupId: GROUP_ID,
+      msgSeq: 4242,
+      emojiId: '76',
+    });
+    expect(buildContext(packet, makeIdentity())?.head.sequence).toBe(7);
+  });
+
   it('accepts a sign-extended negative ContentHead field 4 without losing its low 32 bits', () => {
     const packet = buildPushPacket(new Uint8Array(0), {
       msgId: encodeSignedInt32Varint(-1),

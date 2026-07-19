@@ -15,7 +15,7 @@ import type { GroupMemberInfo, QQGroupInfo } from '@snowluma/protocol/qq-info';
 import type {
   GroupChange, NewFriend, FriendRecall, OperatorInfo, SelfJoinInGroup, GroupAdmin,
   InputStatusNotify, NotifyMessageBody, GroupNameChange, GroupSpecialTitleChange,
-  ProfileLikeTip,
+  OnlineDeviceNotify, ProfileLikeTip,
 } from '@snowluma/proto-defs/notify';
 import type { PushMsg } from '@snowluma/proto-defs/message';
 import type {
@@ -446,6 +446,131 @@ describe('parseMsgPush Event0x210 subType=277 (input status → 对方正在输�
       makeIdentity(),
     );
     expect(events).toEqual([]);
+  });
+});
+
+describe('parseMsgPush Event0x210 subType=349 (online-device snapshot)', () => {
+  it('decodes the complete device fields recovered from the QQ wire handler', () => {
+    const content = protobuf_encode<OnlineDeviceNotify>({
+      appId: 537242075,
+      instanceId: 101,
+      clientType: 1,
+      platform: 3,
+      devices: [
+        {
+          appId: 537242075,
+          instanceId: 202,
+          clientType: 1,
+          platform: 3,
+          deviceName: 'DESKTOP-TEST',
+        },
+        {
+          appId: 537242075,
+          instanceId: 203,
+          clientType: 5,
+          platform: 3,
+          deviceName: 'DESKTOP-DUPLICATE',
+        },
+        {
+          appId: 537242075,
+          instanceId: 303,
+          clientType: 4,
+          platform: 2,
+          deviceName: 'Pixel 9',
+        },
+      ],
+    });
+
+    const events = parseMsgPush(
+      makeEvent0x210PacketAny(349, content),
+      makeIdentity(),
+    );
+
+    expect(events).toEqual([{
+      kind: 'online_devices_changed',
+      time: 1710000000,
+      selfUin: Number(SELF_UIN),
+      devices: [
+        {
+          appId: 537242075,
+          instanceId: 202,
+          clientType: 1,
+          platform: 3,
+          deviceName: 'DESKTOP-TEST',
+          deviceKind: 'computer',
+        },
+        {
+          appId: 537242075,
+          instanceId: 303,
+          clientType: 4,
+          platform: 2,
+          deviceName: 'Pixel 9',
+          deviceKind: 'phone',
+        },
+      ],
+    }]);
+  });
+
+  it('normalizes packed wire client types before classification and deduplication', () => {
+    const content = protobuf_encode<OnlineDeviceNotify>({
+      devices: [
+        {
+          appId: 1001,
+          instanceId: 202,
+          clientType: 83714, // 0x14702 -> phone client type 2
+          platform: 3,
+          deviceName: 'BOT-HOST',
+        },
+        {
+          appId: 1001,
+          instanceId: 203,
+          clientType: 65799, // 0x10107 -> phone client type 7
+          platform: 2,
+          deviceName: 'MOBILE-DUPLICATE',
+        },
+      ],
+    });
+
+    const events = parseMsgPush(
+      makeEvent0x210PacketAny(349, content),
+      makeIdentity(),
+    );
+
+    expect(events).toEqual([{
+      kind: 'online_devices_changed',
+      time: 1710000000,
+      selfUin: Number(SELF_UIN),
+      devices: [{
+        appId: 1001,
+        instanceId: 202,
+        clientType: 2,
+        platform: 3,
+        deviceName: 'BOT-HOST',
+        deviceKind: 'phone',
+      }],
+    }]);
+  });
+
+  it('rejects entries that omit required identity fields', () => {
+    const content = protobuf_encode<OnlineDeviceNotify>({
+      devices: [{ instanceId: 202, platform: 3, deviceName: 'BROKEN' }],
+    });
+    const captured: string[] = [];
+    const unsubscribe = subscribeLogs((entry) => {
+      if (entry.scope === 'MsgPush' && /online-device entry 0/.test(entry.message)) {
+        captured.push(entry.message);
+      }
+    });
+    try {
+      expect(parseMsgPush(
+        makeEvent0x210PacketAny(349, content),
+        makeIdentity(),
+      )).toEqual([]);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatch(/appIdPresent=false clientTypePresent=false/);
+    } finally {
+      unsubscribe();
+    }
   });
 });
 

@@ -9,12 +9,16 @@ import { ConsentPage } from '@/components/pages/consent-page';
 import { ApiProvider, createApiClient, useApi, type ApiClient } from '@/lib/api';
 import { DebugTaskProvider } from '@/contexts/DebugTaskContext';
 import { TaskBadge } from '@/components/debug/task-badge';
+import { AdaptivePointer } from '@/components/ui/adaptive-pointer';
+import { GlobalContextMenu } from '@/components/ui/global-context-menu';
 import type { AgreementsPayload } from '@/lib/api/types';
 import { appRouter } from '@/router';
 
 export default function App() {
   return (
     <ThemeProvider>
+      <AdaptivePointer />
+      <GlobalContextMenu />
       <AuthBoundary />
     </ThemeProvider>
   );

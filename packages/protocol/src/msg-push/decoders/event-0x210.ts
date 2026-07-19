@@ -4,6 +4,8 @@ import type {
   FriendAddEvent,
   FriendPokeEvent,
   FriendRequestEvent,
+  OnlineDeviceInfo,
+  OnlineDeviceKind,
   QQEventVariant,
 } from '../../events';
 import type {
@@ -12,6 +14,7 @@ import type {
   GeneralGrayTipInfo,
   InputStatusNotify,
   NewFriend,
+  OnlineDeviceNotify,
   ProfileLikeTip,
 } from '@snowluma/proto-defs/notify';
 import type { PttTransPush } from '@snowluma/proto-defs/ptt-trans';
@@ -42,6 +45,7 @@ export const decodeEvent0x210: MsgPushDecoder = (ctx) => {
       return decodeFriendRecall(ctx);
     case Event0x210SubType.FriendPokeNotice: return decodeFriendPoke(ctx);
     case Event0x210SubType.InputStatusNotice: return decodeInputStatus(ctx);
+    case Event0x210SubType.OnlineDevicesNotice: return decodeOnlineDevices(ctx);
     case Event0x210SubType.ProfileLikeNotice: return decodeProfileLike(ctx);
     // 179 + 226 both carry the NewFriend payload — see enum comment.
     case Event0x210SubType.NewFriendNotice:
@@ -65,6 +69,63 @@ export const decodeEvent0x210: MsgPushDecoder = (ctx) => {
   unknownLog.debug('Event0x210 unknown subType=%d', ctx.head.subType);
   return [];
 };
+
+const COMPUTER_CLIENT_TYPES = new Set([1, 5, 15]);
+const PHONE_CLIENT_TYPES = new Set([2, 3, 4, 6, 7, 12]);
+const PAD_CLIENT_TYPES = new Set([8, 9, 10, 11, 13]);
+
+function onlineDeviceKind(clientType: number): OnlineDeviceKind {
+  if (COMPUTER_CLIENT_TYPES.has(clientType)) return 'computer';
+  if (PHONE_CLIENT_TYPES.has(clientType)) return 'phone';
+  if (PAD_CLIENT_TYPES.has(clientType)) return 'pad';
+  unknownLog.warn('online-device snapshot contains unknown clientType=%d', clientType);
+  return 'unknown';
+}
+
+function onlineDeviceClientType(rawClientType: number): number {
+  // QQ's OnRecvSysMsg path stores this wire field as an unsigned byte before
+  // it reaches DecodeOnLineDev. Higher bits carry terminal metadata and must
+  // not participate in device classification (live examples: 0x14702 -> 2,
+  // 0x10107 -> 7).
+  return rawClientType & 0xff;
+}
+
+function decodeOnlineDevices(ctx: MsgPushContext): QQEventVariant[] {
+  const notify = protobuf_decode<OnlineDeviceNotify>(ctx.content);
+  if (!notify) return [];
+  const devices: OnlineDeviceInfo[] = [];
+  const seenDeviceKinds = new Set<OnlineDeviceKind>();
+  for (const [index, item] of (notify.devices ?? []).entries()) {
+    const appId = item.appId ?? 0;
+    const rawClientType = item.clientType ?? 0;
+    if (appId <= 0 || rawClientType <= 0) {
+      throw new Error(
+        `online-device entry ${index} is missing appId or clientType `
+        + `(appIdPresent=${item.appId != null} clientTypePresent=${item.clientType != null})`,
+      );
+    }
+    const clientType = onlineDeviceClientType(rawClientType);
+    const deviceKind = onlineDeviceKind(clientType);
+    // QQ's DecodeOnLineDevList exposes one entry per derived devUid
+    // (computer/pad/phone), retaining the first item in each category.
+    if (seenDeviceKinds.has(deviceKind)) continue;
+    seenDeviceKinds.add(deviceKind);
+    devices.push({
+      appId,
+      instanceId: item.instanceId ?? 0,
+      clientType,
+      platform: item.platform ?? 0,
+      deviceName: item.deviceName ?? '',
+      deviceKind,
+    });
+  }
+  return [{
+    kind: 'online_devices_changed',
+    time: ctx.head.timestamp,
+    selfUin: ctx.selfUin,
+    devices,
+  }];
+}
 
 // Voice-to-text async result push. Wire shape (live-verified):
 //   { f1: uint, f2: { f1 = msgId (echoes the request), f8 = text, ... } }

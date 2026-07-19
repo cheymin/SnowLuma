@@ -1,4 +1,4 @@
-import { createContext, useContext, useId, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useId, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import {
   Accessibility, AlertTriangle, Bell, Bug, Check, Clock, Code2, Download, ExternalLink, Github, Image as ImageIcon,
@@ -252,6 +252,27 @@ function SettingRow({
   );
 }
 
+function SliderSettingRow({
+  label,
+  hint,
+  ...sliderProps
+}: {
+  label: string;
+  hint?: ReactNode;
+} & Omit<ComponentProps<typeof Slider>, 'label'>) {
+  const hintId = useId();
+  return (
+    <div className="flex flex-col gap-2.5 px-5 py-4">
+      <Slider
+        {...sliderProps}
+        label={label}
+        aria-describedby={hint ? hintId : undefined}
+      />
+      {hint && <p id={hintId} className="text-[12px] leading-snug text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
 // A settings group: a card whose header sits above a hairline-divided list of rows.
 function Group({
   title, description, icon: Icon, children,
@@ -497,21 +518,17 @@ function AppearancePanel() {
         <SettingRow label="圆角">
           <Segmented value={a.radius} options={RADIUS_OPTIONS.map((r) => ({ value: r.value, label: r.label }))} onChange={(radius) => setAppearance({ radius })} />
         </SettingRow>
-        <SettingRow label={`界面缩放（${Math.round(a.uiScale * 100)}%）`} hint="整体放大或缩小界面，适合高分屏或视力需要。" layout="stack">
-          <div className="flex items-center gap-3">
-            <span className="text-meta text-muted-foreground tabular-nums">{Math.round(UI_SCALE.min * 100)}%</span>
-            <Slider
-              min={UI_SCALE.min}
-              max={UI_SCALE.max}
-              step={UI_SCALE.step}
-              value={a.uiScale}
-              onChange={(e) => setAppearance({ uiScale: Number(e.target.value) })}
-              className="flex-1"
-              aria-label="界面缩放"
-            />
-            <span className="text-meta text-muted-foreground tabular-nums">{Math.round(UI_SCALE.max * 100)}%</span>
-          </div>
-        </SettingRow>
+        <SliderSettingRow
+          label="界面缩放"
+          hint="整体放大或缩小界面，适合高分屏或视力需要。"
+          min={UI_SCALE.min}
+          max={UI_SCALE.max}
+          step={UI_SCALE.step}
+          value={a.uiScale}
+          valueLabelFormat={(nextValue) => `${Math.round(nextValue * 100)}%`}
+          onValueChange={(uiScale) => setAppearance({ uiScale })}
+          aria-valuetext={`${Math.round(a.uiScale * 100)}%`}
+        />
         <SettingRow label="显示密度">
           <Segmented value={a.density} options={DENSITY_OPTIONS} onChange={(density) => setAppearance({ density })} />
         </SettingRow>
@@ -521,7 +538,14 @@ function AppearancePanel() {
 
       <TopbarPanel />
 
-      <Group title="无障碍与侧栏" icon={Accessibility} description="动效、对比度与侧栏默认状态。">
+      <Group title="交互与无障碍" icon={Accessibility} description="光标、右键菜单、动效、对比度与侧栏行为。">
+        <SettingRow label="自定义光标与右键菜单" hint="默认关闭；开启后使用主题化光标与 SnowLuma 右键菜单，关闭后立即恢复浏览器原生行为。" layout="inline">
+          <ToggleSwitch
+            value={a.customPointerSystem}
+            onChange={(customPointerSystem) => setAppearance({ customPointerSystem })}
+            ariaLabel="自定义光标与右键菜单"
+          />
+        </SettingRow>
         <SettingRow label="减弱动效" hint="弱化页面切换、弹簧等装饰性动画（保留轻微淡入），对低端设备与晕动敏感者更友好。" layout="inline">
           <ToggleSwitch value={a.reduceMotion} onChange={(reduceMotion) => setAppearance({ reduceMotion })} ariaLabel="减弱动效" />
         </SettingRow>
@@ -660,26 +684,27 @@ function BackgroundCard({
 
           {a.background.hasImage && (
             <>
-              <SettingRow label={`遮罩强度（${Math.round(a.background.imageOpacity * 100)}%）`} hint="越高越能盖住壁纸、提升前景可读性。" layout="stack">
-                <Slider
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={a.background.imageOpacity}
-                  onChange={(e) => setAppearance({ background: { imageOpacity: Number(e.target.value) } })}
-                  aria-label="遮罩强度"
-                />
-              </SettingRow>
-              <SettingRow label={`模糊（${a.background.imageBlur}px）`} layout="stack">
-                <Slider
-                  min={0}
-                  max={40}
-                  step={1}
-                  value={a.background.imageBlur}
-                  onChange={(e) => setAppearance({ background: { imageBlur: Number(e.target.value) } })}
-                  aria-label="背景模糊"
-                />
-              </SettingRow>
+              <SliderSettingRow
+                label="遮罩强度"
+                hint="越高越能盖住壁纸、提升前景可读性。"
+                min={0}
+                max={1}
+                step={0.05}
+                value={a.background.imageOpacity}
+                valueLabelFormat={(nextValue) => `${Math.round(nextValue * 100)}%`}
+                onValueChange={(imageOpacity) => setAppearance({ background: { imageOpacity } })}
+                aria-valuetext={`${Math.round(a.background.imageOpacity * 100)}%`}
+              />
+              <SliderSettingRow
+                label="背景模糊"
+                min={0}
+                max={40}
+                step={1}
+                value={a.background.imageBlur}
+                valueLabelFormat={(nextValue) => `${nextValue}px`}
+                onValueChange={(imageBlur) => setAppearance({ background: { imageBlur } })}
+                aria-valuetext={`${a.background.imageBlur} 像素`}
+              />
             </>
           )}
         </>

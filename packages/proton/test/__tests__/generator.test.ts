@@ -169,7 +169,7 @@ interface Int32Msg {
     ])).value).toBe(-1);
   });
 
-  it('accepts sign-extended 10-byte values for uint_32 fields without accepting real overflow', () => {
+  it('retains the low 32 bits of extended uint_32 field varints', () => {
     const { dec } = makeRoundTripFromSchema(
       `interface Uint32Msg { value: pb<1, uint_32>; }`,
       'Uint32Msg',
@@ -183,12 +183,28 @@ interface Int32Msg {
       0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
     ])).value).toBe(0xfffffffe);
 
-    // 2^32 is neither uint32 nor a sign-extended negative int32, so accepting
-    // ten-byte compatibility must not turn genuine overflow into truncation.
-    expect(() => dec(Uint8Array.from([
+    // QQ-compatible uint32 readers consume up to a full 64-bit varint and
+    // retain its low 32 bits. Some push-envelope sequences use that wire
+    // representation, so values with non-zero high bits must remain decodable.
+    expect(dec(Uint8Array.from([
       0x08,
       0x80, 0x80, 0x80, 0x80, 0x10,
-    ]))).toThrow(/uint32 field varint overflow/);
+    ])).value).toBe(0);
+    expect(dec(Uint8Array.from([
+      0x08,
+      0x87, 0x80, 0x80, 0x80, 0x10,
+    ])).value).toBe(7);
+
+    // Compatibility applies only to complete uint64 varints. Truncated input
+    // and values wider than 64 bits must still fail loudly.
+    expect(() => dec(Uint8Array.from([
+      0x08,
+      0x80,
+    ]))).toThrow(/truncated uint64 varint/);
+    expect(() => dec(Uint8Array.from([
+      0x08,
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02,
+    ]))).toThrow(/uint64 varint overflow/);
   });
 
   it('rejects malformed length-delimited fields without leaving parent bounds', () => {

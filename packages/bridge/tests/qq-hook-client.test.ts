@@ -2,6 +2,7 @@ import net from 'net';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { Duplex } from 'stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { listLiveLinuxPipePids, QqHookClient } from '../src/qq-hook-client';
 
@@ -44,7 +45,7 @@ describe('listLiveLinuxPipePids', () => {
   });
 });
 
-describe.skipIf(process.platform === 'win32')('QqHookClient — pipe close mid-send', () => {
+describe('QqHookClient — pipe close mid-send', () => {
   // Regression: when the control pipe closes while a send() is awaiting its
   // ack, rejectControlPending() rejects BOTH the ack and reply deferreds. The
   // reply is only `await`ed after the ack, so if the ack rejects first the
@@ -54,10 +55,6 @@ describe.skipIf(process.platform === 'win32')('QqHookClient — pipe close mid-s
   // guard on each deferred prevents it; without the guard this test trips the
   // unhandledRejection assertion below.
   it('does not raise an unhandled rejection', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'snowluma-pipe-'));
-    const prevRuntimeDir = process.env.SNOWLUMA_HOOK_RUNTIME_DIR;
-    process.env.SNOWLUMA_HOOK_RUNTIME_DIR = dir;
-
     const PID = 778899;
     const helloFrame = (): Buffer => {
       const h = Buffer.alloc(40);
@@ -69,10 +66,23 @@ describe.skipIf(process.platform === 'win32')('QqHookClient — pipe close mid-s
     };
 
     let controlConn: net.Socket | null = null;
-    const controlServer = net.createServer((sock) => { controlConn = sock; sock.write(helloFrame()); });
-    const recvServer = net.createServer((sock) => { sock.write(helloFrame()); });
-    await new Promise<void>((r) => controlServer.listen(path.join(dir, `mojo.${PID}.control.sock`), () => r()));
-    await new Promise<void>((r) => recvServer.listen(path.join(dir, `mojo.${PID}.recv.sock`), () => r()));
+    let signalControlWrite!: () => void;
+    const controlWriteStarted = new Promise<void>((resolve) => { signalControlWrite = resolve; });
+    const createConnection = vi.spyOn(net, 'createConnection').mockImplementation((() => {
+      const socket = new Duplex({
+        read() { /* peer data is injected with emit('data') */ },
+        write(_chunk, _encoding, callback) {
+          signalControlWrite();
+          callback();
+        },
+      }) as net.Socket;
+      controlConn = socket;
+      queueMicrotask(() => {
+        socket.emit('connect');
+        queueMicrotask(() => socket.emit('data', helloFrame()));
+      });
+      return socket;
+    }) as typeof net.createConnection);
 
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
@@ -81,28 +91,25 @@ describe.skipIf(process.platform === 'win32')('QqHookClient — pipe close mid-s
     const client = new QqHookClient(PID);
     client.on('error', () => { /* socket reset on destroy — ignore */ });
     try {
-      await client.connectAll({ recv: true });
+      await client.connect();
 
       // Start a reply-expecting send, let it reach the in-flight (awaiting-ack)
       // state, then have the "hook" drop the pipe before it answers.
       const sent = client.send('noop', null, { wantReply: true, ackTimeoutMs: 1000, replyTimeoutMs: 1000 })
         .then(() => 'resolved' as const, (e: unknown) => e);
-      await new Promise((r) => setTimeout(r, 30));
+      await controlWriteStarted;
       controlConn?.destroy();
 
       const outcome = await sent;
-      await new Promise((r) => setTimeout(r, 50)); // let Node surface any unhandled rejection
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toBe('control pipe closed');
       expect(unhandled, `unhandled rejections leaked: ${unhandled.map(String).join(', ')}`).toHaveLength(0);
     } finally {
       process.off('unhandledRejection', onUnhandled);
       client.close();
-      await new Promise<void>((r) => controlServer.close(() => r()));
-      await new Promise<void>((r) => recvServer.close(() => r()));
-      if (prevRuntimeDir === undefined) delete process.env.SNOWLUMA_HOOK_RUNTIME_DIR;
-      else process.env.SNOWLUMA_HOOK_RUNTIME_DIR = prevRuntimeDir;
-      await rm(dir, { recursive: true, force: true });
+      createConnection.mockRestore();
     }
   });
 });

@@ -6,6 +6,7 @@ import { IdentityService } from '@snowluma/protocol/identity-service';
 import { MSG_PUSH_CMD, parseMsgPush, SysMsgDedup } from '@snowluma/protocol/msg-push';
 import { KICK_NT_CMD, parseKickNT } from '@snowluma/protocol/kick-nt';
 import { IncomingPacketPipeline, type CmdParser } from '@snowluma/protocol/packet-pipeline';
+import type { OnlineDeviceInfo } from '@snowluma/protocol/events';
 import { buildApiHub, type ApiHub } from './apis';
 import {
   AiVoiceChatType,
@@ -35,6 +36,7 @@ export class Bridge implements BridgeInterface {
   private msgRandom_ = (Date.now() & 0xFFFFFFFF) >>> 0;
   // Per-account dedup for QQ NT's already-deduped system pushes (#137).
   private readonly sysMsgDedup_ = new SysMsgDedup();
+  private onlineClients_: readonly Readonly<OnlineDeviceInfo>[] | null = null;
 
   constructor(identity: IdentityService) {
     this.identity = identity;
@@ -94,6 +96,13 @@ export class Bridge implements BridgeInterface {
     });
     this.pipeline.registerCmd(MSG_PUSH_CMD, (pkt, identity) => parseMsgPush(pkt, identity, this.sysMsgDedup_));
     this.pipeline.registerCmd(KICK_NT_CMD, parseKickNT);
+    this.events.on('online_devices_changed', (event) => {
+      const snapshot = event.devices.map((device) => Object.freeze({ ...device }));
+      this.onlineClients_ = Object.freeze(snapshot);
+      log.debug('online-device snapshot updated: uin=%s clients=%d types=%s',
+        this.identity.uin, snapshot.length,
+        snapshot.map((device) => device.clientType).join(','));
+    });
   }
 
   dispose(): void {
@@ -102,6 +111,7 @@ export class Bridge implements BridgeInterface {
     this.packetClientsByPid_.clear();
     this.packetClient_ = null;
     this.packetClientPid_ = null;
+    this.onlineClients_ = null;
     try {
       this.identity.close();
     } finally {
@@ -201,6 +211,9 @@ export class Bridge implements BridgeInterface {
       throw new Error(`Bridge receive-health invariant violated: PID=${pid} is not attached`);
     }
     this.receiveHealthByPid_.set(pid, healthy);
+  }
+  getOnlineClients(): readonly Readonly<OnlineDeviceInfo>[] | null {
+    return this.onlineClients_;
   }
   onPacket(pkt: PacketInfo): void {
     this.pipeline.process(pkt);

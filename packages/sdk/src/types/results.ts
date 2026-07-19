@@ -1,4 +1,4 @@
-import type { JsonArray, JsonObject, JsonValue } from './json';
+import type { JsonObject, JsonValue } from './json';
 
 export interface SendMessageResult {
   message_id: number;
@@ -116,8 +116,14 @@ export interface ClientKeyInfo {
   expireTime: string;
 }
 
+export interface OnlineClientInfo {
+  app_id: number;
+  device_name: string;
+  device_kind: '电脑' | 'Pad' | '手机' | '未知设备';
+}
+
 export interface OnlineClientsInfo {
-  clients: JsonArray;
+  clients: OnlineClientInfo[];
 }
 
 export interface UrlSafetyInfo {

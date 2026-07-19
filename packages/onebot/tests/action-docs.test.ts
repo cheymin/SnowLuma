@@ -22,6 +22,21 @@ describe('action-docs', () => {
     expect(duration).toMatchObject({ type: 'int', required: false, default: 1800 });
   });
 
+  it.each(['get_group_root_files', 'get_group_files_by_folder'])(
+    'documents folder last-upload metadata for %s',
+    (name) => {
+      const action = docs.find((d) => d.name === name);
+      const properties = action?.returnsSchema?.properties as Record<string, any> | undefined;
+      const folderProperties = properties?.folders?.items?.properties as Record<string, unknown> | undefined;
+
+      expect(folderProperties).toEqual(expect.objectContaining({
+        last_upload_time: expect.objectContaining({ type: 'integer' }),
+        last_uploader: expect.objectContaining({ type: 'integer' }),
+        last_uploader_name: expect.objectContaining({ type: 'string' }),
+      }));
+    },
+  );
+
   it('renders markdown with header + an action section', () => {
     const md = renderActionDocsMarkdown(docs);
     expect(md).toContain('# OneBot Actions');

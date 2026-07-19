@@ -11,6 +11,7 @@ import type {
 import {
   getFriendList,
   getGroupInfo,
+  getGroupFiles,
   getGroupList,
   getGroupMemberInfo,
   getGroupMemberList,
@@ -89,9 +90,15 @@ function makeMember(uin: number, nickname: string, card = ''): GroupMemberInfo {
   };
 }
 
-function makeProfile(uin: number, nickname: string, sex: 'male' | 'female' | 'unknown' = 'unknown', age = 0): UserProfileInfo {
+function makeProfile(
+  uin: number,
+  nickname: string,
+  sex: 'male' | 'female' | 'unknown' = 'unknown',
+  age = 0,
+  sign = '',
+): UserProfileInfo {
   return {
-    uin, uid: `u_${uin}`, nickname, remark: '', qid: '', sex, age, sign: '', avatar: '',
+    uin, uid: `u_${uin}`, nickname, remark: '', qid: '', sex, age, sign, avatar: '',
   };
 }
 
@@ -155,6 +162,35 @@ describe('onebot/contact-actions / getFriendList', () => {
     });
     const out = await getFriendList(bridge);
     expect(out).toEqual([{ user_id: 33333, nickname: 'bob', remark: '' }]);
+  });
+});
+
+describe('onebot/contact-actions / getGroupFiles', () => {
+  it('returns folder last-upload metadata in OneBot field names', async () => {
+    const list = vi.fn(async () => ({
+      files: [],
+      folders: [{
+        folderId: 'd1',
+        folderName: 'dir',
+        createTime: 100,
+        creator: 123,
+        creatorName: 'creator',
+        totalFileCount: 2,
+        lastUploadTime: 200,
+        lastUploader: 5_000_000_001,
+        lastUploaderName: 'uploader',
+      }],
+    }));
+    const bridge = fakeBridge({ apis: { groupFile: { list } } });
+
+    const out = await getGroupFiles(bridge, 12345, '/');
+
+    expect(out.folders).toEqual([expect.objectContaining({
+      last_upload_time: 200,
+      last_uploader: 5_000_000_001,
+      last_uploader_name: 'uploader',
+    })]);
+    expect(list).toHaveBeenCalledWith(12345, '/');
   });
 });
 
@@ -353,10 +389,16 @@ describe('onebot/contact-actions / getGroupMemberInfo', () => {
 describe('onebot/contact-actions / getStrangerInfo', () => {
   it('returns a fetched profile', async () => {
     const bridge = fakeBridge({
-      fetchUserProfile: vi.fn(async () => makeProfile(55555, 'Eve', 'female', 25)),
+      fetchUserProfile: vi.fn(async () => makeProfile(55555, 'Eve', 'female', 25, 'Stay curious')),
     });
     const out = await getStrangerInfo(bridge, 55555);
-    expect(out).toMatchObject({ user_id: 55555, nickname: 'Eve', sex: 'female', age: 25 });
+    expect(out).toMatchObject({
+      user_id: 55555,
+      nickname: 'Eve',
+      sex: 'female',
+      age: 25,
+      long_nick: 'Stay curious',
+    });
   });
 
   it('falls back to identity.findUserProfile when fetch fails but the profile is cached', async () => {
@@ -364,11 +406,15 @@ describe('onebot/contact-actions / getStrangerInfo', () => {
       fetchUserProfile: vi.fn(async () => { throw new Error('net'); }),
       identity: fakeIdentity({
         findUserProfile: (uin: number) =>
-          uin === 66666 ? makeProfile(66666, 'Frank', 'male', 30) : null,
+          uin === 66666 ? makeProfile(66666, 'Frank', 'male', 30, 'Cached signature') : null,
       }),
     });
     const out = await getStrangerInfo(bridge, 66666);
-    expect(out).toMatchObject({ user_id: 66666, nickname: 'Frank' });
+    expect(out).toMatchObject({
+      user_id: 66666,
+      nickname: 'Frank',
+      long_nick: 'Cached signature',
+    });
   });
 
   it('returns null when neither fetch nor cache produces a profile', async () => {

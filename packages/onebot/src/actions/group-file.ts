@@ -113,6 +113,9 @@ export const actions = [
               creator: { type: 'integer', description: '创建者 QQ 号' },
               create_name: { type: 'string', description: '创建者昵称' },
               total_file_count: { type: 'integer', description: '文件夹内文件总数' },
+              last_upload_time: { type: 'integer', description: '最后上传时间戳' },
+              last_uploader: { type: 'integer', description: '最后上传者 QQ 号' },
+              last_uploader_name: { type: 'string', description: '最后上传者昵称' },
             },
           },
         },
@@ -165,6 +168,9 @@ export const actions = [
               creator: { type: 'integer', description: '创建者 QQ 号' },
               create_name: { type: 'string', description: '创建者昵称' },
               total_file_count: { type: 'integer', description: '文件夹内文件总数' },
+              last_upload_time: { type: 'integer', description: '最后上传时间戳' },
+              last_uploader: { type: 'integer', description: '最后上传者 QQ 号' },
+              last_uploader_name: { type: 'string', description: '最后上传者昵称' },
             },
           },
         },
@@ -290,4 +296,3 @@ export const actions = [
     },
   }),
 ];
-

@@ -95,6 +95,30 @@ export interface FriendRequest {
   info?: pb<1, FriendRequestInfo>;
 }
 
+/**
+ * Online-device snapshot carried by Event 0x210 / subType 349.
+ *
+ * Field numbers were recovered from QQ NT's OnRecvOnLineDev decoder. The
+ * outer four fields describe the current client, while field 5 contains the
+ * online-device entries exposed by getOnLineDev's kernel cache.
+ */
+export interface OnlineDeviceNotifyItem {
+  appId?:        pb<1, uint_32>;
+  instanceId?:   pb<2, uint_32>;
+  /** Packed terminal value; QQ normalizes it to the low byte before use. */
+  clientType?:   pb<3, uint_32>;
+  platform?:     pb<4, uint_32>;
+  deviceName?:   pb<5, string>;
+}
+
+export interface OnlineDeviceNotify {
+  appId?:        pb<1, uint_32>;
+  instanceId?:   pb<2, uint_32>;
+  clientType?:   pb<3, uint_32>;
+  platform?:     pb<4, uint_32>;
+  devices?:      pb_repeated<5, OnlineDeviceNotifyItem>;
+}
+
 export interface FriendRecallTipInfo {
   tip?: pb<2, string>;
 }

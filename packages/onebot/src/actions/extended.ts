@@ -1199,25 +1199,60 @@ export const actions = [
     },
   }),
 
-  // get_online_clients — 在线设备列表。NapCat 也拿不到（注册监听后 sleep 500ms
-  // 直接返回空），且其返回是裸数组 []，偏离 OneBot v11 / go-cqhttp 规范。
-  // SnowLuma 暂无对应单包 SSO cmd，返回 OneBot v11 标准空壳 { clients: [] }
-  // ——刻意采用规范形状而非 NapCat 的裸 []，故对照 NapCat 客户端此处不严格 parity。
   defineAction({
     name: 'get_online_clients',
-    summary: '获取在线客户端（占位，OneBot v11 形状）',
+    summary: '获取在线客户端',
     readOnly: true,
-    returns: '{ clients }：在线设备列表（占位，clients 恒为空数组）。',
+    returns: '{ clients }：QQ 本次会话最近推送的在线设备快照。',
     returnsSchema: {
       type: 'object',
       properties: {
-        clients: { type: 'array', description: '在线设备列表（占位，恒空）' },
+        clients: {
+          type: 'array',
+          description: '在线设备列表',
+          items: {
+            type: 'object',
+            properties: {
+              app_id: { type: 'integer', description: '客户端 ID' },
+              device_name: { type: 'string', description: '设备名称' },
+              device_kind: {
+                type: 'string',
+                enum: ['电脑', 'Pad', '手机', '未知设备'],
+                description: '设备类别',
+              },
+            },
+            required: ['app_id', 'device_name', 'device_kind'],
+          },
+        },
       },
       required: ['clients'],
     },
-    params: {},
-    run: async () => {
-      return okResponse({ clients: [] });
+    params: {
+      no_cache: f.bool().default(false).describe('是否强制刷新；QQ 当前仅暴露本地快照，true 会明确失败'),
+    },
+    run: async (p, ctx) => {
+      if (p.no_cache) {
+        return failedResponse(RETCODE.ACTION_FAILED,
+          'online-client fresh refresh is unavailable; QQ exposes only its local snapshot');
+      }
+      const snapshot = ctx.bridge.getOnlineClients();
+      if (snapshot === null) {
+        return failedResponse(RETCODE.ACTION_FAILED,
+          'online-client snapshot has not been observed in this session');
+      }
+      const kindLabels = {
+        computer: '电脑',
+        pad: 'Pad',
+        phone: '手机',
+        unknown: '未知设备',
+      } as const;
+      return okResponse({
+        clients: snapshot.map((device) => ({
+          app_id: device.appId,
+          device_name: device.deviceName,
+          device_kind: kindLabels[device.deviceKind],
+        })),
+      });
     },
   }),
 
@@ -2050,7 +2085,7 @@ export const actions = [
     summary: '设置个性签名（longNick/long_nick，严格 string）',
     params: { longNick: f.raw(), long_nick: f.raw() },
     run: async (p, ctx) => {
-      const longNick = p.longNick || p.long_nick;
+      const longNick = p.longNick !== undefined ? p.longNick : p.long_nick;
       if (typeof longNick !== 'string') return failedResponse(RETCODE.BAD_REQUEST, 'invalid longNick');
       await ctx.bridge.apis.profile.setSelfLongNick(longNick);
       return okResponse({});

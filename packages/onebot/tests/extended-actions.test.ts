@@ -121,6 +121,45 @@ function makeHandler(ctx: ApiActionContext): ApiHandler {
   return new ApiHandler(ctx);
 }
 
+describe('extended-actions / set_self_longnick', () => {
+  it('accepts an empty longNick to clear the signature', async () => {
+    const setSelfLongNick = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ setSelfLongNick });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('set_self_longnick', {
+      longNick: '',
+    });
+
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(setSelfLongNick).toHaveBeenCalledWith('');
+  });
+
+  it('accepts an empty long_nick compatibility alias', async () => {
+    const setSelfLongNick = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ setSelfLongNick });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('set_self_longnick', {
+      long_nick: '',
+    });
+
+    expect(response).toMatchObject({ status: 'ok', retcode: 0 });
+    expect(setSelfLongNick).toHaveBeenCalledWith('');
+  });
+
+  it.each([
+    ['missing value', {}],
+    ['non-string value', { longNick: 0 }],
+  ])('rejects %s without calling the bridge', async (_case, params) => {
+    const setSelfLongNick = vi.fn(async () => undefined);
+    const bridge = fakeBridge({ setSelfLongNick });
+
+    const response = await makeHandler(fakeCtx(bridge)).handle('set_self_longnick', params);
+
+    expect(response).toMatchObject({ status: 'failed', retcode: 1400 });
+    expect(setSelfLongNick).not.toHaveBeenCalled();
+  });
+});
+
 describe('extended-actions / group notice options', () => {
   it('coerces and forwards every supported announcement option', async () => {
     const sendNotice = vi.fn(async () => ({ ec: 0 }));
@@ -1020,9 +1059,9 @@ describe('extended-actions / ocr_image', () => {
 // NOTE two deliberate divergences from NapCat:
 //   • _get_model_show reuses NapCat's array/variants shape but ECHOES the
 //     requested model instead of NapCat's hardcoded 'napcat'.
-//   • get_online_clients returns the OneBot-v11/go-cqhttp { clients: [] }
-//     envelope, NOT NapCat's (non-standard) bare []. A strict-NapCat client
-//     would expect an array here; we intentionally follow the spec instead.
+//   • get_online_clients returns the OneBot-v11/go-cqhttp { clients }
+//     envelope, NOT NapCat's (non-standard) bare array. Its contents come from
+//     the latest QQ online-device snapshot observed by this Bridge lifecycle.
 
 describe('extended-actions / TierB compat stubs', () => {
   it('_get_model_show returns the napcat-shaped variants array, echoing the model', async () => {
@@ -1048,10 +1087,55 @@ describe('extended-actions / TierB compat stubs', () => {
     expect(res).toMatchObject({ status: 'ok', retcode: 0, data: null });
   });
 
-  it('get_online_clients returns the OneBot-standard {clients:[]} envelope', async () => {
-    const res = await makeHandler(fakeCtx(fakeBridge())).handle('get_online_clients', {});
-    expect(res.status).toBe('ok');
-    expect(res.data).toMatchObject({ clients: [] });
+  it('get_online_clients returns the latest observed QQ device snapshot', async () => {
+    const getOnlineClients = vi.fn(() => [{
+      appId: 537242075,
+      instanceId: 202,
+      clientType: 1,
+      platform: 3,
+      deviceName: 'DESKTOP-TEST',
+      deviceKind: 'computer',
+    }]);
+    const res = await makeHandler(fakeCtx(fakeBridge({ getOnlineClients })))
+      .handle('get_online_clients', {});
+
+    expect(getOnlineClients).toHaveBeenCalledOnce();
+    expect(res).toMatchObject({
+      status: 'ok',
+      retcode: 0,
+      data: {
+        clients: [{
+          app_id: 537242075,
+          device_name: 'DESKTOP-TEST',
+          device_kind: '电脑',
+        }],
+      },
+    });
+  });
+
+  it('get_online_clients reports an unavailable snapshot instead of a false empty list', async () => {
+    const res = await makeHandler(fakeCtx(fakeBridge({ getOnlineClients: () => null })))
+      .handle('get_online_clients', {});
+
+    expect(res).toMatchObject({ status: 'failed', retcode: 100 });
+    expect(res.wording).toMatch(/snapshot has not been observed/i);
+  });
+
+  it('get_online_clients preserves an observed empty snapshot as a successful result', async () => {
+    const res = await makeHandler(fakeCtx(fakeBridge({ getOnlineClients: () => [] })))
+      .handle('get_online_clients', {});
+
+    expect(res).toMatchObject({ status: 'ok', retcode: 0, data: { clients: [] } });
+  });
+
+  it('get_online_clients rejects a forced refresh that QQ does not expose on the packet wire', async () => {
+    const getOnlineClients = vi.fn(() => []);
+    const res = await makeHandler(fakeCtx(fakeBridge({ getOnlineClients })))
+      .handle('get_online_clients', { no_cache: true });
+
+    expect(res).toMatchObject({ status: 'failed', retcode: 100 });
+    expect(res.wording).toMatch(/fresh refresh is unavailable/i);
+    expect(getOnlineClients).not.toHaveBeenCalled();
   });
 
   it('_mark_all_as_read passes every observed session to the batched SSO implementation', async () => {

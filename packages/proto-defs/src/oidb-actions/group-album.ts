@@ -5,11 +5,11 @@ export interface ExtMapEntry {
   value?: pb<2, string>;
 }
 export interface ReqInfo {
-  groupId?:    pb<1, string>;
-  albumId?:    pb<2, string>;
-  field3?:     pb<3, int_32>;
-  attachInfo?: pb<4, string>;
-  field5?:     pb<5, string>;
+  groupId?:  pb<1, string>;
+  albumId?:  pb<2, string>;
+  field3?:   pb<3, int_32>;
+  field4?:   pb<4, string>;
+  pageInfo?: pb<5, string>;
 }
 export interface GetMediaListRequest {
   field1?:  pb<1, int_32>;
