@@ -539,7 +539,7 @@ function AppearancePanel() {
       <TopbarPanel />
 
       <Group title="交互与无障碍" icon={Accessibility} description="光标、右键菜单、动效、对比度与侧栏行为。">
-        <SettingRow label="自定义光标与右键菜单" hint="使用主题化光标与 SnowLuma 右键菜单；关闭后立即恢复浏览器原生行为。" layout="inline">
+        <SettingRow label="自定义光标与右键菜单" hint="默认关闭；开启后使用主题化光标与 SnowLuma 右键菜单，关闭后立即恢复浏览器原生行为。" layout="inline">
           <ToggleSwitch
             value={a.customPointerSystem}
             onChange={(customPointerSystem) => setAppearance({ customPointerSystem })}
