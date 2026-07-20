@@ -32,69 +32,26 @@ WORKDIR /app/dist
 RUN npm install --omit=dev
 
 # ─── Stage 2: Runtime (Ubuntu + Xvfb + QQ + x11vnc) ──────────────────────
-FROM ubuntu:22.04
+# 基于 NapCat base 镜像 — 已预装 QQ NT + 所有运行时依赖
+# 腾讯 CDN 限制海外下载，所以直接复用 NapCat 已构建好的 base
+FROM mlikiowa/napcat-docker:base
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    DISPLAY=:0 \
+ENV DISPLAY=:0 \
     SNOWLUMA_WEBUI_PORT=7860 \
     SNOWLUMA_HOOK_AUTOLOAD=1 \
     HOME=/home/snowluma
 
-# Install Xvfb, x11vnc, window manager, fonts, and QQ runtime deps
+# 安装额外依赖：fluxbox（窗口管理器）、字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb \
-    x11vnc \
     fluxbox \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libgbm1 \
-    libasound2 \
-    libxshmfence1 \
-    libxss1 \
-    libgtk-3-0 \
-    libdrm2 \
-    libnotify4 \
-    libxtst6 \
-    libxkbcommon0 \
-    libxcb-damage0 \
-    libxcb-xfixes0 \
-    libxcb-shape0 \
-    libxcb-util1 \
-    libxcb-image0 \
-    libxcb-cursor0 \
-    libxcb-keysyms1 \
-    libxcb-render-util0 \
-    libxcb-icccm4 \
-    libxdamage1 \
-    libxrandr2 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxi6 \
-    libxtst6 \
-    ca-certificates \
-    wget \
-    xz-utils \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 22 (for running SnowLuma)
+# 安装 Node.js 22（NapCat base 可能自带较低版本）
 RUN wget -qO- https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install QQ Linux client
-ARG TARGETARCH
-RUN case "$TARGETARCH" in \
-    "amd64") QQ_ARCH=amd64 ;; \
-    "arm64") QQ_ARCH=arm64 ;; \
-    *)       QQ_ARCH=amd64 ;; \
-    esac \
-    && wget -q "https://dldir1.qq.com/qqfile/qq/QQNT/Linux/QQ_3.2.15_${QQ_ARCH}_01.deb" -O /tmp/qq.deb \
-    && dpkg -i /tmp/qq.deb || apt-get -f install -y \
-    && rm /tmp/qq.deb \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (QQ refuses to run as root)
