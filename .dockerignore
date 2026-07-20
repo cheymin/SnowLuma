@@ -12,5 +12,7 @@ config/
 data/
 logs/
 *.md
+!EULA.md
+!PRIVACY.md
 Dockerfile
 docker-compose*.yml
