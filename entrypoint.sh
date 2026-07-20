@@ -3,23 +3,22 @@ set -euo pipefail
 
 # ─── SnowLuma Docker Entrypoint ──────────────────────────────────────────
 # Starts: Xvfb → fluxbox → QQ → x11vnc → SnowLuma
-# All services run in the background except SnowLuma (foreground, receives
-# signals for graceful shutdown).
+# SnowLuma runs in the foreground (receives SIGTERM for graceful shutdown).
 # ─────────────────────────────────────────────────────────────────────────
 
 export DISPLAY=:0
 export HOME=/home/snowluma
 
-mkdir -p "$HOME/.config" /app/config /app/data /app/logs
+# Ensure runtime directories exist (VOLUME mounts may reset ownership)
+mkdir -p /tmp/.X11-unix "$HOME/.config" /app/config /app/data /app/logs
+chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 
-# Resolution for the virtual framebuffer
 RESOLUTION="${SNOWLUMA_RESOLUTION:-1280x720x24}"
 
 echo "[entrypoint] Starting Xvfb on :0 ($RESOLUTION)..."
-Xvfb :0 -screen 0 "$RESOLUTION" -ac -nolisten tcp &
+Xvfb :0 -screen 0 "$RESOLUTION" -ac -nolisten tcp -nolisten unix &
 XVFB_PID=$!
 
-# Give Xvfb a moment to initialize
 sleep 1
 
 echo "[entrypoint] Starting fluxbox window manager..."
@@ -28,12 +27,21 @@ FLUXBOX_PID=$!
 
 sleep 0.5
 
-echo "[entrypoint] Starting QQ desktop client..."
-# QQ needs --no-sandbox when running in containers
-/opt/QQ/qq --no-sandbox --disable-gpu-sandbox >/dev/null 2>&1 &
-QQ_PID=$!
+# Find QQ binary — different versions install to different paths
+QQ_BIN=""
+for p in /opt/QQ/qq /usr/share/qq/qq /usr/bin/qq /opt/QQ/qq-linux; do
+  if [ -x "$p" ]; then QQ_BIN="$p"; break; fi
+done
 
-# Wait for QQ to start before launching VNC
+if [ -n "$QQ_BIN" ]; then
+  echo "[entrypoint] Starting QQ: $QQ_BIN"
+  "$QQ_BIN" --no-sandbox --disable-gpu-sandbox >/dev/null 2>&1 &
+  QQ_PID=$!
+else
+  echo "[entrypoint] WARNING: QQ binary not found — VNC will show empty desktop"
+  QQ_PID=""
+fi
+
 sleep 3
 
 echo "[entrypoint] Starting x11vnc on 127.0.0.1:5900 (no password)..."
@@ -52,10 +60,9 @@ VNC_PID=$!
 
 echo "[entrypoint] Starting SnowLuma on port ${SNOWLUMA_WEBUI_PORT:-7860}..."
 
-# Cleanup function — kill all child processes on exit
 cleanup() {
   echo "[entrypoint] Shutting down..."
-  kill "$QQ_PID" 2>/dev/null || true
+  [ -n "$QQ_PID" ] && kill "$QQ_PID" 2>/dev/null || true
   kill "$VNC_PID" 2>/dev/null || true
   kill "$FLUXBOX_PID" 2>/dev/null || true
   kill "$XVFB_PID" 2>/dev/null || true
@@ -63,5 +70,4 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Run SnowLuma in the foreground so it receives SIGTERM
 exec node /app/index.mjs

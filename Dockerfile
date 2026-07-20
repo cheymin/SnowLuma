@@ -101,13 +101,17 @@ RUN case "$TARGETARCH" in \
 RUN useradd -m -s /bin/bash snowluma \
     && echo "snowluma ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
+# Pre-create directories with correct ownership (VOLUME mounts would
+# otherwise default to root, causing Permission Denied for snowluma user)
+RUN mkdir -p /tmp/.X11-unix \
+    && chmod 1777 /tmp/.X11-unix \
+    && mkdir -p /app/config /app/data /app/logs /home/snowluma/.config \
+    && chown -R snowluma:snowluma /app/config /app/data /app/logs /home/snowluma
+
 # Copy built SnowLuma
 COPY --from=builder --chown=snowluma:snowluma /app/dist /app
 COPY --chown=snowluma:snowluma entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# Volumes for persistent data
-VOLUME ["/home/snowluma/.config", "/app/config", "/app/data", "/app/logs"]
 
 EXPOSE 7860
 
