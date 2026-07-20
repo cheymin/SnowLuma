@@ -8,6 +8,7 @@ dist/
 **/dist/
 .vscode/
 .idea/
+.pnpm-store/
 
 /config/
 /data/
@@ -21,3 +22,8 @@ logs/
 
 # test coverage output
 coverage/
+
+# Vendored QQ NT debs (kept locally for offline builds; GitHub's 100 MB
+# per-file cap blocks them from being committed — fetched at build time
+# from the AUR beta CDN path instead, see Dockerfile).
+qq/*.deb

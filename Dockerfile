@@ -31,27 +31,45 @@ RUN case "$TARGETPLATFORM" in \
 WORKDIR /app/dist
 RUN npm install --omit=dev
 
-# ─── Stage 2: Runtime (Ubuntu + Xvfb + QQ + x11vnc) ──────────────────────
-# 基于 NapCat base 镜像 — 已预装 QQ NT + 所有运行时依赖
-# 腾讯 CDN 限制海外下载，所以直接复用 NapCat 已构建好的 base
-FROM mlikiowa/napcat-docker:base
+# ─── Stage 2: Runtime (Ubuntu + Xvfb + QQ NT + x11vnc) ───────────────────
+# QQ NT 3.2.31 deb is fetched at build time from AUR's "beta" CDN path,
+# which is not subject to the Tencent CDN sign/timestamp restriction that
+# blocks the canonical /release/ path from overseas runners.
+FROM ubuntu:22.04
 
-ENV DISPLAY=:0 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISPLAY=:0 \
     SNOWLUMA_WEBUI_PORT=7860 \
     SNOWLUMA_HOOK_AUTOLOAD=1 \
     HOME=/home/snowluma
 
-# 安装额外依赖：fluxbox（窗口管理器）、字体
+# X11/VNC stack + fluxbox + fonts + QQ NT runtime deps (from deb control).
+# wget: needed for NodeSource setup script and QQ deb download.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fluxbox \
-    fonts-noto-cjk \
-    fonts-noto-color-emoji \
-    sudo \
+    xvfb x11vnc fluxbox \
+    fonts-noto-cjk fonts-noto-color-emoji \
+    sudo wget ca-certificates \
+    libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils \
+    libatspi2.0-0 libuuid1 libsecret-1-0 \
+    libappindicator3-1 \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Node.js 22（NapCat base 可能自带较低版本）
+# Install Node.js 22
 RUN wget -qO- https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install QQ NT 3.2.31 — AUR beta CDN path, no sign required.
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) DEB_URL="https://qqdl.gtimg.cn/qqfile/QQNT/9.9.32/beta/c390e792/linuxqq_3.2.31-51102_amd64.deb" ;; \
+      arm64) DEB_URL="https://qqdl.gtimg.cn/qqfile/QQNT/9.9.32/beta/c390e792/linuxqq_3.2.31-51102_arm64.deb" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" && exit 1 ;; \
+    esac \
+    && wget -q -O /tmp/qq.deb "$DEB_URL" \
+    && dpkg -i /tmp/qq.deb \
+    && rm -f /tmp/qq.deb \
+    && apt-get -f install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (QQ refuses to run as root)
