@@ -43,7 +43,7 @@ export function VncPage() {
 
     try {
       // Dynamic import — noVNC is a heavy browser-only lib, load on demand.
-      const { default: RFB } = await import('@novnc/novnc/core/rfb');
+      const { default: RFB } = await import('@novnc/novnc');
 
       const token = localStorage.getItem('snowluma_token') ?? '';
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -59,8 +59,9 @@ export function VncPage() {
       rfb.addEventListener('connect', () => {
         setState('connected');
       });
-      rfb.addEventListener('disconnect', (ev: { detail: { clean: boolean } }) => {
-        if (ev.detail.clean) {
+      rfb.addEventListener('disconnect', (ev) => {
+        const detail = ev.detail as { clean: boolean };
+        if (detail.clean) {
           setState('idle');
         } else {
           setState('error');
