@@ -17,6 +17,7 @@ const DEFAULT_NAV_ITEMS: UiLayoutItem[] = [
   { id: '/processes', visible: true },
   { id: '/config', visible: true },
   { id: '/logs', visible: true },
+  { id: '/vnc', visible: true },
   { id: '/settings', visible: true },
 ];
 

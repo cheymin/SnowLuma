@@ -53,12 +53,14 @@
     "@hono/node-server": "^1.19.14",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@types/node": "^24.12.2",
+    "@types/ws": "^8.5.0",
     "cross-env": "^10.1.0",
     "hono": "^4.12.25",
     "tsx": "^4.21.0",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plugin-cp": "^6.0.3",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.4",
+    "ws": "^8.18.0"
   }
 }

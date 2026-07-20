@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.github
+.vscode
+.idea
+coverage
+.claude
+config/
+data/
+logs/
+*.md
+Dockerfile
+docker-compose*.yml

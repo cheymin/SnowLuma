@@ -188,7 +188,7 @@ export function SystemPanel() {
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label className="flex items-center">端口<EnvBadge field="webuiPort" /></Label>
-            <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" placeholder="5099" />
+            <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" placeholder="7860" />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label className="flex items-center">绑定地址<EnvBadge field="webuiHost" /></Label>

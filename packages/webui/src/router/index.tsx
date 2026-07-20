@@ -73,6 +73,15 @@ const debugRoute = createRoute({
   ),
 });
 
+const vncRoute = createRoute({
+  path: '/vnc',
+  getParentRoute: () => appLayoutRoute,
+  component: lazyRouteComponent(
+    () => import('@/components/pages/vnc-page'),
+    'VncPage',
+  ),
+});
+
 /** Settings sub-tabs — also the contract for the `?tab=` deep link. */
 export const SETTINGS_TABS = ['appearance', 'data', 'advanced', 'account', 'system', 'notifications', 'globalConfig', 'about'] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -95,7 +104,7 @@ export const settingsRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-  appLayoutRoute.addChildren([overviewRoute, processesRoute, configRoute, logsRoute, debugRoute, settingsRoute]),
+  appLayoutRoute.addChildren([overviewRoute, processesRoute, configRoute, logsRoute, debugRoute, vncRoute, settingsRoute]),
 ]);
 
 export const appRouter = createRouter({
@@ -112,4 +121,4 @@ declare module '@tanstack/react-router' {
 }
 
 /** Paths registered on the layout — single source of truth for nav metadata. */
-export type AppPath = '/' | '/processes' | '/config' | '/logs' | '/debug' | '/settings';
+export type AppPath = '/' | '/processes' | '/config' | '/logs' | '/debug' | '/vnc' | '/settings';

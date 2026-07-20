@@ -26,8 +26,8 @@ export default defineConfig({
     port: 5178,
     strictPort: false,
     proxy: {
-      '/api': { target: 'http://localhost:5099', changeOrigin: true, ws: true },
-      '/avatar': { target: 'http://localhost:5099', changeOrigin: true },
+      '/api': { target: 'http://localhost:7860', changeOrigin: true, ws: true },
+      '/avatar': { target: 'http://localhost:7860', changeOrigin: true },
     },
   },
   build: {

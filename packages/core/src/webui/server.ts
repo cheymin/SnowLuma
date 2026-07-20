@@ -42,6 +42,7 @@ import type { StateBus, StateResource } from './state-bus';
 import { startConnectionDiffLoop } from './connection-diff-loop';
 import { describeTrustProxy, makeClientIpResolver, parseTrustProxy } from './client-ip';
 import { findAvailablePort } from './port';
+import { attachVncProxy, probeVnc } from './vnc-proxy';
 import {
   clearBackgroundImage,
   loadUiConfig,
@@ -413,7 +414,7 @@ const CACHED_DISTRO = (() => { try { return detectDistro(); } catch { return os.
 const CACHED_ARCH_LABEL = normalizeArch(os.arch());
 
 export async function initWebUI(
-  desiredPort: number = 5099,
+  desiredPort: number = 7860,
   oneBotManager: OneBotManager,
   hookManager?: HookManager,
   notificationManager?: NotificationManager,
@@ -1431,6 +1432,12 @@ export async function initWebUI(
     }
   });
 
+  // ─── VNC status (WebSocket proxy lives on the HTTP server upgrade event) ──
+  app.get('/api/vnc/status', async (c) => {
+    const status = await probeVnc();
+    return c.json(status);
+  });
+
   // ─── Static frontend ─────────────────────────────────────────────────────
   // Build path is relative to the bundled / dev __dirname. SPA fallback to
   // index.html so client-side routes (if any) keep working.
@@ -1480,9 +1487,17 @@ export async function initWebUI(
   }
 
   await new Promise<void>((resolve) => {
-    serve({ fetch: app.fetch, port: finalPort, hostname: host, ...(tlsServe ?? {}) }, (info) => {
+    const httpServer = serve({ fetch: app.fetch, port: finalPort, hostname: host, ...(tlsServe ?? {}) }, (info) => {
       log.info(`listening ${scheme}://${host}:${info.port}`);
       resolve();
+    });
+
+    // Attach the VNC WebSocket proxy — intercepts /api/vnc/ws upgrade requests
+    // and pipes RFB traffic to the local x11vnc on :5900. Authenticated via
+    // the panel session token, so no separate VNC password is needed.
+    attachVncProxy(httpServer, (token) => {
+      const info = sessionTokens.get(token);
+      return !!info && Date.now() <= info.expiresAt;
     });
   });
   return { port: finalPort };

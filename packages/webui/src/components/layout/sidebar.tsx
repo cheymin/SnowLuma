@@ -1,4 +1,4 @@
-import { Bug, Check, Eye, EyeOff, GripVertical, LayoutDashboard, Lock, Pin, PinOff, PlugZap, Settings, Sparkles, SlidersHorizontal, Terminal } from 'lucide-react';
+import { Bug, Check, Eye, EyeOff, GripVertical, LayoutDashboard, Lock, Monitor, Pin, PinOff, PlugZap, Settings, Sparkles, SlidersHorizontal, Terminal } from 'lucide-react';
 import { motion, Reorder } from 'motion/react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -23,6 +23,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/config', label: '节点配置', icon: Settings, description: 'OneBot 协议端点' },
   { to: '/logs', label: '日志', icon: Terminal, description: '实时事件流' },
   { to: '/debug', label: '调试', icon: Bug, description: '测试台与实时活动' },
+  { to: '/vnc', label: '远程桌面', icon: Monitor, description: 'VNC 远程连接 QQ' },
   { to: '/settings', label: '系统设置', icon: SlidersHorizontal, description: '主题与账号' },
 ];
 

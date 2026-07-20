@@ -21,7 +21,7 @@ export interface RuntimeConfig {
 const CONFIG_DIR = 'config';
 const RUNTIME_CONFIG_PATH = path.join(CONFIG_DIR, 'runtime.json');
 
-const DEFAULT_WEBUI_PORT = 5099;
+const DEFAULT_WEBUI_PORT = 7860;
 const DEFAULT_WEBUI_HOST = '0.0.0.0';
 
 /**

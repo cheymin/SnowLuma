@@ -4,7 +4,7 @@ import { normalizeRuntimeConfig, resolveRuntimeEnvOverrides } from '../src/runti
 describe('normalizeRuntimeConfig', () => {
   it('applies all defaults for an empty object', () => {
     expect(normalizeRuntimeConfig({})).toEqual({
-      webuiPort: 5099,
+      webuiPort: 7860,
       hookAutoLoad: false,
       webuiHost: '0.0.0.0',
       webuiTls: { enabled: false },
@@ -35,7 +35,7 @@ describe('normalizeRuntimeConfig', () => {
       webuiTls: 'yes',         // non-object → default
       trustProxy: 5,           // non-string → default
     });
-    expect(out.webuiPort).toBe(5099);
+    expect(out.webuiPort).toBe(7860);
     expect(out.webuiHost).toBe('0.0.0.0');
     expect(out.webuiTls).toEqual({ enabled: false });
     expect(out.trustProxy).toBe('');
@@ -47,7 +47,7 @@ describe('normalizeRuntimeConfig', () => {
   });
 
   it('rejects a non-object input back to full defaults', () => {
-    expect(normalizeRuntimeConfig(null).webuiPort).toBe(5099);
+    expect(normalizeRuntimeConfig(null).webuiPort).toBe(7860);
     expect(normalizeRuntimeConfig('nope').webuiHost).toBe('0.0.0.0');
   });
 });
@@ -112,6 +112,6 @@ describe('updateRuntimeConfig (fs)', () => {
     process.env.SNOWLUMA_WEBUI_PORT = '9999';
     updateRuntimeConfig({ webuiHost: '127.0.0.1' });
     const onDisk = JSON.parse(fs.readFileSync(path.join('config', 'runtime.json'), 'utf8'));
-    expect(onDisk.webuiPort).toBe(5099); // default on-disk, NOT the env 9999
+    expect(onDisk.webuiPort).toBe(7860); // default on-disk, NOT the env 9999
   });
 });
