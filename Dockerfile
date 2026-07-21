@@ -57,9 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgbm1 libdrm2 libegl1 libgles2 \
     libxcomposite1 libxdamage1 libxrandr2 libxkbcommon0 \
     libasound2 dbus nginx \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/log/nginx /var/lib/nginx /tmp/nginx \
-    && chown -R snowluma:snowluma /var/log/nginx /var/lib/nginx /tmp/nginx
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 22
 RUN wget -qO- https://deb.nodesource.com/setup_22.x | bash - \
@@ -88,7 +86,8 @@ RUN useradd -m -s /bin/bash snowluma \
 RUN mkdir -p /tmp/.X11-unix \
     && chmod 1777 /tmp/.X11-unix \
     && mkdir -p /app/config /app/data /app/logs /home/snowluma/.config \
-    && chown -R snowluma:snowluma /app/config /app/data /app/logs /home/snowluma
+    && mkdir -p /var/log/nginx /var/lib/nginx /tmp/nginx \
+    && chown -R snowluma:snowluma /app/config /app/data /app/logs /home/snowluma /var/log/nginx /var/lib/nginx /tmp/nginx
 
 # Copy built SnowLuma
 COPY --from=builder --chown=snowluma:snowluma /app/dist /app
