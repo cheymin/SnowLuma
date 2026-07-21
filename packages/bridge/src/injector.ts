@@ -1,4 +1,4 @@
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -115,8 +115,30 @@ export function listHookProcesses(): HookProcessBaseInfo[] {
   if (!addon) return [];
   return [...new Set(addon.getAllMainProcess())]
     .filter(pid => Number.isInteger(pid) && pid > 0)
+    .filter(pid => !isElectronChildProcess(pid))
     .sort((a, b) => a - b)
     .map(pid => ({ pid, name: defaultProcessName(), path: '' }));
+}
+
+/**
+ * Filter out Electron child processes (renderer, GPU, utility, etc.) from
+ * the list returned by the native addon. The native `getAllMainProcess()`
+ * walks /proc and misclassifies any process whose cmdline contains "qq" as a
+ * "QQ main process", including Electron children that have `--type=renderer`
+ * or `--type=gpu-process`. Injecting into a child process breaks QQ's IPC
+ * and renders the UI unusable, so we drop them before the WebUI even sees
+ * them.
+ */
+function isElectronChildProcess(pid: number): boolean {
+  if (process.platform !== 'linux') return false;
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+    return cmdline.includes('--type=');
+  } catch {
+    // Can't read cmdline — process gone / permission denied. Treat as not-a-child
+    // so the caller can decide via load() path (which will fail with a clear error).
+    return false;
+  }
 }
 
 export function injectHookProcess(pid: number): HookInjectResult {
