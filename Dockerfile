@@ -43,8 +43,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SNOWLUMA_HOOK_AUTOLOAD=1 \
     HOME=/home/snowluma
 
-# X11/VNC stack + fluxbox + fonts + QQ NT runtime deps (from deb control).
-# wget: needed for NodeSource setup script and QQ deb download.
+# X11/VNC stack + fluxbox + fonts + QQ NT runtime deps.
+# QQ NT is an Electron app; beyond the .deb's declared Depends we also need
+# the Mesa/GBM/DRI stack and ALSA stubs or Chromium exits on startup inside
+# a headless Docker container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb x11vnc fluxbox \
     fonts-noto-cjk fonts-noto-color-emoji \
@@ -52,7 +54,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils \
     libatspi2.0-0 libuuid1 libsecret-1-0 \
     libappindicator3-1 \
-    && rm -rf /var/lib/apt/lists/*
+    libgbm1 libdrm2 libegl1 libgles2 \
+    libxcomposite1 libxdamage1 libxrandr2 libxkbcommon0 \
+    libasound2 dbus nginx \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/log/nginx /var/lib/nginx /tmp/nginx \
+    && chown -R snowluma:snowluma /var/log/nginx /var/lib/nginx /tmp/nginx
 
 # Install Node.js 22
 RUN wget -qO- https://deb.nodesource.com/setup_22.x | bash - \
@@ -86,6 +93,7 @@ RUN mkdir -p /tmp/.X11-unix \
 # Copy built SnowLuma
 COPY --from=builder --chown=snowluma:snowluma /app/dist /app
 COPY --chown=snowluma:snowluma entrypoint.sh /entrypoint.sh
+COPY --chown=snowluma:snowluma hf/nginx.conf /etc/nginx/nginx.conf
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 7860
