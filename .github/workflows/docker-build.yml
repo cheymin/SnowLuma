@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to build (comma-separated)"
+        required: false
+        default: "linux/amd64"
 
 permissions:
   contents: read
@@ -12,11 +18,16 @@ permissions:
 jobs:
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # QEMU only needed when building non-amd64 platforms.
+      # amd64 is the runner's native arch, so we skip QEMU for the default
+      # dispatch and save ~30s of binfmt setup.
       - name: Set up QEMU
+        if: inputs.platforms != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -42,7 +53,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # arm64 needs QEMU emulation, which makes `pnpm build:all` (incl.
+          # better-sqlite3 native compilation) exceed GitHub Actions' 6-hour
+          # job timeout. HF Space is amd64-only, so we default to amd64 and
+          # opt into arm64 via workflow_dispatch when a native arm64 runner
+          # is available.
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
