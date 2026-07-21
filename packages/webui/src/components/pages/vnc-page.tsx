@@ -54,7 +54,7 @@ export function VncPage() {
         shared: true,
       });
       rfb.scaleViewport = true;
-      rfb.resizeSession = true;
+      rfb.resizeSession = false;
 
       rfb.addEventListener('connect', () => {
         setState('connected');
@@ -100,12 +100,12 @@ export function VncPage() {
   }, []);
 
   return (
-    <div className="mx-auto flex h-full max-w-6xl flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
       <motion.header
         initial={{ opacity: 0, y: -6 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="sticky top-0 z-20 flex items-center justify-between rounded-2xl bg-background/60 px-4 py-3 backdrop-blur-xl"
+        className="flex flex-wrap items-center justify-between gap-3"
       >
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
@@ -142,30 +142,43 @@ export function VncPage() {
         </div>
       </motion.header>
 
-      <div className="relative flex-1 overflow-hidden rounded-2xl border bg-card/50">
-        {/* noVNC renders into this container */}
-        <div ref={containerRef} className="h-full w-full" />
+      {/* Explicit-height window so noVNC's canvas can size itself.
+          MainLayout wraps pages in a ScrollArea viewport that breaks the
+          `h-full` chain — any %height resolves to 0, and RFB creates a
+          0x0 canvas (invisible). Using viewport-relative height here
+          decouples the VNC surface from the scroll container. */}
+      <div
+        className="relative w-full overflow-hidden rounded-2xl border border-border bg-black shadow-lg"
+        style={{ height: 'min(72vh, 720px)' }}
+      >
+        {/* noVNC renders its <canvas class="noVNC_canvas"> directly into this
+            div. We absolutely-position it so the canvas fills the window and
+            centers its content via object-fit on the RFB side (scaleViewport). */}
+        <div
+          ref={containerRef}
+          className="absolute inset-0 [&_canvas]:!h-full [&_canvas]:!w-full [&_canvas]:!object-contain [&>div]:!h-full [&>div]:!w-full"
+        />
 
         {state === 'idle' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
             <Monitor className="h-12 w-12 opacity-40" />
             <p className="text-sm">点击「连接」开始远程桌面会话</p>
             {!vncReady && (
-              <p className="text-xs text-amber-500/80">VNC 服务未就绪，请稍候…</p>
+              <p className="text-xs text-amber-400/80">VNC 服务未就绪，请稍候…</p>
             )}
           </div>
         )}
 
         {state === 'connecting' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
             <Loader2 className="h-8 w-8 animate-spin opacity-60" />
             <p className="text-sm">正在连接…</p>
           </div>
         )}
 
         {state === 'error' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
-            <MonitorOff className="h-12 w-12 text-destructive/50" />
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
+            <MonitorOff className="h-12 w-12 text-destructive/60" />
             <p className="text-sm text-destructive">{errorMsg || '连接失败'}</p>
             <button
               onClick={connect}
