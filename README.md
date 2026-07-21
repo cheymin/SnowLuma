@@ -3,20 +3,75 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SnowLuma/SnowLuma/releases"><img alt="最新版本" src="https://img.shields.io/github/v/release/SnowLuma/SnowLuma?label=release&style=flat-square"></a>
-  <a href="https://github.com/SnowLuma/SnowLuma/actions/workflows/dev-build.yml"><img alt="构建状态" src="https://img.shields.io/github/actions/workflow/status/SnowLuma/SnowLuma/dev-build.yml?branch=dev&style=flat-square&label=build"></a>
-  <a href="https://www.npmjs.com/package/@snowluma/sdk"><img alt="SnowLuma SDK 版本" src="https://img.shields.io/npm/v/%40snowluma%2Fsdk?style=flat-square&label=sdk&color=287fb8"></a>
-  <a href="https://www.npmjs.com/package/@snowluma/mcp"><img alt="SnowLuma MCP 版本" src="https://img.shields.io/npm/v/%40snowluma%2Fmcp?style=flat-square&label=mcp&color=7658c7"></a>
+  <a href="https://github.com/cheymin/SnowLuma/actions/workflows/docker-build.yml"><img alt="镜像构建" src="https://img.shields.io/github/actions/workflow/status/cheymin/SnowLuma/docker-build.yml?branch=main&style=flat-square&label=docker"></a>
+  <a href="https://github.com/cheymin/SnowLuma/pkgs/container/snowluma"><img alt="GHCR 镜像" src="https://img.shields.io/badge/ghcr.io-snowluma-blue?style=flat-square"></a>
   <a href="https://github.com/SnowLuma/SnowLuma/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/SnowLuma/SnowLuma?style=flat-square"></a>
 </p>
 
+> [!NOTE]
+> **Fork 改动说明**：本 fork 面向容器化与云端部署场景，对原版做了一些调整。原版发行方式与功能保持不变，详见下方「Fork 改动」章节。
+
+## Fork 改动
+
+本 fork 在原版 SnowLuma 基础上做了以下调整，主要目标是**单一容器、单端口暴露、开箱即用**：
+
+### 1. 默认端口改为 7860
+
+- `packages/common/src/runtime.ts` 中的 `DEFAULT_WEBUI_PORT` 由 5099 改为 **7860**
+- `packages/core/config/runtime.json` 中 `webuiPort` 同步为 7860
+- WebUI 服务端 `packages/core/src/webui/server.ts` 默认监听 7860
+- 容器对外只暴露 7860 一个端口，所有子服务由内部反代统一接入
+
+### 2. noVNC 集成到 WebUI
+
+无需独立 VNC 客户端，登录 WebUI 后在侧边栏点击「远程桌面」即可在浏览器中操作 QQ 桌面客户端：
+
+- 新增 `packages/core/src/webui/vnc-proxy.ts`：WebSocket → TCP 代理，将 `/api/vnc/ws` 转发到容器内 `127.0.0.1:5900`（x11vnc）
+- 新增 `packages/webui/src/components/pages/vnc-page.tsx`：基于 `@novnc/novnc` 的远程桌面页面，支持鼠标/键盘输入、全屏切换
+- WebUI 路由 `/vnc` 与侧边栏「远程桌面」菜单项
+- **VNC 鉴权走面板 token**，不再需要单独的 VNC 密码
+
+### 3. Docker 镜像构建
+
+- 新增 `Dockerfile` 多阶段构建：Stage 1 用 `node:22-slim` 构建 SnowLuma；Stage 2 基于 `ubuntu:22.04` 安装 Xvfb、x11vnc、fluxbox、QQ NT 与所有运行时依赖
+- 新增 `.github/workflows/docker-build.yml`：push 到 `main` 时自动构建并推送到 `ghcr.io/cheymin/snowluma:latest`（amd64，可通过 `workflow_dispatch` 手动触发 arm64 构建）
+- QQ NT 3.2.31 deb 在构建时从腾讯 CDN 下载（amd64 与 arm64 自动选择）
+- 容器内自动启动：Xvfb → fluxbox → QQ → x11vnc → SnowLuma
+- 已设置 `ptrace_scope=0` 以允许 hook 注入 QQ 主进程
+
+### 4. Hugging Face Space 一行部署
+
+主镜像内置 nginx，HF Space 只需两行 Dockerfile：
+
+```dockerfile
+FROM ghcr.io/cheymin/snowluma:latest
+ENV SNOWLUMA_HF_MODE=1
+```
+
+- `SNOWLUMA_HF_MODE=1` 触发 entrypoint 自动启动 nginx
+- nginx 监听 7860，反代 SnowLuma（5099）/ OneBot HTTP（3000→`/http/`）/ OneBot WS（3001→`/ws/`）
+- noVNC WebSocket 走 SnowLuma 的 `/api/vnc/ws`，无需额外配置
+
+### 5. 进程注入过滤
+
+修复 `packages/bridge/src/injector.ts`：原生 addon 把 Electron 子进程（renderer / GPU / utility）误判为 "QQ 主进程"，导致 WebUI 进程列表显示 10+ 条目。新增 `isElectronChildProcess(pid)` 过滤掉带 `--type=` 的子进程，只保留真正的 QQ 主进程。
+
+### 与原版的兼容性
+
+- 所有上游功能保持不变：OneBot v11 协议、SDK、MCP、WebUI 主体逻辑
+- OneBot HTTP（3000）和 WS（3001）端口不变
+- 上游更新可直接 rebase，fork 改动集中在新增文件（Dockerfile / vnc-proxy.ts / vnc-page.tsx 等）和少量端口/依赖修改
+
+---
+
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
-  <a href="#运行链路">运行链路</a> ·
+  <a href="#docker-部署">Docker 部署</a> ·
+  <a href="#hugging-face-space-部署">HF Space 部署</a> ·
   <a href="./docs/onebot-actions.md">动作参考</a> ·
   <a href="./packages/sdk/README.md">SDK</a> ·
   <a href="./packages/mcp/README.md">MCP</a> ·
-  <a href="https://github.com/SnowLuma/SnowLuma/issues">问题反馈</a>
+  <a href="https://github.com/cheymin/SnowLuma/issues">问题反馈</a>
 </p>
 
 SnowLuma 是面向 QQ 客户端的 TypeScript 互操作运行时。它把 QQ 原生会话转换为 [OneBot v11](https://github.com/botuniverse/onebot-11) 动作与事件，并通过 WebSocket、HTTP、WebUI、SDK 和 MCP 提供统一入口；每个账号拥有独立会话，适合机器人开发、自动化与协议研究。
@@ -70,7 +125,7 @@ chmod +x launcher.sh
 
 ### 3. 打开 WebUI
 
-浏览器访问 [`http://localhost:5099`](http://localhost:5099)。初始账号为 `admin`，随机密码会显示在启动日志中；登录后即可接入已启动的 QQ 进程并配置 OneBot 连接。
+浏览器访问 [`http://localhost:7860`](http://localhost:7860)。初始账号为 `admin`，随机密码会显示在启动日志中；登录后即可接入已启动的 QQ 进程并配置 OneBot 连接。
 
 <details>
 <summary><strong>无人值守部署：通过环境变量确认协议</strong></summary>
@@ -86,6 +141,83 @@ SNOWLUMA_ACCEPT_PRIVACY=1
 
 </details>
 
+## Docker 部署
+
+### 拉取镜像
+
+```bash
+docker pull ghcr.io/cheymin/snowluma:latest
+```
+
+### 运行容器
+
+```bash
+docker run -d \
+  --name snowluma \
+  -p 7860:7860 \
+  -v snowluma-config:/app/config \
+  -v snowluma-data:/app/data \
+  -v snowluma-qq:/home/snowluma/.config \
+  ghcr.io/cheymin/snowluma:latest
+```
+
+| 挂载路径 | 内容 | 说明 |
+| --- | --- | --- |
+| `/app/config` | OneBot 配置、运行时配置、TLS 证书 | 核心配置 |
+| `/app/data` | 数据库、缓存 | 业务数据 |
+| `/home/snowluma/.config` | QQ NT 登录态 | 保留登录状态，避免重启重新扫码 |
+
+容器启动后：
+1. 自动启动 Xvfb → fluxbox → QQ → x11vnc → SnowLuma
+2. SnowLuma WebUI 监听 7860
+3. 登录 WebUI → 侧边栏「远程桌面」→ 点击「连接」即可在浏览器中看到 QQ 桌面
+4. 扫码登录 QQ → 「进程注入」页面加载 hook → 自动接入 OneBot
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SNOWLUMA_WEBUI_PORT` | `7860` | WebUI 监听端口 |
+| `SNOWLUMA_RESOLUTION` | `1280x720x24` | Xvfb 虚拟桌面分辨率 |
+| `SNOWLUMA_HOOK_AUTOLOAD` | `1` | 自动加载 hook 到 QQ 进程 |
+| `SNOWLUMA_HF_MODE` | （未设置）| 设为 `1` 启用 HF Space 模式（自动启动 nginx） |
+| `SNOWLUMA_ACCEPT_EULA` | （未设置）| 设为 `1` 跳过 EULA 确认页 |
+| `SNOWLUMA_ACCEPT_PRIVACY` | （未设置）| 设为 `1` 跳过隐私协议确认页 |
+
+## Hugging Face Space 部署
+
+1. 新建 HF Space（SDK 选 Docker）
+2. 上传 `Dockerfile`（仅需两行）：
+
+```dockerfile
+FROM ghcr.io/cheymin/snowluma:latest
+ENV SNOWLUMA_HF_MODE=1
+```
+
+3. 在 Space 的 **Settings → Repository secrets** 添加：
+
+   | Key | Value |
+   | --- | --- |
+   | `SNOWLUMA_ACCEPT_EULA` | `1` |
+   | `SNOWLUMA_ACCEPT_PRIVACY` | `1` |
+
+   （跳过协议确认，HF Space 重启时无人工干预）
+
+4. Space 构建完成即可访问。访问地址就是 Space URL（默认 7860 端口）。
+
+### 端口路由（HF 模式）
+
+nginx 在容器内监听 7860，统一反代：
+
+| 路径 | 上游 | 说明 |
+| --- | --- | --- |
+| `/` | `127.0.0.1:5099` | SnowLuma WebUI |
+| `/http/` | `127.0.0.1:3000` | OneBot HTTP |
+| `/ws/` | `127.0.0.1:3001` | OneBot WebSocket |
+| `/api/vnc/ws` | SnowLuma 内部代理 → `127.0.0.1:5900` | noVNC WebSocket |
+
+> ⚠️ HF Space 默认只持久化 `/data` 目录。若需保留配置与 QQ 登录态，请按 HF 官方文档开启 Persistent Storage 并自行处理路径映射。
+
 ## 选择接入方式
 
 | 入口 | 适合场景 | 参考 |
@@ -93,7 +225,7 @@ SNOWLUMA_ACCEPT_PRIVACY=1
 | WebSocket / HTTP | 对接现有 OneBot 机器人框架 | [OneBot 动作参考](docs/onebot-actions.md) |
 | TypeScript SDK | 编写类型安全的客户端与消息逻辑 | [`packages/sdk`](packages/sdk/README.md) |
 | MCP | 让支持 MCP 的工具查询或调用 SnowLuma 动作 | [`packages/mcp`](packages/mcp/README.md) |
-| WebUI | 管理运行状态、日志、账号与连接 | 启动后访问 `http://localhost:5099` |
+| WebUI | 管理运行状态、日志、账号与连接 | 启动后访问 `http://localhost:7860` |
 
 ## 开发与贡献
 
