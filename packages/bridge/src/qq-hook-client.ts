@@ -374,6 +374,30 @@ export class QqHookClient extends EventEmitter {
     return { ...this.loginState };
   }
 
+  /**
+   * Force the login state from an external source (e.g. port-probe login
+   * reconciliation). The native hook PUSHES a loginState frame only on the
+   * login edge; when that edge is missed (QQ auto-logged in before connect,
+   * Docker restore, etc.), the session's reconcile path probes QQ's ports
+   * directly and discovers the login. It must then feed that state back into
+   * the client so isLoggedIn becomes true and sendPacket stops short-circuiting.
+   *
+   * Idempotent: if the state already matches, this is a no-op. Always emits
+   * 'loginState' on change so downstream listeners (HookSession) stay in sync.
+   */
+  forceLoginState(state: QqHookLoginState): void {
+    if (this.closed) return;
+    const prev = this.loginState;
+    if (prev.loggedIn === state.loggedIn && prev.uin === state.uin) return;
+    this.loginState = { ...state };
+    this.emit('loginState', this.loginState);
+    if (state.loggedIn && !prev.loggedIn) {
+      const waiters = this.loginWaiters;
+      this.loginWaiters = [];
+      for (const w of waiters) w.resolve({ ...this.loginState });
+    }
+  }
+
   async waitForLogin({ timeoutMs = 0 } = {}): Promise<QqHookLoginState> {
     await this.connect();
     if (this.loginState.loggedIn) {

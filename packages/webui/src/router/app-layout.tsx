@@ -193,20 +193,7 @@ export function AppLayout() {
     };
   }, [pollInterval, refreshSystem]);
 
-  // Update check runs on its own slow cadence (6h), independent of the fast
-  // list-polling above — GitHub's API is rate-limited, the result rarely
-  // changes, and the server caches it anyway, so this is cheap.
-  useEffect(() => {
-    let running = false;
-    const tick = async () => {
-      if (running) return;
-      running = true;
-      try { await refreshUpdate(); } finally { running = false; }
-    };
-    tick();
-    const id = setInterval(tick, 6 * 60 * 60 * 1000);
-    return () => clearInterval(id);
-  }, [refreshUpdate]);
+
 
   const handleLogout = useCallback(async () => {
     await api.logout();

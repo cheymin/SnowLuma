@@ -11,12 +11,12 @@ import { IOneBotNetworkAdapter, type AdapterStatus, type NetworkAdapterContext }
 import { rawDataToString, safeClose, safeSend, safeSendAsync, startHeartbeat } from './utils';
 
 const moduleLog = createLogger('OneBot.WS-Client');
-const DEFAULT_RECONNECT_INTERVAL_MS = 5000;
-// Transport-level keepalive: ping every 30s, declare the link dead only after 2
-// consecutive pings go unanswered — ~90s of total silence (see startHeartbeat
-// for the +1-interval timing). Conservative on purpose so transient jitter/GC
-// never reaps a healthy connection. See issue #208.
-const HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_RECONNECT_INTERVAL_MS = 3000;
+// Transport-level keepalive: ping every 15s, declare the link dead after 2
+// consecutive pings go unanswered — ~45s of total silence.
+// Aggressive on purpose for reverse-proxy environments (HF Space, Cloudflare,
+// etc.) where idle connections get torn down silently.
+const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_MAX_MISSED = 2;
 const HEARTBEAT_DEAD_AFTER_S = (HEARTBEAT_INTERVAL_MS * (HEARTBEAT_MAX_MISSED + 1)) / 1000;
 
@@ -24,6 +24,7 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
   private socket: WebSocket | null = null;
   private connected = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempts = 0;
   private options: EventReportOptions;
   private role: WsRole;
   private explicitlyClosed = false;
@@ -46,6 +47,7 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
     if (this.config.enabled === false) return;
     if (!this.config.url) return;
     this.explicitlyClosed = false;
+    this.reconnectAttempts = 0;
     this.isEnabled = true;
     try {
       this.connect();
@@ -128,6 +130,7 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
       // heartbeat onto the current connection's slot.
       if (this.socket !== socket) return;
       this.connected = true;
+      this.reconnectAttempts = 0;
       this.log.info('[%s] connected %s', this.name, this.config.url);
       this.sendBootstrapMetaEvents(socket);
       // Only meaningful once OPEN — ping() no-ops before the handshake completes.
@@ -180,7 +183,15 @@ export class WsClientAdapter extends IOneBotNetworkAdapter<WsClientNetwork> {
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     if (this.explicitlyClosed) return;
-    const interval = Math.max(1000, this.config.reconnectIntervalMs ?? DEFAULT_RECONNECT_INTERVAL_MS);
+    const baseInterval = Math.max(1000, this.config.reconnectIntervalMs ?? DEFAULT_RECONNECT_INTERVAL_MS);
+    // Exponential backoff with jitter, capped at 60s.
+    // 1st retry: base (e.g. 3s), 2nd: ~6s, 3rd: ~12s, ..., max 60s
+    const maxBackoff = Math.min(60_000, baseInterval * Math.pow(2, this.reconnectAttempts));
+    const jitter = Math.random() * baseInterval * 0.5;
+    const interval = Math.floor(maxBackoff + jitter);
+    this.reconnectAttempts += 1;
+    this.log.info('[%s] reconnecting in %ds (attempt %d) %s',
+      this.name, Math.round(interval / 1000), this.reconnectAttempts, this.config.url);
     const timer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.explicitlyClosed || !this.isEnabled) return;

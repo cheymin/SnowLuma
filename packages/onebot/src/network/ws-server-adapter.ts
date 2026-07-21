@@ -13,10 +13,11 @@ import { isAuthorized, normalizePath, parseRequestPath, rawDataToString, safeClo
 
 const moduleLog = createLogger('OneBot.WS-Server');
 // Transport keepalive for each attached client, symmetric with the ws-client
-// adapter: ping every 30s, reap a client only after 2 consecutive pings go
-// unanswered — ~90s of total silence (see startHeartbeat for the +1-interval
-// timing). Any inbound frame resets the counter — see issue #208.
-const HEARTBEAT_INTERVAL_MS = 30_000;
+// adapter: ping every 15s, reap a client only after 2 consecutive pings go
+// unanswered — ~45s of total silence. Aggressive for reverse-proxy
+// environments (HF Space, Cloudflare, etc.) where idle connections get
+// torn down silently. Any inbound frame resets the counter.
+const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_MAX_MISSED = 2;
 const HEARTBEAT_DEAD_AFTER_S = (HEARTBEAT_INTERVAL_MS * (HEARTBEAT_MAX_MISSED + 1)) / 1000;
 

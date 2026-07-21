@@ -505,9 +505,17 @@ export class HookSession extends EventEmitter {
       if (this.disposed || !this.connected || this.loggedIn) { this.stopLoginReconcile(); return; }
       if (info?.loggedIn && isRealUin(info.uin)) {
         this.log.info('login reconciled via active probe: PID=%d UIN=%s', this.pid, info.uin);
-        // isRealUin guarantees a pure non-empty digit string, so BigInt() here
-        // cannot throw (keep that contract if isRealUin's regex is ever changed).
-        this.handleLoginState({ loggedIn: true, uin: info.uin, uinNumber: BigInt(info.uin) });
+        // Push the reconciled login state down to the QqHookClient so
+        // isLoggedIn becomes true and sendPacket stops short-circuiting
+        // with "qq_hook client is not logged in". The client then emits
+        // 'loginState', which we already listen for in bindClient →
+        // handleLoginState, so the session-level state and 'login' event
+        // follow naturally.
+        this.client?.forceLoginState({
+          loggedIn: true,
+          uin: info.uin,
+          uinNumber: BigInt(info.uin),
+        });
       }
     } finally {
       this.probing = false;
