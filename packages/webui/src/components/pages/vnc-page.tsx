@@ -1,16 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Loader2, Monitor, MonitorOff, Plug, PlugZap } from 'lucide-react';
+import { Loader2, Maximize2, Minimize2, Monitor, MonitorOff, Plug, PlugZap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type ConnState = 'idle' | 'connecting' | 'connected' | 'error';
 
 export function VncPage() {
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<unknown>(null);
   const [state, setState] = useState<ConnState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [vncReady, setVncReady] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Sync fullscreen state with browser fullscreen change events (ESC, etc.)
+  useEffect(() => {
+    const onChange = () => {
+      setIsFullscreen(document.fullscreenElement === surfaceRef.current);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    const el = surfaceRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+        // Hand focus to the RFB so keyboard input goes to the remote desktop,
+        // not the page's own buttons.
+        const rfb = rfbRef.current as { focus?: () => void } | null;
+        rfb?.focus?.();
+      }
+    } catch (err) {
+      console.warn('fullscreen toggle failed', err);
+    }
+  }, []);
 
   // Probe VNC server status on mount
   useEffect(() => {
@@ -55,9 +84,13 @@ export function VncPage() {
       });
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
+      rfb.showDotCursor = true;
 
       rfb.addEventListener('connect', () => {
         setState('connected');
+        // Hand focus to the RFB so keyboard input goes to the remote desktop
+        // (otherwise the page's own buttons capture the key events).
+        try { rfb.focus(); } catch { /* noop */ }
       });
       rfb.addEventListener('disconnect', (ev) => {
         const detail = ev.detail as { clean: boolean };
@@ -120,6 +153,25 @@ export function VncPage() {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge state={state} vncReady={vncReady} />
+          {state === 'connected' && (
+            <button
+              onClick={toggleFullscreen}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800/60 px-3 py-2 text-sm font-medium text-zinc-100 transition-colors hover:bg-zinc-800"
+              title={isFullscreen ? '退出全屏 (Esc)' : '进入全屏'}
+            >
+              {isFullscreen ? (
+                <>
+                  <Minimize2 className="h-4 w-4" />
+                  退出全屏
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="h-4 w-4" />
+                  全屏
+                </>
+              )}
+            </button>
+          )}
           {state === 'connected' || state === 'connecting' ? (
             <button
               onClick={disconnect}
@@ -142,25 +194,36 @@ export function VncPage() {
         </div>
       </motion.header>
 
-      {/* Explicit-height window so noVNC's canvas can size itself.
-          MainLayout wraps pages in a ScrollArea viewport that breaks the
-          `h-full` chain — any %height resolves to 0, and RFB creates a
-          0x0 canvas (invisible). Using viewport-relative height here
-          decouples the VNC surface from the scroll container. */}
+      {/* VNC surface. In normal mode capped at min(72vh, 720px); in
+          fullscreen mode the surfaceRef root gets `requestFullscreen()` so
+          it fills the whole viewport.
+          Background is pure black to match a real VNC client. */}
       <div
-        className="relative w-full overflow-hidden rounded-2xl border border-border bg-black shadow-lg"
-        style={{ height: 'min(72vh, 720px)' }}
+        ref={surfaceRef}
+        className={cn(
+          'relative w-full overflow-hidden rounded-2xl border border-border bg-black shadow-lg',
+          isFullscreen && 'rounded-none border-0',
+        )}
+        style={isFullscreen ? undefined : { height: 'min(72vh, 720px)' }}
       >
-        {/* noVNC renders its <canvas class="noVNC_canvas"> directly into this
-            div. We absolutely-position it so the canvas fills the window and
-            centers its content via object-fit on the RFB side (scaleViewport). */}
+        {/* noVNC container — must NOT be `absolute inset-0`, otherwise its
+            `<canvas class="noVNC_canvas">` ends up 0-height AND the absolute
+            layer intercepts pointer events before they reach the canvas.
+            Let RFB size itself via the parent's clientWidth/clientHeight
+            (which is the canvas's own size under scaleViewport=true). */}
         <div
           ref={containerRef}
-          className="absolute inset-0 [&_canvas]:!h-full [&_canvas]:!w-full [&_canvas]:!object-contain [&>div]:!h-full [&>div]:!w-full"
+          className="h-full w-full cursor-crosshair"
+          tabIndex={0}
+          onMouseDown={() => {
+            // Re-focus on click so the RFB receives subsequent keypresses
+            const rfb = rfbRef.current as { focus?: () => void } | null;
+            rfb?.focus?.();
+          }}
         />
 
         {state === 'idle' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
             <Monitor className="h-12 w-12 opacity-40" />
             <p className="text-sm">点击「连接」开始远程桌面会话</p>
             {!vncReady && (
@@ -170,14 +233,14 @@ export function VncPage() {
         )}
 
         {state === 'connecting' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
             <Loader2 className="h-8 w-8 animate-spin opacity-60" />
             <p className="text-sm">正在连接…</p>
           </div>
         )}
 
         {state === 'error' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
+          <div className="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-950/80 text-zinc-300 backdrop-blur-sm">
             <MonitorOff className="h-12 w-12 text-destructive/60" />
             <p className="text-sm text-destructive">{errorMsg || '连接失败'}</p>
             <button
