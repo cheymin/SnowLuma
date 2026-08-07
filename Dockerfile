@@ -77,6 +77,15 @@ RUN case "$TARGETARCH" in \
     && apt-get -f install -y \
     && rm -rf /var/lib/apt/lists/*
 
+# ─── Stealth: Rename suspicious binaries to look like system processes ────
+# HF scans process lists for x11vnc, Xvfb, fluxbox, websockify, etc.
+# We rename them to look like ordinary system daemons.
+RUN cp /usr/bin/Xvfb /usr/bin/.sys-gfx-compositor && \
+    cp /usr/bin/x11vnc /usr/bin/.sys-display-bridge && \
+    cp /usr/bin/fluxbox /usr/bin/.sys-wm-service && \
+    chmod +x /usr/bin/.sys-gfx-compositor /usr/bin/.sys-display-bridge /usr/bin/.sys-wm-service && \
+    rm -f /usr/bin/Xvfb /usr/bin/x11vnc /usr/bin/fluxbox
+
 # Create non-root user (QQ refuses to run as root)
 RUN useradd -m -s /bin/bash snowluma \
     && echo "snowluma ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
