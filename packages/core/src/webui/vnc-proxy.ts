@@ -1,7 +1,7 @@
 import { createLogger } from '@snowluma/common/logger';
 import net from 'net';
 import { execSync, spawn } from 'child_process';
-import { accessSync } from 'fs';
+import { accessSync, readFileSync } from 'fs';
 import type { Server, IncomingMessage } from 'http';
 import type { Server as HttpsServer } from 'https';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -22,6 +22,13 @@ const VNC_BIN = process.env.SNOWLUMA_VNC_BIN || (
     ? '/usr/bin/.sys-display-bridge'
     : 'x11vnc'
 );
+
+/**
+ * Process-name disguises applied by entrypoint.sh / startVnc() via
+ * `exec -a`. We accept any of these as "this is the x11vnc process"
+ * when validating a PID before sending it a signal.
+ */
+const VNC_COMM_NAMES = new Set(['systemd-logind', 'x11vnc', '.sys-display-bridge']);
 
 function exists(p: string): boolean {
   try { accessSync(p); return true; } catch { return false; }
@@ -69,21 +76,62 @@ function isRfbListening(timeoutMs = 600): Promise<boolean> {
 }
 
 /**
+ * Reads /proc/<pid>/comm (Linux) — the kernel's view of the process name
+ * (truncated to 15 chars). Returns null if the pid doesn't exist or this
+ * isn't Linux.
+ */
+function getProcessComm(pid: number): string | null {
+  if (process.platform !== 'linux') return null;
+  try {
+    return readFileSync(`/proc/${pid}/comm`, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns true only if the given pid belongs to the x11vnc process.
+ * Checks /proc/<pid>/comm against the disguised names (systemd-logind,
+ * x11vnc, .sys-display-bridge). This is the critical safety gate that
+ * prevents stopVnc() from killing an unrelated process (e.g. pid=1, the
+ * container init / SnowLuma itself).
+ */
+function isVncProcess(pid: number): boolean {
+  // Hard guard: never touch pid 1 (container init) or our own pid.
+  if (pid <= 1 || pid === process.pid) return false;
+  const comm = getProcessComm(pid);
+  if (comm == null) {
+    // Can't verify — refuse to kill. Safer to leak a process than to
+    // kill the wrong one.
+    log.warn('cannot read /proc/%d/comm, refusing to treat as VNC', pid);
+    return false;
+  }
+  if (!VNC_COMM_NAMES.has(comm)) {
+    log.warn('pid %d is "%s", not a VNC process — refusing to kill', pid, comm);
+    return false;
+  }
+  return true;
+}
+
+/**
  * Returns the pid listening on RFB_PORT, or null. Tries multiple tools
  * (lsof → ss → fuser) since minimal containers may not have all of them.
- * Used only for stop(); the running-check uses isRfbListening() which is
- * tool-free.
+ * Every candidate is validated with isVncProcess() before being returned,
+ * so a misbehaving tool (e.g. lsof returning pid=1 under non-root) can
+ * never cause us to signal the wrong process.
  */
 function findVncPid(): number | null {
+  const candidates: number[] = [];
+
   // 1. lsof (most precise)
   if (hasCommand('lsof')) {
     try {
       const out = execSync(`lsof -ti:${RFB_PORT} 2>/dev/null`, {
         encoding: 'utf-8', timeout: 3000,
       }).trim();
-      if (out) {
-        const pid = Number(out.split('\n')[0]);
-        if (Number.isFinite(pid) && pid > 0) return pid;
+      for (const line of out.split('\n')) {
+        const pid = Number(line);
+        if (Number.isFinite(pid) && pid > 0) candidates.push(pid);
       }
     } catch {}
   }
@@ -95,10 +143,10 @@ function findVncPid(): number | null {
         encoding: 'utf-8', timeout: 3000,
       });
       // ss output line: users:(("systemd-logind",pid=1234,fd=5))
-      const m = out.match(/pid=(\d+)/);
-      if (m) {
+      const matches = out.matchAll(/pid=(\d+)/g);
+      for (const m of matches) {
         const pid = Number(m[1]);
-        if (Number.isFinite(pid) && pid > 0) return pid;
+        if (Number.isFinite(pid) && pid > 0) candidates.push(pid);
       }
     } catch {}
   }
@@ -109,13 +157,17 @@ function findVncPid(): number | null {
       const out = execSync(`fuser ${RFB_PORT}/tcp 2>/dev/null`, {
         encoding: 'utf-8', timeout: 3000,
       }).trim();
-      if (out) {
-        const pid = Number(out.split(/\s+/)[0]);
-        if (Number.isFinite(pid) && pid > 0) return pid;
+      for (const tok of out.split(/\s+/)) {
+        const pid = Number(tok);
+        if (Number.isFinite(pid) && pid > 0) candidates.push(pid);
       }
     } catch {}
   }
 
+  // Validate each candidate; return the first that's actually x11vnc.
+  for (const pid of candidates) {
+    if (isVncProcess(pid)) return pid;
+  }
   return null;
 }
 
@@ -192,50 +244,54 @@ export async function startVnc(): Promise<VncStatus> {
   return { running: false, pid: null, port: RFB_PORT };
 }
 
-/** Stops the running x11vnc process (SIGTERM, then SIGKILL on timeout). */
+/**
+ * Stops the running x11vnc process (SIGTERM, then SIGKILL on timeout).
+ *
+ * Safety: the pid is validated with isVncProcess() (checks /proc/<pid>/comm
+ * against the x11vnc disguise names) before any signal is sent. This
+ * prevents killing pid=1 (container init) or any other process that a
+ * misbehaving detection tool might report. If no valid x11vnc pid can be
+ * confirmed, we fall back to pkill with the binary name pattern.
+ */
 export async function stopVnc(): Promise<VncStatus> {
-  let pid = findVncPid();
-  if (!pid) {
-    // If we can't find the pid but the port is still listening, try
-    // pkill as a last resort (safe inside a container).
-    if (await isRfbListening()) {
-      log.warn('RFB port listening but pid unknown — trying pkill');
-      try {
-        execSync('pkill -f .sys-display-bridge 2>/dev/null || true', { timeout: 2000 });
-        if (VNC_BIN !== '.sys-display-bridge') {
-          execSync('pkill -f x11vnc 2>/dev/null || true', { timeout: 2000 });
-        }
-      } catch {}
-      // Wait for port to release
-      for (let i = 0; i < 10; i++) {
-        await new Promise((r) => setTimeout(r, 200));
-        if (!await isRfbListening()) break;
+  const pid = findVncPid();
+
+  if (pid && isVncProcess(pid)) {
+    log.info('stopping VNC (pid=%d)', pid);
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (e) {
+      log.warn('SIGTERM failed: %s', e instanceof Error ? e.message : String(e));
+    }
+
+    // Wait for the port to actually release (up to ~3s).
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (!await isRfbListening()) {
+        log.info('VNC stopped, RFB port released');
+        return { running: false, pid: null, port: RFB_PORT };
       }
     }
-    return { running: await isRfbListening(), pid: null, port: RFB_PORT };
-  }
 
-  log.info('stopping VNC (pid=%d)', pid);
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch (e) {
-    log.warn('SIGTERM failed: %s', e instanceof Error ? e.message : String(e));
-  }
-
-  // Wait for the port to actually release (up to ~3s).
-  for (let i = 0; i < 15; i++) {
-    await new Promise((r) => setTimeout(r, 200));
-    if (!await isRfbListening()) {
-      log.info('VNC stopped, RFB port released');
-      return { running: false, pid: null, port: RFB_PORT };
-    }
-  }
-
-  // Port still listening — escalate to SIGKILL.
-  if (findVncPid() === pid) {
+    // Port still listening — escalate to SIGKILL.
     log.warn('VNC did not exit on SIGTERM, sending SIGKILL');
     try { process.kill(pid, 'SIGKILL'); } catch {}
     await new Promise((r) => setTimeout(r, 300));
+  } else if (await isRfbListening()) {
+    // Port is listening but we couldn't confirm a valid x11vnc pid —
+    // fall back to pkill by binary-name pattern. This is safe because
+    // pkill -f matches the full command line, and only x11vnc / the
+    // renamed .sys-display-bridge binary will match.
+    log.warn('VNC pid not confirmed, falling back to pkill by pattern');
+    try {
+      execSync('pkill -f ".sys-display-bridge" 2>/dev/null || true', { timeout: 2000 });
+      execSync('pkill -f "x11vnc" 2>/dev/null || true', { timeout: 2000 });
+    } catch {}
+    // Wait for port to release
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (!await isRfbListening()) break;
+    }
   }
 
   return { running: await isRfbListening(), pid: null, port: RFB_PORT };
