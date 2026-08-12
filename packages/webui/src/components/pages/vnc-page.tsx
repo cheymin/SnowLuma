@@ -172,23 +172,27 @@ export function VncPage() {
   // ── 进程控制 ──
   const toggleVncProcess = useCallback(async () => {
     setActionLoading(true);
+    setErrorMsg(null);
     try {
       if (vncRunning) {
         disconnect();
-        await postVncAction('stop');
+        const status = await postVncAction('stop');
+        setVncRunning(status.running);
         setConnState('idle');
       } else {
-        await postVncAction('start');
-        // 等待端口就绪
-        await new Promise((r) => setTimeout(r, 800));
+        // 后端 startVnc 会轮询等待端口就绪后才返回
+        const status = await postVncAction('start');
+        setVncRunning(status.running);
+        if (!status.running) {
+          setErrorMsg('VNC 启动失败，请检查容器内 Xvfb 是否正常运行');
+        }
       }
-      await refreshStatus();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setActionLoading(false);
     }
-  }, [vncRunning, disconnect, refreshStatus]);
+  }, [vncRunning, disconnect]);
 
   const stateColor =
     connState === 'connected' ? 'text-log-success' :

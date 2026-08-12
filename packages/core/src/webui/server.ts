@@ -892,15 +892,9 @@ export async function initWebUI(
   // Lets the WebUI start/stop the container's x11vnc (RFB :5900) and query
   // its status. The WebSocket proxy at /vnc refuses upgrades while x11vnc
   // is down, so the UI must start it before connecting.
-  app.get('/api/vnc/status', (c) => c.json(getVncStatus()));
-  app.post('/api/vnc/start', (c) => {
-    const status = startVnc();
-    return c.json(status);
-  });
-  app.post('/api/vnc/stop', (c) => {
-    const status = stopVnc();
-    return c.json(status);
-  });
+  app.get('/api/vnc/status', async (c) => c.json(await getVncStatus()));
+  app.post('/api/vnc/start', async (c) => c.json(await startVnc()));
+  app.post('/api/vnc/stop', async (c) => c.json(await stopVnc()));
 
   // ── System settings (WebUI listener) — Wave A1 ──
   // Listener-level changes (port/host/TLS) are persisted but apply only on the

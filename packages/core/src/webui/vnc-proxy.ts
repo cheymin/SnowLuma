@@ -35,7 +35,7 @@ export interface VncAuthChecker {
 export interface VncStatus {
   /** True if an x11vnc process is listening on the RFB port. */
   running: boolean;
-  /** OS pid of the x11vnc process, or null if not running. */
+  /** OS pid of the x11vnc process, or null if not running / undetectable. */
   pid: number | null;
   /** RFB port the proxy forwards to (informational for the UI). */
   port: number;
@@ -43,31 +43,96 @@ export interface VncStatus {
 
 type AnyHttpServer = Server | HttpsServer;
 
-// ─── Process management ──────────────────────────────────────────────────
+// ─── Port / process detection ────────────────────────────────────────────
 
 /**
- * Returns the pid listening on RFB_PORT, or null. Works regardless of
- * whether x11vnc was started by the entrypoint, by the REST API, or by
- * a previous process tree — we always look it up by port.
+ * Tests whether the RFB port is accepting TCP connections. This is the
+ * primary running-check — it doesn't depend on lsof/ss/fuser being
+ * installed, so it works in minimal containers.
+ */
+function isRfbListening(timeoutMs = 600): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      try { socket.destroy(); } catch {}
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => finish(true));
+    socket.on('timeout', () => finish(false));
+    socket.on('error', () => finish(false));
+    socket.connect(RFB_PORT, RFB_HOST);
+  });
+}
+
+/**
+ * Returns the pid listening on RFB_PORT, or null. Tries multiple tools
+ * (lsof → ss → fuser) since minimal containers may not have all of them.
+ * Used only for stop(); the running-check uses isRfbListening() which is
+ * tool-free.
  */
 function findVncPid(): number | null {
+  // 1. lsof (most precise)
+  if (hasCommand('lsof')) {
+    try {
+      const out = execSync(`lsof -ti:${RFB_PORT} 2>/dev/null`, {
+        encoding: 'utf-8', timeout: 3000,
+      }).trim();
+      if (out) {
+        const pid = Number(out.split('\n')[0]);
+        if (Number.isFinite(pid) && pid > 0) return pid;
+      }
+    } catch {}
+  }
+
+  // 2. ss (iproute2 — common on Ubuntu)
+  if (hasCommand('ss')) {
+    try {
+      const out = execSync(`ss -tlnpH 'sport = :${RFB_PORT}' 2>/dev/null`, {
+        encoding: 'utf-8', timeout: 3000,
+      });
+      // ss output line: users:(("systemd-logind",pid=1234,fd=5))
+      const m = out.match(/pid=(\d+)/);
+      if (m) {
+        const pid = Number(m[1]);
+        if (Number.isFinite(pid) && pid > 0) return pid;
+      }
+    } catch {}
+  }
+
+  // 3. fuser (psmisc)
+  if (hasCommand('fuser')) {
+    try {
+      const out = execSync(`fuser ${RFB_PORT}/tcp 2>/dev/null`, {
+        encoding: 'utf-8', timeout: 3000,
+      }).trim();
+      if (out) {
+        const pid = Number(out.split(/\s+/)[0]);
+        if (Number.isFinite(pid) && pid > 0) return pid;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+function hasCommand(cmd: string): boolean {
   try {
-    const out = execSync(`lsof -ti:${RFB_PORT} 2>/dev/null || true`, {
-      encoding: 'utf-8',
-      timeout: 3000,
-    }).trim();
-    if (!out) return null;
-    const pid = Number(out.split('\n')[0]);
-    return Number.isFinite(pid) && pid > 0 ? pid : null;
+    execSync(`command -v ${cmd} >/dev/null 2>&1`, { timeout: 1000 });
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
 /** Returns the current x11vnc process status. */
-export function getVncStatus(): VncStatus {
-  const pid = findVncPid();
-  return { running: pid != null, pid, port: RFB_PORT };
+export async function getVncStatus(): Promise<VncStatus> {
+  const running = await isRfbListening();
+  const pid = running ? findVncPid() : null;
+  return { running, pid, port: RFB_PORT };
 }
 
 /**
@@ -75,11 +140,14 @@ export function getVncStatus(): VncStatus {
  * Uses `exec -a` to disguise the process name as `systemd-logind` —
  * mirrors the stealth convention set up by entrypoint.sh / Dockerfile
  * so the process list stays clean (HF Spaces detection avoidance).
+ *
+ * After spawning, polls the RFB port until it's accepting connections
+ * (up to ~6s), so the caller gets an accurate status.
  */
-export function startVnc(): VncStatus {
-  const current = getVncStatus();
+export async function startVnc(): Promise<VncStatus> {
+  const current = await getVncStatus();
   if (current.running) {
-    log.info('VNC already running (pid=%d), start skipped', current.pid);
+    log.info('VNC already running (pid=%s), start skipped', current.pid);
     return current;
   }
 
@@ -111,32 +179,66 @@ export function startVnc(): VncStatus {
     log.error('failed to spawn VNC: %s', e instanceof Error ? e.message : String(e));
   }
 
-  // Give x11vnc a moment to bind the port.
-  return getVncStatus();
+  // Poll the RFB port until x11vnc is ready (up to ~6s).
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await isRfbListening()) {
+      log.info('VNC started, RFB port %d is listening', RFB_PORT);
+      return { running: true, pid: findVncPid(), port: RFB_PORT };
+    }
+  }
+
+  log.warn('VNC did not bind RFB port within 6s');
+  return { running: false, pid: null, port: RFB_PORT };
 }
 
 /** Stops the running x11vnc process (SIGTERM, then SIGKILL on timeout). */
-export function stopVnc(): VncStatus {
-  const pid = findVncPid();
+export async function stopVnc(): Promise<VncStatus> {
+  let pid = findVncPid();
   if (!pid) {
-    log.info('VNC not running, stop skipped');
-    return { running: false, pid: null, port: RFB_PORT };
+    // If we can't find the pid but the port is still listening, try
+    // pkill as a last resort (safe inside a container).
+    if (await isRfbListening()) {
+      log.warn('RFB port listening but pid unknown — trying pkill');
+      try {
+        execSync('pkill -f .sys-display-bridge 2>/dev/null || true', { timeout: 2000 });
+        if (VNC_BIN !== '.sys-display-bridge') {
+          execSync('pkill -f x11vnc 2>/dev/null || true', { timeout: 2000 });
+        }
+      } catch {}
+      // Wait for port to release
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (!await isRfbListening()) break;
+      }
+    }
+    return { running: await isRfbListening(), pid: null, port: RFB_PORT };
   }
+
   log.info('stopping VNC (pid=%d)', pid);
   try {
     process.kill(pid, 'SIGTERM');
   } catch (e) {
     log.warn('SIGTERM failed: %s', e instanceof Error ? e.message : String(e));
   }
-  // Grace period then escalate to SIGKILL.
-  setTimeout(() => {
-    if (findVncPid() === pid) {
-      log.warn('VNC did not exit on SIGTERM, sending SIGKILL');
-      try { process.kill(pid, 'SIGKILL'); } catch {}
-    }
-  }, 1500).unref();
 
-  return { running: false, pid: null, port: RFB_PORT };
+  // Wait for the port to actually release (up to ~3s).
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (!await isRfbListening()) {
+      log.info('VNC stopped, RFB port released');
+      return { running: false, pid: null, port: RFB_PORT };
+    }
+  }
+
+  // Port still listening — escalate to SIGKILL.
+  if (findVncPid() === pid) {
+    log.warn('VNC did not exit on SIGTERM, sending SIGKILL');
+    try { process.kill(pid, 'SIGKILL'); } catch {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  return { running: await isRfbListening(), pid: null, port: RFB_PORT };
 }
 
 // ─── WebSocket proxy ─────────────────────────────────────────────────────
@@ -162,13 +264,6 @@ export function attachVncProxy(server: AnyHttpServer, auth: VncAuthChecker): voi
     if (!auth.isValidSession(token)) {
       log.warn('rejected VNC upgrade: invalid/expired session');
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    if (!getVncStatus().running) {
-      log.warn('rejected VNC upgrade: x11vnc not running');
-      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
       socket.destroy();
       return;
     }
