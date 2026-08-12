@@ -67,7 +67,7 @@ import {
   validateOneBotAccessTokenChanges,
 } from './onebot-token-policy';
 import { findAvailablePort } from './port';
-import { attachVncProxy } from './vnc-proxy';
+import { attachVncProxy, getVncStatus, startVnc, stopVnc } from './vnc-proxy';
 import {
   clearBackgroundImage,
   loadUiConfig,
@@ -886,6 +886,20 @@ export async function initWebUI(
         arrayBuffers: runtimeMemory.arrayBuffers,
       },
     });
+  });
+
+  // ── VNC process control ──────────────────────────────────────────────────
+  // Lets the WebUI start/stop the container's x11vnc (RFB :5900) and query
+  // its status. The WebSocket proxy at /vnc refuses upgrades while x11vnc
+  // is down, so the UI must start it before connecting.
+  app.get('/api/vnc/status', (c) => c.json(getVncStatus()));
+  app.post('/api/vnc/start', (c) => {
+    const status = startVnc();
+    return c.json(status);
+  });
+  app.post('/api/vnc/stop', (c) => {
+    const status = stopVnc();
+    return c.json(status);
   });
 
   // ── System settings (WebUI listener) — Wave A1 ──

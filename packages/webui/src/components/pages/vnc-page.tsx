@@ -1,22 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RFB from '@novnc/novnc';
-import { Monitor, MonitorOff, RefreshCw, Maximize2, Minimize2, Wifi, WifiOff } from 'lucide-react';
+import {
+  Monitor,
+  MonitorOff,
+  Play,
+  Square,
+  Maximize2,
+  Minimize2,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 const TOKEN_KEY = 'snowluma_token';
 
 type ConnState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
 
+interface VncStatus {
+  running: boolean;
+  pid: number | null;
+  port: number;
+}
+
 function buildWsUrl(token: string | null): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // The VNC proxy authenticates via `?token=` — same WebUI session credential.
   const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
   return `${proto}//${window.location.host}/vnc${tokenQuery}`;
 }
 
-function getStateLabel(state: ConnState): string {
+function stateLabel(state: ConnState): string {
   switch (state) {
     case 'idle': return '未连接';
     case 'connecting': return '连接中…';
@@ -26,21 +41,68 @@ function getStateLabel(state: ConnState): string {
   }
 }
 
+async function fetchVncStatus(): Promise<VncStatus> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const res = await fetch('/api/vnc/status', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`status ${res.status}`);
+  return res.json();
+}
+
+async function postVncAction(action: 'start' | 'stop'): Promise<VncStatus> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const res = await fetch(`/api/vnc/${action}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`${action} failed: ${res.status}`);
+  return res.json();
+}
+
 /**
- * VNC 桌面页面：通过 WebUI 单端口 (7860) 上的 `/vnc` WebSocket 代理连接到
- * 容器内 x11vnc (RFB :5900)。使用 noVNC 核心库渲染远程桌面。
+ * VNC 远程桌面页面。
  *
- * 认证：复用 WebUI 登录会话令牌（localStorage 中的 `snowluma_token`），
- * 通过 `?token=` 查询参数传递给 WS 升级请求，后端校验后才转发到 RFB。
+ * 布局：
+ *   ┌──────────────────────────────────────────────┐
+ *   │ [连接VNC] [全屏] [启动/终止VNC]   状态指示   │ ← 工具栏
+ *   ├──────────────────────────────────────────────┤
+ *   │                                              │
+ *   │              VNC 显示区域                    │
+ *   │                                              │
+ *   └──────────────────────────────────────────────┘
+ *
+ * - 「连接VNC」：发起 noVNC WebSocket 连接到 /vnc（手动触发，非自动连接）。
+ * - 「全屏」：切换 VNC 显示区域为浏览器全屏。
+ * - 「启动/终止VNC」：根据 x11vnc 进程状态启动或停止容器内的 VNC 服务。
  */
 export function VncPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rfbRef = useRef<RFB | null>(null);
-  const [state, setState] = useState<ConnState>('idle');
-  const [scale, setScale] = useState(true);
+
+  const [connState, setConnState] = useState<ConnState>('idle');
+  const [vncRunning, setVncRunning] = useState<boolean | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
+  // ── 进程状态轮询 ──
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await fetchVncStatus();
+      setVncRunning(s.running);
+    } catch {
+      setVncRunning(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshStatus();
+    const t = setInterval(refreshStatus, 3000);
+    return () => clearInterval(t);
+  }, [refreshStatus]);
+
+  // ── VNC 连接管理 ──
   const disconnect = useCallback(() => {
     const rfb = rfbRef.current;
     if (rfb) {
@@ -52,39 +114,37 @@ export function VncPage() {
   const connect = useCallback(() => {
     disconnect();
     setErrorMsg(null);
+
+    if (!vncRunning) {
+      setErrorMsg('VNC 服务未启动，请先点击「启动VNC」');
+      setConnState('error');
+      return;
+    }
+
     const container = containerRef.current;
     if (!container) return;
 
     const token = localStorage.getItem(TOKEN_KEY);
     const url = buildWsUrl(token);
-    setState('connecting');
+    setConnState('connecting');
 
     try {
-      // noVNC 的 RFB 构造器会立即发起 WebSocket 升级并完成 RFB 握手。
-      // `target` 是一个 DOM 元素，RFB 会在此插入 <canvas>。
-      const rfb = new RFB(container, url, {
-        // 容器内 x11vnc 启动时使用 -nopw，所以这里无需密码。
-        credentials: { password: '' },
-      });
+      const rfb = new RFB(container, url, { credentials: { password: '' } });
       rfbRef.current = rfb;
-
-      // 缩放模式：让远程桌面自适应容器大小。
-      rfb.scaleViewport = scale;
+      rfb.scaleViewport = true;
       rfb.resizeSession = false;
 
-      rfb.addEventListener('connect', () => {
-        setState('connected');
-      });
+      rfb.addEventListener('connect', () => setConnState('connected'));
       rfb.addEventListener('disconnect', (ev: unknown) => {
         const detail = (ev as { detail?: { clean?: boolean } }).detail;
-        setState(detail?.clean ? 'disconnected' : 'error');
+        setConnState(detail?.clean ? 'disconnected' : 'error');
         if (!detail?.clean) setErrorMsg('远程桌面连接已断开');
         rfbRef.current = null;
       });
       rfb.addEventListener('securityfailure', (ev: unknown) => {
         const detail = (ev as { detail?: { reason?: string } }).detail;
         setErrorMsg(`认证失败：${detail?.reason ?? '未知原因'}`);
-        setState('error');
+        setConnState('error');
       });
       rfb.addEventListener('desktopname', (ev: unknown) => {
         const detail = (ev as { detail?: { name?: string } }).detail;
@@ -92,22 +152,14 @@ export function VncPage() {
       });
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
-      setState('error');
+      setConnState('error');
     }
-  }, [disconnect, scale]);
+  }, [disconnect, vncRunning]);
 
-  // 切换缩放时实时应用到已存在的 RFB 实例。
-  useEffect(() => {
-    if (rfbRef.current) rfbRef.current.scaleViewport = scale;
-  }, [scale]);
+  // 离开页面时断开
+  useEffect(() => () => disconnect(), [disconnect]);
 
-  // 进入页面自动连接，离开时断开。
-  useEffect(() => {
-    connect();
-    return () => disconnect();
-  }, [connect, disconnect]);
-
-  // 全屏切换。
+  // 全屏 Esc 退出
   useEffect(() => {
     if (!fullscreen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -117,89 +169,136 @@ export function VncPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [fullscreen]);
 
+  // ── 进程控制 ──
+  const toggleVncProcess = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      if (vncRunning) {
+        disconnect();
+        await postVncAction('stop');
+        setConnState('idle');
+      } else {
+        await postVncAction('start');
+        // 等待端口就绪
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      await refreshStatus();
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActionLoading(false);
+    }
+  }, [vncRunning, disconnect, refreshStatus]);
+
   const stateColor =
-    state === 'connected' ? 'text-log-success' :
-    state === 'connecting' ? 'text-log-info' :
-    state === 'error' ? 'text-log-error' :
+    connState === 'connected' ? 'text-log-success' :
+    connState === 'connecting' ? 'text-log-info' :
+    connState === 'error' ? 'text-log-error' :
     'text-muted-foreground';
 
   return (
-    <div className={cn('flex h-full flex-col gap-4 p-4', fullscreen && 'fixed inset-0 z-50 bg-background p-4')}>
-      {/* 工具栏 */}
+    <div className={cn('flex h-full flex-col gap-3 p-4', fullscreen && 'fixed inset-0 z-50 bg-background p-4')}>
+      {/* ── 工具栏：3 个按钮 + 状态指示 ── */}
       <Card className="shrink-0">
-        <CardHeader className="flex flex-row items-center justify-between gap-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className="grid size-9 place-items-center rounded-lg bg-primary/10 ring-1 ring-primary/20">
-              <Monitor className="size-4 text-primary" />
-            </div>
-            <div>
-              <CardTitle className="text-base">远程桌面</CardTitle>
-              <CardDescription className="text-xs">通过 VNC 访问容器内 QQ 桌面</CardDescription>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className={cn('flex items-center gap-1.5 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs font-medium', stateColor)}>
-              {state === 'connected' ? <Wifi className="size-3.5" /> : <WifiOff className="size-3.5" />}
-              {getStateLabel(state)}
-            </div>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* 连接 VNC */}
             <Button
-              variant="outline"
               size="sm"
-              onClick={() => setScale((s) => !s)}
-              title={scale ? '切换到 1:1 原始尺寸' : '切换到自适应缩放'}
+              onClick={connect}
+              disabled={connState === 'connecting' || !vncRunning}
+              title={!vncRunning ? '请先启动 VNC 服务' : undefined}
             >
-              {scale ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-              <span className="ml-1.5">{scale ? '原始尺寸' : '自适应'}</span>
+              <Wifi className="size-3.5" />
+              <span className="ml-1.5">连接VNC</span>
             </Button>
+
+            {/* 全屏 */}
             <Button
               variant="outline"
               size="sm"
               onClick={() => setFullscreen((f) => !f)}
-              title={fullscreen ? '退出全屏 (Esc)' : '全屏'}
             >
               {fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
               <span className="ml-1.5">{fullscreen ? '退出全屏' : '全屏'}</span>
             </Button>
+
+            {/* 启动/终止 VNC 进程 */}
             <Button
-              variant="default"
+              variant={vncRunning ? 'destructive' : 'default'}
               size="sm"
-              onClick={connect}
-              disabled={state === 'connecting'}
+              onClick={toggleVncProcess}
+              disabled={actionLoading}
             >
-              <RefreshCw className={cn('size-3.5', state === 'connecting' && 'animate-spin')} />
-              <span className="ml-1.5">重连</span>
+              {actionLoading ? (
+                <RefreshCw className="size-3.5 animate-spin" />
+              ) : vncRunning ? (
+                <Square className="size-3.5" />
+              ) : (
+                <Play className="size-3.5" />
+              )}
+              <span className="ml-1.5">
+                {actionLoading ? '处理中…' : vncRunning ? '终止VNC' : '启动VNC'}
+              </span>
             </Button>
           </div>
-        </CardHeader>
+
+          {/* 状态指示 */}
+          <div className="flex items-center gap-3 text-xs">
+            <div className={cn('flex items-center gap-1.5 font-medium', stateColor)}>
+              {connState === 'connected' ? <Wifi className="size-3.5" /> : <WifiOff className="size-3.5" />}
+              {stateLabel(connState)}
+            </div>
+            <div className={cn(
+              'flex items-center gap-1.5 font-medium',
+              vncRunning === null ? 'text-muted-foreground' :
+              vncRunning ? 'text-log-success' : 'text-muted-foreground'
+            )}>
+              <Monitor className="size-3.5" />
+              {vncRunning === null ? '检测中…' : vncRunning ? `服务运行中 (pid)` : '服务未启动'}
+            </div>
+          </div>
+        </CardContent>
       </Card>
 
-      {/* 桌面画布 */}
+      {/* ── VNC 显示区域 ── */}
       <Card className="relative min-h-0 flex-1 overflow-hidden">
         <CardContent className="h-full p-0">
           <div
             ref={containerRef}
-            className={cn(
-              'relative h-full w-full bg-black',
-              scale ? 'flex items-center justify-center' : 'overflow-auto',
-            )}
+            className="relative flex h-full w-full items-center justify-center bg-black"
           >
             {/* noVNC 会在此插入 canvas。未连接时覆盖一层状态提示。 */}
-            {state !== 'connected' && (
+            {connState !== 'connected' && (
               <div className="absolute inset-0 z-10 grid place-items-center">
                 <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                  {state === 'error' ? (
+                  {connState === 'error' ? (
                     <>
                       <MonitorOff className="size-12 opacity-50" />
-                      <div className="text-center">
+                      <div className="max-w-md text-center">
                         <p className="text-sm font-medium text-foreground">无法连接到远程桌面</p>
-                        {errorMsg && <p className="mt-1 max-w-md text-xs">{errorMsg}</p>}
-                        <p className="mt-2 text-xs">请确认容器内 x11vnc 已启动，然后点击「重连」。</p>
+                        {errorMsg && <p className="mt-1 text-xs">{errorMsg}</p>}
+                        <p className="mt-2 text-xs">
+                          请确认 VNC 服务已启动，然后点击「连接VNC」。
+                        </p>
+                      </div>
+                    </>
+                  ) : connState === 'idle' ? (
+                    <>
+                      <Monitor className="size-12 opacity-40" />
+                      <div className="max-w-md text-center">
+                        <p className="text-sm font-medium">远程桌面未连接</p>
+                        <p className="mt-1 text-xs">
+                          {vncRunning
+                            ? '点击「连接VNC」开始远程会话。'
+                            : '请先点击「启动VNC」，再点击「连接VNC」。'}
+                        </p>
                       </div>
                     </>
                   ) : (
                     <>
                       <Monitor className="size-12 animate-pulse opacity-50" />
-                      <p className="text-sm">{getStateLabel(state)}</p>
+                      <p className="text-sm">{stateLabel(connState)}</p>
                     </>
                   )}
                 </div>
