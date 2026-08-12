@@ -47,12 +47,14 @@
     "@snowluma/protocol": "workspace:*",
     "@snowluma/proto-defs": "workspace:*",
     "@snowluma/proton": "workspace:*",
-    "@snowluma/websocket": "workspace:*"
+    "@snowluma/websocket": "workspace:*",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@hono/node-server": "^1.19.14",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@types/node": "catalog:",
+    "@types/ws": "^8.5.13",
     "cross-env": "^10.1.0",
     "hono": "^4.12.25",
     "tsx": "^4.21.0",

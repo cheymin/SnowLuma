@@ -67,6 +67,7 @@ import {
   validateOneBotAccessTokenChanges,
 } from './onebot-token-policy';
 import { findAvailablePort } from './port';
+import { attachVncProxy } from './vnc-proxy';
 import {
   clearBackgroundImage,
   loadUiConfig,
@@ -1589,11 +1590,23 @@ export async function initWebUI(
     scheme = 'https';
   }
 
-  await new Promise<void>((resolve) => {
-    serve({ fetch: app.fetch, port: finalPort, hostname: host, ...(tlsServe ?? {}) }, (info) => {
+  const httpServer = await new Promise<ReturnType<typeof serve>>((resolve) => {
+    const instance = serve({ fetch: app.fetch, port: finalPort, hostname: host, ...(tlsServe ?? {}) }, (info) => {
       log.info(`listening ${scheme}://${host}:${info.port}`);
-      resolve();
+      resolve(instance);
     });
   });
+
+  // VNC-over-WebSocket: proxy /vnc to the local x11vnc RFB socket so the
+  // browser can reach the desktop through the single WebUI port. Reuses
+  // WebUI session tokens for auth (no separate VNC credential).
+  attachVncProxy(httpServer as any, {
+    isValidSession: (token) => {
+      if (!token) return false;
+      const info = sessionTokens.get(token);
+      return !!info && Date.now() <= info.expiresAt;
+    },
+  });
+
   return { port: finalPort };
 }
