@@ -95,11 +95,12 @@ RUN useradd -m -s /bin/bash snowluma \
     && echo "snowluma ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 # Pre-create /data with correct ownership for persistence.
-# Users only need to mount /data — all SQLite DBs, config files and logs
-# are symlinked here by entrypoint.sh at startup.
+# Users only need to mount /data — all SQLite DBs, config files, logs and
+# QQ NT login state are symlinked here by entrypoint.sh at startup.
+# /data/qq holds ~/.config/QQ (QQ NT login session & per-account cache).
 RUN mkdir -p /tmp/.X11-unix \
     && chmod 1777 /tmp/.X11-unix \
-    && mkdir -p /data/config /data/data /data/logs /home/snowluma/.config \
+    && mkdir -p /data/config /data/data /data/logs /data/qq /home/snowluma/.config \
     && mkdir -p /var/log/nginx /var/lib/nginx /tmp/nginx \
     && chown -R snowluma:snowluma /data /home/snowluma /var/log/nginx /var/lib/nginx /tmp/nginx
 

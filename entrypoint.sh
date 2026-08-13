@@ -23,6 +23,16 @@ ln -sfn /data/logs   /app/logs
 mkdir -p /tmp/.X11-unix "$HOME/.config" 2>/dev/null || true
 chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 
+# ─── Persist QQ NT login state & user data ───────────────────────────────
+# QQ NT (Electron) stores its login session, tokens and per-account cache
+# under ~/.config/QQ. That directory lives in the ephemeral image layer, so
+# without this symlink a container restart wipes the QQ login even though
+# /data is mounted (SnowLuma's own SQLite/config under /data survives, but
+# QQ's own state does not). Redirect it into the persisted /data volume.
+mkdir -p /data/qq 2>/dev/null || true
+rm -rf "$HOME/.config/QQ" 2>/dev/null || true
+ln -sfn /data/qq "$HOME/.config/QQ"
+
 RESOLUTION="${SNOWLUMA_RESOLUTION:-1280x720x24}"
 
 # ─── Privilege setup for hook injection ──────────────────────────────────
