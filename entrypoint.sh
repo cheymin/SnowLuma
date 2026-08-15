@@ -33,6 +33,33 @@ mkdir -p /data/qq 2>/dev/null || true
 rm -rf "$HOME/.config/QQ" 2>/dev/null || true
 ln -sfn /data/qq "$HOME/.config/QQ"
 
+# ─── Persist machine-id (stable device identity for QQ NT) ───────────────
+# QQ NT binds the login session to a "device" fingerprint. On a fresh
+# container /etc/machine-id is regenerated, so QQ sees a brand-new device
+# and forces a re-login even though ~/.config/QQ survived on /data. Pin the
+# id to the /data volume so restarts keep the same identity.
+DATA_SYSTEM_DIR=/data/system
+MACHINE_ID_PIN="$DATA_SYSTEM_DIR/machine-id"
+MACHINE_ID_FILE=/etc/machine-id
+if [ -s "$MACHINE_ID_PIN" ]; then
+  # Restore the previously-pinned id on a recreated container.
+  if [ "$(tr -d '[:space:]' < "$MACHINE_ID_FILE" 2>/dev/null || true)" != "$(tr -d '[:space:]' < "$MACHINE_ID_PIN")" ]; then
+    tr -d '[:space:]' < "$MACHINE_ID_PIN" | sudo tee "$MACHINE_ID_FILE" >/dev/null 2>&1 || true
+  fi
+elif [ -s "$MACHINE_ID_FILE" ]; then
+  # First boot with an existing id: pin it so it survives recreation.
+  mkdir -p "$DATA_SYSTEM_DIR" 2>/dev/null || true
+  cp "$MACHINE_ID_FILE" "$MACHINE_ID_PIN" 2>/dev/null || true
+else
+  # No id anywhere (rare in containers): mint a stable one.
+  mkdir -p "$DATA_SYSTEM_DIR" 2>/dev/null || true
+  NEW_ID="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  if [ -n "$NEW_ID" ]; then
+    printf '%s\n' "$NEW_ID" | sudo tee "$MACHINE_ID_FILE" >/dev/null 2>&1 || true
+    printf '%s\n' "$NEW_ID" > "$MACHINE_ID_PIN" 2>/dev/null || true
+  fi
+fi
+
 RESOLUTION="${SNOWLUMA_RESOLUTION:-1280x720x24}"
 
 # ─── Privilege setup for hook injection ──────────────────────────────────

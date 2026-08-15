@@ -27,8 +27,15 @@ const VNC_BIN = process.env.SNOWLUMA_VNC_BIN || (
  * Process-name disguises applied by entrypoint.sh / startVnc() via
  * `exec -a`. We accept any of these as "this is the x11vnc process"
  * when validating a PID before sending it a signal.
+ *
+ * IMPORTANT: Linux truncates /proc/<pid>/comm to 15 bytes, and `exec -a`
+ * only changes argv[0] (what `ps`/cmdline shows) — NOT /proc/comm, which
+ * always reflects the basename of the executed binary. So the renamed
+ * `/usr/bin/.sys-display-bridge` (17 chars) is reported by the kernel as
+ * `.sys-display-br` (15 chars). Both spellings are accepted so the safety
+ * gate below can actually recognise the process it needs to kill.
  */
-const VNC_COMM_NAMES = new Set(['systemd-logind', 'x11vnc', '.sys-display-bridge']);
+const VNC_COMM_NAMES = new Set(['systemd-logind', 'x11vnc', '.sys-display-bridge', '.sys-display-br']);
 
 function exists(p: string): boolean {
   try { accessSync(p); return true; } catch { return false; }
@@ -279,11 +286,18 @@ export async function stopVnc(): Promise<VncStatus> {
     await new Promise((r) => setTimeout(r, 300));
   } else if (await isRfbListening()) {
     // Port is listening but we couldn't confirm a valid x11vnc pid —
-    // fall back to pkill by binary-name pattern. This is safe because
-    // pkill -f matches the full command line, and only x11vnc / the
-    // renamed .sys-display-bridge binary will match.
+    // fall back to pkill. Note: `exec -a` hides the real binary name from
+    // the command line (argv[0] shows as `systemd-logind`), so we must match
+    // both the truncated comm name AND the disguised argv[0].
     log.warn('VNC pid not confirmed, falling back to pkill by pattern');
     try {
+      // comm match: /proc/<pid>/comm = basename of the executed binary,
+      // truncated to 15 chars (see VNC_COMM_NAMES).
+      execSync('pkill -x ".sys-display-br" 2>/dev/null || true', { timeout: 2000 });
+      execSync('pkill -x "x11vnc" 2>/dev/null || true', { timeout: 2000 });
+      // cmdline match: startVnc()/entrypoint disguise argv[0] as
+      // `systemd-logind`, so the real binary path never shows in ps.
+      execSync('pkill -f "systemd-logind" 2>/dev/null || true', { timeout: 2000 });
       execSync('pkill -f ".sys-display-bridge" 2>/dev/null || true', { timeout: 2000 });
       execSync('pkill -f "x11vnc" 2>/dev/null || true', { timeout: 2000 });
     } catch {}
