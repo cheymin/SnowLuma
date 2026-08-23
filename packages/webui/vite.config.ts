@@ -27,6 +27,8 @@ export default defineConfig({
     strictPort: false,
     proxy: {
       '/api': { target: 'http://localhost:5099', changeOrigin: true, ws: true },
+      '/vnc': { target: 'http://localhost:5099', changeOrigin: true, ws: true },
+      '/vnc-client': { target: 'http://localhost:5099', changeOrigin: true },
       '/avatar': { target: 'http://localhost:5099', changeOrigin: true },
     },
   },

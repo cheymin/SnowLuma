@@ -91,6 +91,7 @@ import type { NotificationManager } from '../notifications/manager';
 import { StorageManagementService } from './storage-management';
 import { registerStorageRoutes } from './storage-routes';
 import { LogStorageSettingsManager } from './storage-settings';
+import { attachVncProxy, getVncStatus, startVnc, stopVnc, NOVNC_DIR } from './vnc-proxy';
 import {
   clearAvatarSessionCookie,
   extractBearerToken,
@@ -1752,6 +1753,50 @@ export async function initWebUI(
     }
   });
 
+  // ─── VNC process control ───────────────────────────────────────────────
+  // Lets the WebUI start/stop the container's x11vnc (RFB :5900) and query
+  // its status. The WebSocket proxy at /vnc refuses upgrades while x11vnc
+  // is not running (the proxy connects to the local RFB socket).
+  app.get('/api/vnc/status', async (c) => c.json(await getVncStatus()));
+  app.post('/api/vnc/start', async (c) => c.json(await startVnc()));
+  app.post('/api/vnc/stop', async (c) => c.json(await stopVnc()));
+
+  // ─── Runtime noVNC client ──────────────────────────────────────────────
+  // The noVNC web client (RFB ES module) is NOT baked into the app — it is
+  // downloaded at runtime by startVnc() into a hidden dir and served here
+  // at /vnc-client/* while VNC is running. stopVnc() deletes the whole dir,
+  // so the environment holds no scannable noVNC residue when idle.
+  const VNC_CLIENT_MIME: Record<string, string> = {
+    '.js': 'text/javascript',
+    '.mjs': 'text/javascript',
+    '.css': 'text/css',
+    '.html': 'text/html',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.json': 'application/json',
+    '.map': 'application/json',
+  };
+  app.get('/vnc-client/*', async (c) => {
+    const base = path.resolve(NOVNC_DIR);
+    const rel = c.req.path.replace(/^\/vnc-client\//, '');
+    const file = path.resolve(base, rel);
+    if (file !== base && !file.startsWith(base + path.sep)) {
+      return c.text('not found', 404);
+    }
+    if (!existsSync(file)) {
+      return c.text('not found', 404);
+    }
+    const stat = (await import('fs')).statSync(file);
+    if (!stat.isFile()) return c.text('not found', 404);
+    const ext = path.extname(file).toLowerCase();
+    const contentType = VNC_CLIENT_MIME[ext] ?? 'application/octet-stream';
+    const body = readFileSync(file);
+    return c.body(new Uint8Array(body), 200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' });
+  });
+
   // ─── Static frontend ─────────────────────────────────────────────────────
   // Build path is relative to the bundled / dev __dirname. SPA fallback to
   // index.html so client-side routes (if any) keep working.
@@ -1795,11 +1840,23 @@ export async function initWebUI(
     scheme = 'https';
   }
 
-  await new Promise<void>((resolve) => {
-    serve({ fetch: app.fetch, port: finalPort, hostname: host, ...(tlsServe ?? {}) }, (info) => {
+  const httpServer = await new Promise<ReturnType<typeof serve>>((resolve) => {
+    const instance = serve({ fetch: app.fetch, port: finalPort, hostname: host, ...(tlsServe ?? {}) }, (info) => {
       log.info(`listening ${scheme}://${host}:${info.port}`);
-      resolve();
+      resolve(instance);
     });
   });
+
+  // VNC-over-WebSocket: proxy /vnc to the local x11vnc RFB socket so the
+  // browser can reach the desktop through the single WebUI port. Reuses
+  // WebUI session tokens for auth (no separate VNC credential).
+  attachVncProxy(httpServer as any, {
+    isValidSession: (token) => {
+      if (!token) return false;
+      const info = sessionTokens.get(token);
+      return !!info && Date.now() <= info.expiresAt;
+    },
+  });
+
   return { port: finalPort };
 }
