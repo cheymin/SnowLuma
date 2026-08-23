@@ -9,6 +9,7 @@ import {
   Wifi,
   WifiOff,
   RefreshCw,
+  Power,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -227,6 +228,26 @@ export function VncPage() {
     }
   }, [vncRunning, disconnect]);
 
+  // ── 重启系统 ──
+  const handleReboot = useCallback(async () => {
+    setActionLoading(true);
+    setErrorMsg(null);
+    try {
+      const token = localStorage.getItem(TOKEN_KEY);
+      const res = await fetch('/api/system/reboot', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`reboot failed: ${res.status}`);
+      // 成功后显示提示，系统将在几秒后重启
+      setErrorMsg('系统正在重启，页面将断开连接…');
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActionLoading(false);
+    }
+  }, []);
+
   const stateColor =
     connState === 'connected' ? 'text-log-success' :
     connState === 'connecting' ? 'text-log-info' :
@@ -277,6 +298,22 @@ export function VncPage() {
               <span className="ml-1.5">
                 {actionLoading ? '处理中…' : vncRunning ? '终止VNC' : '启动VNC'}
               </span>
+            </Button>
+
+            {/* 重启系统 */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReboot}
+              disabled={actionLoading}
+              title="重启系统（系统将立即重启）"
+            >
+              {actionLoading ? (
+                <RefreshCw className="size-3.5 animate-spin" />
+              ) : (
+                <Power className="size-3.5" />
+              )}
+              <span className="ml-1.5">重启系统</span>
             </Button>
           </div>
 

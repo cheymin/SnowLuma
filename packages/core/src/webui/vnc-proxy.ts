@@ -315,14 +315,43 @@ function ensureNoVncClient(): boolean {
   try {
     run(`mkdir -p ${shellQuote(RUNTIME_DIR)}`);
     const tarball = path.join(RUNTIME_DIR, '.client-src.tar.gz');
-    run(`wget -q -O ${shellQuote(tarball)} ${NOVNC_TARBALL_URL}`, 120_000);
+    
+    // Try downloading with curl as fallback if wget fails
+    let downloadSuccess = false;
+    try {
+      run(`wget -q -O ${shellQuote(tarball)} ${NOVNC_TARBALL_URL}`, 120_000);
+      downloadSuccess = true;
+    } catch (wgetErr) {
+      log.warn('wget failed, trying curl...');
+      try {
+        run(`curl -sL -o ${shellQuote(tarball)} ${NOVNC_TARBALL_URL}`, 120_000);
+        downloadSuccess = true;
+      } catch (curlErr) {
+        log.error('curl also failed: %s', curlErr instanceof Error ? curlErr.message : String(curlErr));
+      }
+    }
+    
+    if (!downloadSuccess || !existsSync(tarball)) {
+      log.error('noVNC tarball download failed');
+      return false;
+    }
+    
     run(`tar -xzf ${shellQuote(tarball)} -C ${shellQuote(RUNTIME_DIR)}`);
+    
     // Tarball extracts to noVNC-<version>/ — flatten `core` into client/.
     run(`rm -rf ${shellQuote(NOVNC_DIR)}`);
-    run(`mkdir -p ${shellQuote(RUNTIME_DIR)}`);
-    run(`mv ${shellQuote(RUNTIME_DIR)}/noVNC-*/core ${shellQuote(NOVNC_DIR)} 2>/dev/null || mv ${shellQuote(path.join(RUNTIME_DIR, 'core'))} ${shellQuote(NOVNC_DIR)}`);
+    run(`mkdir -p ${shellQuote(NOVNC_DIR)}`);
+    run(`mv ${shellQuote(RUNTIME_DIR)}/noVNC-*/core ${shellQuote(NOVNC_DIR)}`);
+    
+    // Clean up
     run(`rm -rf ${shellQuote(tarball)} ${shellQuote(RUNTIME_DIR)}/noVNC-*`);
-    return existsSync(marker);
+    
+    if (existsSync(marker)) {
+      log.info('noVNC client downloaded to %s', NOVNC_DIR);
+      return true;
+    }
+    log.error('noVNC client missing after extraction: %s', marker);
+    return false;
   } catch (e) {
     log.error('failed to download noVNC client: %s', e instanceof Error ? e.message : String(e));
     return false;

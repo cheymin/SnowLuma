@@ -1212,6 +1212,27 @@ export async function initWebUI(
     return c.json({ success: true });
   });
 
+  // ── System reboot ──
+  app.post('/api/system/reboot', async (c) => {
+    try {
+      // Return success immediately so the client sees the response before the system restarts.
+      // The actual reboot may take a few seconds.
+      log.info('system reboot requested');
+      // Schedule reboot in 2 seconds to allow the response to be sent.
+      setTimeout(() => {
+        try {
+          execSync('reboot', { timeout: 5000, stdio: 'ignore' });
+        } catch (e) {
+          log.warn('reboot command failed: %s', e instanceof Error ? e.message : String(e));
+        }
+      }, 2000);
+      return c.json({ success: true });
+    } catch (err) {
+      log.warn('reboot failed: %s', err instanceof Error ? err.message : String(err));
+      return c.json({ success: false, message: '重启失败' }, 500);
+    }
+  });
+
   // ── Config backup / restore (Wave A2) ──
   app.get('/api/system/backup/export', (c) => {
     try {
