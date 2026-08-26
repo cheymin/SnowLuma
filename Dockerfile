@@ -31,11 +31,10 @@ RUN case "$TARGETPLATFORM" in \
 WORKDIR /app/dist
 RUN npm install --omit=dev
 
-# ─── Stage 2: Runtime (Ubuntu + Xvfb + QQ NT) ────────────────────────────
-# NOTE: No x11vnc / noVNC is installed in this image. The remote-desktop
-# stack is downloaded ON DEMAND at runtime (startVnc) into a hidden dir and
-# DELETED again on stopVnc, so the image & a stopped container carry zero
-# scannable VNC residue and look like a plain application.
+# ─── Stage 2: Runtime (Ubuntu + Xvfb + noVNC + QQ NT) ────────────────────
+# x11vnc + noVNC are normal installed components of this image. startVnc()
+# starts the real x11vnc binary; stopVnc() kills the process only (the
+# software stays installed and can be re-started instantly).
 #
 # QQ NT 3.2.31 deb is fetched at build time from AUR's "beta" CDN path,
 # which is not subject to the Tencent CDN sign/timestamp restriction that
@@ -51,13 +50,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SNOWLUMA_LOG_DIR=/data/logs \
     HOME=/home/snowluma
 
-# X11 stack + fluxbox + fonts + QQ NT runtime deps.
+# X11 stack + fluxbox + fonts + VNC (x11vnc + noVNC) + QQ NT runtime deps.
 # QQ NT is an Electron app; beyond the .deb's declared Depends we also need
 # the Mesa/GBM/DRI stack and ALSA stubs or Chromium exits on startup inside
-# a headless Docker container. `sudo` + `wget` + `tar` let the runtime
-# download VNC on demand; `lsof/procps/iproute2` power the VNC control API.
+# a headless Docker container. `sudo` + `wget` + `tar` + `lsof/procps/iproute2`
+# power the VNC control API.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb fluxbox \
+    x11vnc novnc websockify \
     fonts-noto-cjk fonts-noto-color-emoji \
     sudo wget tar ca-certificates \
     lsof procps iproute2 \
@@ -86,15 +86,6 @@ RUN case "$TARGETARCH" in \
     && rm -f /tmp/qq.deb \
     && apt-get -f install -y \
     && rm -rf /var/lib/apt/lists/*
-
-# ─── Stealth: Rename suspicious binaries to look like system processes ────
-# Platform scans look for Xvfb / fluxbox (and previously x11vnc) in the
-# process list. We rename them to look like ordinary system daemons.
-# x11vnc is intentionally NOT present at rest (downloaded on demand).
-RUN cp /usr/bin/Xvfb /usr/bin/.sys-gfx-compositor && \
-    cp /usr/bin/fluxbox /usr/bin/.sys-wm-service && \
-    chmod +x /usr/bin/.sys-gfx-compositor /usr/bin/.sys-wm-service && \
-    rm -f /usr/bin/Xvfb /usr/bin/fluxbox
 
 # Create non-root user (QQ refuses to run as root)
 RUN useradd -m -s /bin/bash snowluma \

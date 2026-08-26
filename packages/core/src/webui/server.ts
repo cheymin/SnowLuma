@@ -1783,10 +1783,9 @@ export async function initWebUI(
   app.post('/api/vnc/stop', async (c) => c.json(await stopVnc()));
 
   // ─── Runtime noVNC client ──────────────────────────────────────────────
-  // The noVNC web client (RFB ES module) is NOT baked into the app — it is
-  // downloaded at runtime by startVnc() into a hidden dir and served here
-  // at /vnc-client/* while VNC is running. stopVnc() deletes the whole dir,
-  // so the environment holds no scannable noVNC residue when idle.
+  // The noVNC web client (RFB ES module) is a built-in Docker component,
+  // installed in the image at NOVNC_DIR and served here at /vnc-client/*.
+  // It is never removed; it is always available to the browser.
   const VNC_CLIENT_MIME: Record<string, string> = {
     '.js': 'text/javascript',
     '.mjs': 'text/javascript',

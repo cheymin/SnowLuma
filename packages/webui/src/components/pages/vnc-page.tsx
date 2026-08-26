@@ -27,10 +27,8 @@ interface VncStatus {
 
 /**
  * Minimal noVNC RFB surface used by this page. The client library itself is
- * deliberately NOT bundled into the app: the backend downloads it at runtime
- * on 「启动VNC」 into a hidden dir and serves it at /vnc-client/*, and removes
- * it again on 「终止VNC」 — so the environment holds no noVNC residue while
- * the remote desktop is stopped.
+ * deliberately NOT bundled into the app: it is a built-in Docker component
+ * installed at NOVNC_DIR and served by the backend at /vnc-client/*.
  */
 interface RfbInstance {
   scaleViewport: boolean;
@@ -107,10 +105,10 @@ async function loadRfb(): Promise<RfbConstructor> {
  *   │                                              │
  *   └──────────────────────────────────────────────┘
  *
- * - 「连接VNC」：动态加载运行时 noVNC 客户端并建立 WebSocket 到 /vnc。
+ * - 「连接VNC」：加载内置 noVNC 客户端并建立 WebSocket 到 /vnc。
  * - 「全屏」：切换 VNC 显示区域为浏览器全屏。
- * - 「启动/终止VNC」：启动 = 后端按需下载并启动 VNC；终止 = 后端杀死
- *   VNC 进程并删除容器内的 VNC/noVNC 软件与一切残留。
+ * - 「启动/终止VNC」：启动 = 后端启动内置的 x11vnc；终止 = 后端仅杀死
+ *   x11vnc 进程（软件保持安装，可随时再次启动）。
  */
 export function VncPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -209,12 +207,12 @@ export function VncPage() {
     try {
       if (vncRunning) {
         disconnect();
-        // 终止 = 杀进程 + 删除容器内 VNC/noVNC 软件与残留
+        // 终止 = 仅杀死 x11vnc 进程（软件保留在镜像中）
         const status = await postVncAction('stop');
         setVncRunning(status.running);
         setConnState('idle');
       } else {
-        // 启动 = 后端按需下载 VNC + noVNC 并轮询等待端口就绪
+        // 启动 = 后端启动内置的 x11vnc 并轮询等待端口就绪
         const status = await postVncAction('start');
         setVncRunning(status.running);
         if (!status.running) {

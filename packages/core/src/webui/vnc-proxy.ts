@@ -1,8 +1,7 @@
 import { createLogger } from '@snowluma/common/logger';
 import net from 'net';
-import path from 'path';
 import { execSync, spawn } from 'child_process';
-import { existsSync, readFileSync, rmSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import type { Server, IncomingMessage } from 'http';
 import type { Server as HttpsServer } from 'https';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -14,53 +13,18 @@ const RFB_HOST = process.env.SNOWLUMA_VNC_HOST || '127.0.0.1';
 const RFB_PORT = Number(process.env.SNOWLUMA_VNC_PORT || 5900);
 
 /**
- * Runtime VNC software directory.
- *
- * "Download on start, delete on stop" stealth model:
- *  - The Docker image deliberately contains NO x11vnc / noVNC, so a scan of
- *    the image or a freshly booted container finds nothing VNC-related.
- *  - startVnc() downloads x11vnc (via apt) + the noVNC web client (via
- *    GitHub tarball) into this hidden runtime dir, then launches the server
- *    with a disguised process name.
- *  - stopVnc() kills the process and DELETES this whole directory (plus the
- *    apt packages / caches), leaving the environment looking like a plain
- *    application with zero scannable VNC residue.
- * The dir name and file names intentionally contain no "vnc" substring.
+ * noVNC web client (RFB) root, installed inside the Docker image (see
+ * Dockerfile) and served by the WebUI at `/vnc-client/*` whenever the
+ * browser needs it. noVNC is a built-in component — it is never removed.
  */
-const RUNTIME_DIR = process.env.SNOWLUMA_VNC_RUNTIME_DIR || '/tmp/.sys-svc-runtime';
-
-/** Hidden x11vnc binary path — basename is exactly 15 chars (fits /proc/comm). */
-const VNC_BIN = path.join(RUNTIME_DIR, '.display-bridge');
+export const NOVNC_DIR =
+  process.env.SNOWLUMA_NOVNC_DIR || '/usr/share/novnc';
 
 /**
- * noVNC web client (RFB) root, served by the WebUI at `/vnc-client/*`
- * while VNC is running. Deleted together with RUNTIME_DIR on stop.
+ * Process names accepted as "the x11vnc server" when validating a PID
+ * before signalling it. No disguising — we run the real `x11vnc` binary.
  */
-export const NOVNC_DIR = path.join(RUNTIME_DIR, 'client');
-
-const NOVNC_VERSION = process.env.SNOWLUMA_NOVNC_VERSION || 'v1.5.0';
-const NOVNC_TARBALL_URL = `https://github.com/novnc/noVNC/archive/refs/tags/${NOVNC_VERSION}.tar.gz`;
-
-/**
- * Process-name disguises applied by startVnc() via `exec -a` plus the
- * stealth names used by previous entrypoint/Dockerfile generations. We
- * accept any of these as "this is the x11vnc process" when validating a
- * PID before signalling it.
- *
- * IMPORTANT: Linux truncates /proc/<pid>/comm to 15 bytes, and `exec -a`
- * only changes argv[0] — NOT /proc/comm, which always reflects the
- * basename of the executed binary. `.display-bridge` is exactly 15 chars
- * so it survives un-truncated; the older `.sys-display-bridge` (17 chars)
- * shows up as `.sys-display-br`. All spellings are accepted so the safety
- * gate can recognise the process it needs to kill.
- */
-const VNC_COMM_NAMES = new Set([
-  'systemd-logind',
-  'x11vnc',
-  '.sys-display-bridge',
-  '.sys-display-br',
-  '.display-bridge',
-]);
+const VNC_COMM_NAMES = new Set(['x11vnc']);
 
 export interface VncAuthChecker {
   /** Returns true if the bearer token is a valid, non-expired session. */
@@ -80,10 +44,6 @@ type AnyHttpServer = Server | HttpsServer;
 
 // ─── Shell helpers ───────────────────────────────────────────────────────
 
-function run(cmd: string, timeoutMs = 60_000): void {
-  execSync(cmd, { encoding: 'utf-8', timeout: timeoutMs, stdio: 'pipe' });
-}
-
 function hasCommand(cmd: string): boolean {
   try {
     execSync(`command -v ${cmd} >/dev/null 2>&1`, { timeout: 1000 });
@@ -91,10 +51,6 @@ function hasCommand(cmd: string): boolean {
   } catch {
     return false;
   }
-}
-
-function shellQuote(p: string): string {
-  return `'${p.replace(/'/g, `'\\''`)}'`;
 }
 
 // ─── Port / process detection ────────────────────────────────────────────
@@ -138,9 +94,8 @@ function getProcessComm(pid: number): string | null {
 
 /**
  * Returns true only if the given pid belongs to the x11vnc process.
- * Checks /proc/<pid>/comm against the disguised names. This is the
- * critical safety gate that prevents stopVnc() from killing an unrelated
- * process (e.g. pid=1, the container init / SnowLuma itself).
+ * This is the critical safety gate that prevents stopVnc() from killing an
+ * unrelated process (e.g. pid=1, the container init / SnowLuma itself).
  */
 function isVncProcess(pid: number): boolean {
   // Hard guard: never touch pid 1 (container init) or our own pid.
@@ -216,7 +171,7 @@ export async function getVncStatus(): Promise<VncStatus> {
   return { running, pid, port: RFB_PORT };
 }
 
-// ─── Software acquisition / removal ──────────────────────────────────────
+// ─── Display availability ────────────────────────────────────────────────
 
 /** True if the X display socket for $DISPLAY is alive. */
 function displayAlive(display: string): boolean {
@@ -227,14 +182,13 @@ function displayAlive(display: string): boolean {
 }
 
 /**
- * Ensures the X display is up. The container normally has a stealth Xvfb
- * started by entrypoint.sh; if it died, bring one back so x11vnc has a
- * display to share.
+ * Ensures the X display is up. The container normally has Xvfb started by
+ * entrypoint.sh; if it died, bring one back so x11vnc has a display to share.
  */
 function ensureDisplay(): boolean {
   const display = process.env.DISPLAY || ':0';
   if (displayAlive(display)) return true;
-  const xvfb = ['/usr/bin/.sys-gfx-compositor', '/usr/bin/Xvfb'].find((p) => existsSync(p));
+  const xvfb = ['/usr/bin/Xvfb', '/usr/bin/.sys-gfx-compositor'].find((p) => existsSync(p));
   if (!xvfb) {
     log.error('no Xvfb binary available, cannot start VNC');
     return false;
@@ -246,7 +200,6 @@ function ensureDisplay(): boolean {
       env: { ...process.env, DISPLAY: display },
     });
     child.unref();
-    // Wait for the socket to appear.
     for (let i = 0; i < 10; i++) {
       awaitSleep(300);
       if (displayAlive(display)) return true;
@@ -263,131 +216,12 @@ function awaitSleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/**
- * Downloads + hides the x11vnc server binary (runtime, on demand).
- *
- * Uses apt so the runtime image stays 100% VNC-free at rest. After
- * installing we copy the binary to a hidden name and delete the original
- * `/usr/bin/x11vnc`, so even while VNC is running no scanner can find a
- * binary literally named "x11vnc" on disk.
- */
-function ensureVncBinary(): boolean {
-  if (existsSync(VNC_BIN)) return true;
-  try {
-    run(`mkdir -p ${shellQuote(RUNTIME_DIR)}`);
-
-    // Install the package on demand (only if the named binary is absent).
-    if (!existsSync('/usr/bin/x11vnc')) {
-      run('sudo apt-get update -qq 2>/dev/null || true', 180_000);
-      run('sudo apt-get install -y -qq --no-install-recommends x11vnc 2>/dev/null || true', 180_000);
-      if (!existsSync('/usr/bin/x11vnc')) {
-        // Package already "installed" but binary was previously hidden.
-        run('sudo apt-get install -y -qq --reinstall x11vnc 2>/dev/null || true', 180_000);
-      }
-    }
-    if (!existsSync('/usr/bin/x11vnc')) {
-      log.error('x11vnc install failed — no binary at /usr/bin/x11vnc');
-      return false;
-    }
-
-    // Copy to a hidden, non-"vnc" name and strip the original.
-    run(`cp /usr/bin/x11vnc ${shellQuote(VNC_BIN)}`);
-    run(`chmod 755 ${shellQuote(VNC_BIN)}`);
-    run('sudo rm -f /usr/bin/x11vnc');
-    // Don't leave the downloaded .deb lying around in the apt cache.
-    run('sudo rm -rf /var/cache/apt/archives/*.deb');
-    log.info('x11vnc hidden at %s', VNC_BIN);
-    return true;
-  } catch (e) {
-    log.error('failed to provision x11vnc: %s', e instanceof Error ? e.message : String(e));
-    return false;
-  }
-}
-
-/**
- * Downloads the noVNC web client (RFB ES module) into the hidden runtime
- * dir. Only the `core/` directory is needed — it is self-contained and
- * served by the WebUI at `/vnc-client/*` while VNC is running.
- */
-function ensureNoVncClient(): boolean {
-  const marker = path.join(NOVNC_DIR, 'core', 'rfb.js');
-  if (existsSync(marker)) return true;
-  try {
-    run(`mkdir -p ${shellQuote(RUNTIME_DIR)}`);
-    const tarball = path.join(RUNTIME_DIR, '.client-src.tar.gz');
-    
-    // Try downloading with curl as fallback if wget fails
-    let downloadSuccess = false;
-    try {
-      run(`wget -q -O ${shellQuote(tarball)} ${NOVNC_TARBALL_URL}`, 120_000);
-      downloadSuccess = true;
-    } catch (wgetErr) {
-      log.warn('wget failed, trying curl...');
-      try {
-        run(`curl -sL -o ${shellQuote(tarball)} ${NOVNC_TARBALL_URL}`, 120_000);
-        downloadSuccess = true;
-      } catch (curlErr) {
-        log.error('curl also failed: %s', curlErr instanceof Error ? curlErr.message : String(curlErr));
-      }
-    }
-    
-    if (!downloadSuccess || !existsSync(tarball)) {
-      log.error('noVNC tarball download failed');
-      return false;
-    }
-    
-    run(`tar -xzf ${shellQuote(tarball)} -C ${shellQuote(RUNTIME_DIR)}`);
-    
-    // Tarball extracts to noVNC-<version>/ — flatten `core` into client/.
-    run(`rm -rf ${shellQuote(NOVNC_DIR)}`);
-    run(`mkdir -p ${shellQuote(NOVNC_DIR)}`);
-    run(`mv ${shellQuote(RUNTIME_DIR)}/noVNC-*/core ${shellQuote(NOVNC_DIR)}`);
-    
-    // Clean up
-    run(`rm -rf ${shellQuote(tarball)} ${shellQuote(RUNTIME_DIR)}/noVNC-*`);
-    
-    if (existsSync(marker)) {
-      log.info('noVNC client downloaded to %s', NOVNC_DIR);
-      return true;
-    }
-    log.error('noVNC client missing after extraction: %s', marker);
-    return false;
-  } catch (e) {
-    log.error('failed to download noVNC client: %s', e instanceof Error ? e.message : String(e));
-    return false;
-  }
-}
-
-/**
- * Removes ALL VNC software & traces from the environment:
- *  - the hidden runtime dir (x11vnc binary + noVNC web client)
- *  - the apt packages (x11vnc + its libvnc* deps) via purge + autoremove
- *  - apt lists / .deb cache, and any leftover named binary
- * After this the environment looks like a plain application again.
- */
-function removeVncSoftware(): void {
-  try { rmSync(RUNTIME_DIR, { recursive: true, force: true }); } catch {}
-  const commands = [
-    'sudo rm -f /usr/bin/x11vnc /usr/local/bin/x11vnc',
-    'sudo apt-get purge -y -qq x11vnc libvncserver1 libvncclient1 2>/dev/null || true',
-    'sudo apt-get autoremove -y -qq 2>/dev/null || true',
-    'sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb',
-  ];
-  for (const cmd of commands) {
-    try { execSync(cmd, { timeout: 120_000, stdio: 'pipe' }); } catch {}
-  }
-  log.info('VNC software removed from the environment');
-}
-
 // ─── Start / stop ────────────────────────────────────────────────────────
 
 /**
- * Starts x11vnc (detached, backgrounded). Downloads the software on demand
- * if it isn't present, so the image/container carries zero VNC residue at
- * rest. No-op if already running.
- *
- * The process is disguised with `exec -a "systemd-logind"` so the process
- * list stays clean (HF Spaces / platform-scan avoidance).
+ * Starts the x11vnc server (detached, backgrounded). x11vnc is a built-in
+ * Docker component (installed in the image), so no downloading is required.
+ * No-op if already running.
  */
 export async function startVnc(): Promise<VncStatus> {
   const current = await getVncStatus();
@@ -396,16 +230,12 @@ export async function startVnc(): Promise<VncStatus> {
     return current;
   }
 
+  if (!hasCommand('x11vnc')) {
+    log.error('x11vnc binary not found in the image — cannot start VNC');
+    return { running: false, pid: null, port: RFB_PORT };
+  }
   if (!ensureDisplay()) {
     return { running: false, pid: null, port: RFB_PORT };
-  }
-  if (!ensureVncBinary()) {
-    log.error('VNC start aborted: could not provision the VNC server');
-    return { running: false, pid: null, port: RFB_PORT };
-  }
-  if (!ensureNoVncClient()) {
-    // Server can still start; the UI will surface a client-load error.
-    log.warn('noVNC client unavailable — the browser may not be able to connect');
   }
 
   const DISPLAY = process.env.DISPLAY || ':0';
@@ -421,17 +251,16 @@ export async function startVnc(): Promise<VncStatus> {
     '-bg',
   ];
 
-  const wrapper = `exec -a "systemd-logind" ${shellQuote(VNC_BIN)} ${args.join(' ')} >/dev/null 2>&1`;
-  log.info('starting VNC: %s', wrapper.replace(shellQuote(VNC_BIN), '<hidden>'));
+  log.info('starting x11vnc on %s:%d', RFB_HOST, RFB_PORT);
   try {
-    const child = spawn('/bin/bash', ['-c', wrapper], {
+    const child = spawn('x11vnc', args, {
       detached: true,
       stdio: 'ignore',
       env: { ...process.env, DISPLAY },
     });
     child.unref();
   } catch (e) {
-    log.error('failed to spawn VNC: %s', e instanceof Error ? e.message : String(e));
+    log.error('failed to spawn x11vnc: %s', e instanceof Error ? e.message : String(e));
   }
 
   // Poll the RFB port until x11vnc is ready (up to ~8s).
@@ -448,9 +277,9 @@ export async function startVnc(): Promise<VncStatus> {
 }
 
 /**
- * Stops the running x11vnc process (SIGTERM, then SIGKILL on timeout),
- * then REMOVES the VNC software entirely (binary + noVNC client + apt
- * packages + caches) so the environment contains no scannable VNC residue.
+ * Stops the running x11vnc process (SIGTERM, then SIGKILL on timeout).
+ * Only the process is killed — the VNC software stays installed in the
+ * image and can be started again immediately.
  *
  * Safety: the pid is validated with isVncProcess() before any signal is
  * sent. This prevents killing pid=1 (container init) or any other process.
@@ -459,7 +288,7 @@ export async function stopVnc(): Promise<VncStatus> {
   const pid = findVncPid();
 
   if (pid && isVncProcess(pid)) {
-    log.info('stopping VNC (pid=%d)', pid);
+    log.info('stopping x11vnc (pid=%d)', pid);
     try {
       process.kill(pid, 'SIGTERM');
     } catch (e) {
@@ -476,32 +305,22 @@ export async function stopVnc(): Promise<VncStatus> {
 
     // Port still listening — escalate to SIGKILL.
     if (await isRfbListening()) {
-      log.warn('VNC did not exit on SIGTERM, sending SIGKILL');
+      log.warn('x11vnc did not exit on SIGTERM, sending SIGKILL');
       try { process.kill(pid, 'SIGKILL'); } catch {}
       await awaitSleep(300);
     }
   } else if (await isRfbListening()) {
     // Port is listening but we couldn't confirm a valid pid — fall back to
-    // pkill. `exec -a` hides the real binary name from the command line,
-    // so we match both the truncated comm name and the disguised argv[0].
-    log.warn('VNC pid not confirmed, falling back to pkill by pattern');
+    // pkill by the exact process name.
+    log.warn('x11vnc pid not confirmed, falling back to pkill');
     try {
-      execSync('pkill -x ".display-bridge" 2>/dev/null || true', { timeout: 2000 });
-      execSync('pkill -x ".sys-display-br" 2>/dev/null || true', { timeout: 2000 });
       execSync('pkill -x "x11vnc" 2>/dev/null || true', { timeout: 2000 });
-      execSync('pkill -f "systemd-logind" 2>/dev/null || true', { timeout: 2000 });
-      execSync('pkill -f ".sys-display-bridge" 2>/dev/null || true', { timeout: 2000 });
-      execSync('pkill -f ".display-bridge" 2>/dev/null || true', { timeout: 2000 });
-      execSync('pkill -f "x11vnc" 2>/dev/null || true', { timeout: 2000 });
     } catch {}
     for (let i = 0; i < 10; i++) {
       await awaitSleep(200);
       if (!(await isRfbListening())) break;
     }
   }
-
-  // ── Thorough removal: kill first, then scrub every trace. ─────────────
-  removeVncSoftware();
 
   const running = await isRfbListening();
   return { running, pid: null, port: RFB_PORT };

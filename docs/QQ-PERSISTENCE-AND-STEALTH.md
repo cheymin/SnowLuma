@@ -4,9 +4,8 @@
 > 新增 / 修改了以下能力：
 >
 > 1. **远程桌面（VNC）**：侧边栏新增「远程桌面」页面，可启动 / 连接 / 终止 VNC。
-> 2. **增强的 VNC 停止逻辑**：终止 VNC 时先杀死进程，再**彻底删除**容器内的
->    VNC / noVNC 软件与一切残留（进程、二进制、apt 包、缓存、运行时目录），
->    让外部扫描只能看到一个“普通应用”；启动 VNC 时才按需重新下载并启动。
+> 2. **VNC 自带组件**：x11vnc + noVNC 直接安装在 Docker 镜像中；「终止VNC」只
+>    杀死 x11vnc 进程，不删除软件，可随时再次启动。
 > 3. **QQ 重启不掉线**：持久化 QQ 数据目录 + 固定 machine-id + 固定 MAC 地址，
 >    容器重建 / 镜像更新后无需重新登录。
 
@@ -17,15 +16,11 @@
 ### 1.1 架构
 
 ```
-浏览器 (noVNC RFB 客户端，运行时加载)
-   │  ① 点击「启动VNC」→ POST /api/vnc/start
-   │      后端按需下载 x11vnc + noVNC → 隐藏目录 /tmp/.sys-svc-runtime
-   │      启动伪装进程（argv[0]=systemd-logind）
+浏览器 (noVNC RFB 客户端 — 镜像内置 /usr/share/novnc)
+   │  ① 点击「启动VNC」→ POST /api/vnc/start → 启动镜像内置的 x11vnc
    │  ② 点击「连接VNC」→ 动态 import /vnc-client/core/rfb.js
    │     建立 WebSocket → /vnc → 后端代理 → 127.0.0.1:5900 (x11vnc/RFB)
-   │  ③ 点击「终止VNC」→ POST /api/vnc/stop
-   │      杀死 VNC 进程 → 删除 /tmp/.sys-svc-runtime（x11vnc + noVNC）
-   │      → purge apt 包与缓存 → 环境无任何 VNC 残留
+   │  ③ 点击「终止VNC」→ POST /api/vnc/stop → 仅杀死 x11vnc 进程
    ▼
 后端 packages/core/src/webui/vnc-proxy.ts
    ├── startVnc / stopVnc / getVncStatus
@@ -35,12 +30,13 @@
 - 浏览器始终只访问 WebUI 单端口（`/api/vnc/*`、`/vnc`、`/vnc-client/*`），
   不需要额外暴露 5900 端口（x11vnc 也 `-listen localhost` 只绑本机回环）。
 - 鉴权复用 WebUI 会话 Token（`?token=` 或 `Sec-WebSocket-Protocol: token.<value>`）。
+- x11vnc + noVNC 是镜像**自带组件**（apt 安装），不按需下载也不删除。
 
 ### 1.2 关键文件
 
 | 文件 | 作用 |
 | --- | --- |
-| `packages/core/src/webui/vnc-proxy.ts` | VNC 进程管理（下载/启动/杀进程/删除残留）+ WebSocket 代理 |
+| `packages/core/src/webui/vnc-proxy.ts` | VNC 进程管理（启动/杀进程）+ WebSocket 代理 |
 | `packages/core/src/webui/server.ts` | 新增 `/api/vnc/status|start|stop`、`/vnc-client/*` 静态服务、挂载代理 |
 | `packages/webui/src/components/pages/vnc-page.tsx` | 远程桌面页面（工具栏 + 显示区 + 状态） |
 | `packages/webui/src/router/index.tsx` | 注册 `/vnc` 路由 |
@@ -49,60 +45,32 @@
 
 ---
 
-## 2. 增强的 VNC 停止逻辑（下载-即用 / 停止-即删）
+## 2. VNC 启动 / 停止（自带组件，停止只杀进程）
 
 ### 2.1 为什么这样做
 
-官方 / 旧版方案把 `x11vnc` 直接打进镜像，容器里**一直**存在：
+x11vnc + noVNC 直接打进了 Docker 镜像，作为常备组件随时可用：
 
-- `/usr/bin/x11vnc`（或改名后的 `.sys-display-bridge`）二进制；
-- 前端静态包里打包的 noVNC 客户端代码；
-- 随镜像常驻、随时可被 `ps` / 文件扫描发现的 VNC 进程与文件。
+- `/usr/bin/x11vnc`（apt 包 `x11vnc`）；
+- noVNC 网页客户端（apt 包 `novnc` / `websockify`，装于 `/usr/share/novnc`）；
+- 前端不打进 noVNC 代码，通过 `/vnc-client/*` 运行时加载。
 
-这在“停止 VNC”后依然能被外部扫描出 VNC 的痕迹。
+### 2.2 启动（`startVnc`）
 
-### 2.2 新模型：停止即无痕
+1. 检查 X display 存活（`/tmp/.X11-unix/X0`），必要时拉起 Xvfb；
+2. 确认系统存在 `x11vnc` 命令（内置组件）；
+3. `spawn('x11vnc', ['-display', ':0', '-rfbport', '5900', '-listen', 'localhost',
+   '-nopw', '-forever', '-shared', '-nooverlay', '-noxdamage', '-threads', '-bg'])`
+   （detached + unref 后台运行）
+4. 轮询 5900 端口就绪（最多 ~8s）。
 
-**镜像 / 空闲容器内零 VNC 残留**：
+### 2.3 停止（`stopVnc`）
 
-- Dockerfile **不再安装** `x11vnc`（连 `libvnc*` 依赖都不装）；
-- noVNC 前端客户端 **不打进 bundle**，改为运行时下载；
-- 空闲时容器里只有：Xvfb（伪装为 `.sys-gfx-compositor`）、fluxbox（伪装为
-  `.sys-wm-service`）、QQ、SnowLuma —— 看起来就是一个普通应用。
-
-**「启动VNC」（`startVnc`）按需下载**：
-
-1. 检查 X display 存活（`/tmp/.X11-unix/X0`），必要时拉起伪装 Xvfb；
-2. 若隐藏二进制不存在 → `sudo apt-get update && apt-get install -y x11vnc`，
-   拷贝到隐藏路径 `/tmp/.sys-svc-runtime/.display-bridge`，**删除**
-   `/usr/bin/x11vnc`（磁盘上不存在叫 “x11vnc” 的二进制）；
-3. 下载 noVNC 客户端 tarball（GitHub `novnc/noVNC` v1.5.0）到
-   `/tmp/.sys-svc-runtime/client/core/`，由 `/vnc-client/*` 提供静态服务；
-4. 以 `exec -a "systemd-logind"` 伪装进程名启动 x11vnc，轮询 5900 端口就绪。
-
-**「终止VNC」（`stopVnc`）停止即删**：
-
-1. 定位 VNC 进程（`lsof/ss/fuser` + `/proc/<pid>/comm` 白名单校验，
+1. 定位 VNC 进程（`lsof/ss/fuser` + `/proc/<pid>/comm` == `x11vnc` 白名单校验，
    绝不误杀 pid=1 / 自身）；
-2. `SIGTERM` → 等待端口释放 → 超时 `SIGKILL`；无法确认 pid 时用多模式
-   `pkill` 兜底（匹配截断 comm 名 `.display-bridge` / `.sys-display-br` 与
-   伪装 argv[0] `systemd-logind`）；
-3. **删除 `/tmp/.sys-svc-runtime` 整个目录**（x11vnc 隐藏二进制 + noVNC 客户端）；
-4. `sudo apt-get purge -y x11vnc libvncserver1 libvncclient1` +
-   `autoremove`，删除 `/usr/bin/x11vnc`、清空 apt lists 与 `.deb` 缓存。
-
-### 2.3 进程名截断的坑（必须知道的细节）
-
-Linux `/proc/<pid>/comm` 只保留 **15 字节**，`exec -a` 只改 `argv[0]`（`ps` 显示），
-**不改** `/proc/comm`。所以：
-
-- 旧名 `/usr/bin/.sys-display-bridge`（17 字符）在 `/proc/comm` 里是
-  `.sys-display-br`（15 字符截断）；
-- 新名 `/tmp/.sys-svc-runtime/.display-bridge` 的 basename 恰好 15 字符，
-  不会被截断。
-
-`VNC_COMM_NAMES` 白名单同时收录：`systemd-logind`、`x11vnc`、
-`.sys-display-bridge`、`.sys-display-br`、`.display-bridge`。
+2. `SIGTERM` → 等待端口释放 → 超时 `SIGKILL`；无法确认 pid 时 `pkill -x x11vnc`
+   兜底；
+3. **只杀进程，不删除软件** —— x11vnc/noVNC 保持在镜像中，可随时再次启动。
 
 ### 2.4 相关环境变量
 
@@ -110,8 +78,7 @@ Linux `/proc/<pid>/comm` 只保留 **15 字节**，`exec -a` 只改 `argv[0]`（
 | --- | --- | --- |
 | `SNOWLUMA_VNC_HOST` | `127.0.0.1` | RFB 监听地址 |
 | `SNOWLUMA_VNC_PORT` | `5900` | RFB 端口 |
-| `SNOWLUMA_VNC_RUNTIME_DIR` | `/tmp/.sys-svc-runtime` | 运行时 VNC 软件隐藏目录 |
-| `SNOWLUMA_NOVNC_VERSION` | `v1.5.0` | noVNC 客户端下载版本 |
+| `SNOWLUMA_NOVNC_DIR` | `/usr/share/novnc` | noVNC 客户端内置目录 |
 
 ---
 
@@ -184,8 +151,8 @@ git checkout -b sync-upstream upstream/main
 
 **Docker / 部署（必须）：**
 
-- `Dockerfile`（新增，镜像内**不含** x11vnc）；
-- `entrypoint.sh`（新增，含 QQ 持久化 + 伪装 X11，**不自动启动 VNC**）；
+- `Dockerfile`（新增，镜像内安装 x11vnc + noVNC）；
+- `entrypoint.sh`（新增，含 QQ 持久化 + Xvfb/fluxbox，**不自动启动 VNC**）；
 - `.github/workflows/docker-build.yml`（新增，构建并推送
   `ghcr.io/<repo>:latest`）；
 - `.dockerignore`（新增）；
@@ -195,9 +162,8 @@ git checkout -b sync-upstream upstream/main
 
 - [ ] `pnpm --filter @snowluma/core typecheck` 通过；
 - [ ] `pnpm --filter webui build` 通过（`vnc-page` 无编译错误）；
-- [ ] Docker 构建后 `docker exec` 容器内 **`find / -iname '*vnc*'` 无结果**；
+- [ ] Docker 构建后 `docker exec` 容器内 `which x11vnc`、`/usr/share/novnc` 存在；
 - [ ] 容器启动日志**没有**启动 VNC 的记录；
-- [ ] 点「启动VNC」后 5900 监听、`ps` 中进程名显示 `systemd-logind`；
-- [ ] 点「终止VNC」后 5900 关闭、`/tmp/.sys-svc-runtime` 消失、
-      `apt list --installed | grep -i vnc` 为空；
+- [ ] 点「启动VNC」后 5900 监听、`ps` 中进程名为 `x11vnc`；
+- [ ] 点「终止VNC」后 5900 关闭、`which x11vnc` 仍在（软件未删除）；
 - [ ] 挂载 `/data` 重建容器后 QQ 无需重新登录。

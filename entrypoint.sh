@@ -144,13 +144,13 @@ fi
 # ─── Random delay to avoid detection patterns ────────────────────────────
 sleep $((RANDOM % 3 + 1))
 
-# ─── Stealth X11 display (disguised as system graphics service) ──────────
-/usr/bin/.sys-gfx-compositor :0 -screen 0 "$RESOLUTION" -ac +extension GLX +render -noreset >/dev/null 2>&1 &
+# ─── X11 display (Xvfb) ──────────────────────────────────────────────────
+/usr/bin/Xvfb :0 -screen 0 "$RESOLUTION" -ac +extension GLX +render -noreset >/dev/null 2>&1 &
 XVFB_PID=$!
 sleep 1
 
-# ─── Stealth window manager (disguised as system service) ────────────────
-/usr/bin/.sys-wm-service >/dev/null 2>&1 &
+# ─── Window manager (fluxbox) ────────────────────────────────────────────
+/usr/bin/fluxbox >/dev/null 2>&1 &
 FLUXBOX_PID=$!
 sleep 1
 
